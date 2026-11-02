@@ -7,6 +7,40 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.3.3] - 2026-11-02
+
+Wine DLL overrides that actually reach the game, found in a real-game run.
+
+### Migration
+
+- **Bundled DLLs under plain Proton/Steam** (every Wine launcher that
+  ships a DLL Wine also has: d3d9/dxgi for DXVK, d3dx9_*, dinput8 for Xidi
+  or OutRun2006Tweaks, dsound…): `WINEDLLOVERRIDES` set in the game's
+  environment block by `Launch::env` is ignored by Wine's loader. Before
+  starting the game, under Wine, call
+  `rea_launcher_win32::wine::app_dll_overrides(game_exe_name, &[(dll,
+  DllMode::NativeThenBuiltin), …])` (it writes
+  `HKCU\Software\Wine\AppDefaults\<exe>\DllOverrides` only where no value
+  exists), and `remove_app_dll_overrides` when the component is turned
+  off. Keep the environment value too (harmless). Verify: start the
+  launcher's exe directly with `wine` (no `<id>-play`, no
+  `WINEDLLOVERRIDES` exported) and check the game loads the bundled DLL
+  (`WINEDEBUG=+loaddll` shows `native` for it).
+
+### Fixed
+
+- `process::Launch`: documented that Wine ignores `WINEDLLOVERRIDES` in
+  the child's environment block (proved by a Wine test with a native
+  stand-in DLL: the default loads the program folder's copy, the block
+  changes nothing, the AppDefaults registry key is honoured).
+
+### Added
+
+- `wine::app_dll_overrides` / `remove_app_dll_overrides` (per-program
+  `DllOverrides`, the player's values kept, ours removed only while
+  unchanged), `wine::DllMode`, `app_defaults_key`, `plan`;
+  `reg::Key::delete_value`.
+
 ## [0.3.2] - 2026-11-02
 
 Fixes from the regression reviews of the five launchers on v0.3.x.
@@ -366,6 +400,7 @@ and OutRun 2006, each piece the reviewed best version across them
   shell and packaging files; `templates/deny.toml`.
 
 [Unreleased]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.0...HEAD
+[0.3.3]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.2.0...v0.3.0
