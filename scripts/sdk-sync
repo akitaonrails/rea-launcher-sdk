@@ -5,8 +5,9 @@
 #   scripts/sdk-sync [--tag TAG] <launcher-repo>   write <launcher-repo>/sdk
 #   scripts/sdk-sync --check <launcher-repo>       exit 1 when sdk/ drifted
 #
-# Layout: sdk/rea-play.sh (from shell/), sdk/scripts/wine-test and
-# sdk/packaging/... (as in the SDK).
+# Layout: sdk/rea-play.sh (from shell/), sdk/scripts/{wine-test,sdk-bump,clean},
+# sdk/packaging/... and sdk/docs/{STANDARDS.md,playbooks/*.md} (as in the
+# SDK), so a launcher refers to the SDK's wording instead of copying it.
 # sdk/ belongs to this script: never edit it by hand, re-run the sync.
 # VERSION records the SDK tag (git describe --exact-match, or --tag, or
 # "untagged") and commit ("-dirty" when the SDK files had local changes).
@@ -34,9 +35,10 @@ REPO=$(cd "$1" && pwd -P)
 files() {
   (
     cd "$SDK"
-    for f in shell/rea-play.sh scripts/wine-test packaging/*.sh packaging/appimage/AppRun.in \
+    for f in shell/rea-play.sh scripts/wine-test scripts/sdk-bump scripts/clean packaging/*.sh packaging/appimage/AppRun.in \
       packaging/appimage/tools.pins packaging/appimage/wine/COPYING.LIB \
-      packaging/appimage/wine/LICENSE packaging/appimage/wine/SOURCE.txt; do
+      packaging/appimage/wine/LICENSE packaging/appimage/wine/SOURCE.txt \
+      docs/STANDARDS.md docs/playbooks/*.md; do
       if [ -f "$f" ]; then printf '%s\n' "$f"; fi
     done
   )

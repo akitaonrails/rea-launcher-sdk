@@ -1,0 +1,27 @@
+[package]
+name = "@CRATE@"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runs the player's own copy of @GAME@ on modern Windows and Linux"
+publish = false
+
+[[bin]]
+name = "@LAUNCHER_NAME@"
+path = "src/main.rs"
+
+[dependencies]
+rea-launcher.workspace = true
+# Its Windows parts are cfg(windows); the console decision is portable.
+rea-launcher-win32.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+rea-launcher-ui.workspace = true
+
+# The settings window also builds on the host for its tests: the palette's
+# contrast test and the headless window tests (egui_kittest) run with
+# `cargo test` and under `sdk/scripts/wine-test`.
+[dev-dependencies]
+rea-launcher-ui = { workspace = true, features = ["testing"] }

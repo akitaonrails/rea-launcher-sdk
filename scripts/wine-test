@@ -16,8 +16,9 @@
 # (default <workspace>/target/wine/prefix); both are absolute once resolved,
 # so they don't depend on $HOME (which differs inside a distrobox).
 #
-# No window ever opens: the display variables are cleared and Wine's crash
-# dialog is switched off in the private prefix. Every failing test is named:
+# No window ever opens: the display variables are cleared, and the private
+# prefix uses Wine's null graphics driver (HKCU\Software\Wine\Drivers
+# Graphics=null) with the crash dialog off. Every failing test is named:
 # from cargo's "failures:" lists when a test binary reports normally, and by
 # rerunning each test alone when a binary aborted (a panic can abort the
 # whole binary under Wine).
@@ -82,13 +83,22 @@ for tool in cargo wine wineboot wineserver; do
 done
 echo "wine-test: $target, prefix $prefix, build $CARGO_TARGET_DIR" >&2
 
-if [ ! -f "$prefix/.rea-headless" ]; then
+# The private prefix, set up once: no crash dialog, and Wine's null
+# graphics driver (there is never a display here), so tests that create
+# windows run without each one setting it. The marker lists what is done,
+# so a prefix from an older wine-test gets the missing settings once.
+marker=$prefix/.rea-headless
+if [ ! -f "$marker" ]; then
   mkdir -p "$prefix"
   wineboot -i >/dev/null 2>&1 || true
   wine reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f >/dev/null 2>&1 || true
-  wineserver -w || true
-  : >"$prefix/.rea-headless"
+  : >"$marker"
 fi
+if ! grep -qx 'graphics=null' "$marker" 2>/dev/null; then
+  wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ /d null /f >/dev/null 2>&1 || true
+  echo 'graphics=null' >>"$marker"
+fi
+wineserver -w || true
 
 log=$(mktemp "${TMPDIR:-/tmp}/rea-wine-test.XXXXXX")
 trap 'rm -f "$log"' EXIT

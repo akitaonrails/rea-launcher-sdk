@@ -98,6 +98,9 @@ xidi https://github.com/samuelgr/Xidi/releases/download/v4.3.1/Xidi-v4.3.1.zip $
 plain https://example.com/a/plain.tar.gz?raw=1 $GOOD
 summed - $GOOD mirror
 weird https://example.com/get/?id=7 $GOOD mirror
+dgvoodoo https://example.com/dgVoodoo2_80.zip $GOOD hosted https://github.com/me/game/releases/download/thirdparty/dgVoodoo2_80.zip
+both https://example.com/x.zip $GOOD mirror hosted
+summedhosted - $GOOD hosted
 EOF
 (
   PIN_FILE=$T/mpins PIN_DIR='' GITHUB_REPOSITORY=me/game
@@ -116,6 +119,15 @@ https://github.com/me/game/releases/download/thirdparty/Xidi-v4.3.1.zip" "$(pin_
   if pin_mirror_url xidi 'a/b/c' 2>/dev/null; then bad "bad repository refused"; else ok "bad repository refused"; fi
   if pin_mirror_url xidi o/r 'x y' 2>/dev/null; then bad "bad tag refused"; else ok "bad tag refused"; fi
   if (unset GITHUB_REPOSITORY PIN_MIRROR_REPO; pin_mirror_url xidi) 2>/dev/null; then bad "no repository refused"; else ok "no repository refused"; fi
+  pin_hosted dgvoodoo && ok "hosted word marks a pin" || bad "hosted word marks a pin"
+  if pin_mirrorable dgvoodoo; then bad "hosted is not mirrorable"; else ok "hosted is not mirrorable"; fi
+  if pin_hosted xidi; then bad "mirror is not hosted"; else ok "mirror is not hosted"; fi
+  if pin_hosted plain; then bad "unmarked pin is not hosted"; else ok "unmarked pin is not hosted"; fi
+  check "hosted word is not a url" "https://example.com/dgVoodoo2_80.zip
+https://github.com/me/game/releases/download/thirdparty/dgVoodoo2_80.zip" "$(pin_urls dgvoodoo)"
+  check "hosted pin has a mirror url" "https://github.com/me/game/releases/download/thirdparty/dgVoodoo2_80.zip" "$(pin_mirror_url dgvoodoo)"
+  if pin_sha both 2>/dev/null; then bad "mirror and hosted together refused"; else ok "mirror and hosted together refused"; fi
+  if pin_sha summedhosted 2>/dev/null; then bad "checksum-only hosted pin refused"; else ok "checksum-only hosted pin refused"; fi
   echo "fails=$fails" > "$T/sub"
 )
 . "$T/sub"

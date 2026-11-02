@@ -59,6 +59,7 @@ esac
 F
 cat > "$T/bin/wine" <<'F'
 #!/bin/sh
+echo "wine $*" >> "$WINE_LOG"
 case $2 in
   --list) printf 'abi::one: test\r\nabi::two: test\r\nabi::bench: benchmark\r\n' ;;
   --exact) [ "$3" != abi::two ] ;;
@@ -67,7 +68,7 @@ esac
 F
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/wineboot"; cp "$T/bin/wineboot" "$T/bin/wineserver"
 chmod +x "$T/bin/"*
-export PATH="$T/bin:$PATH" FAKE_RECORD="$T/record" FAKE_LOG="$T/canned.log" DISPLAY=:9
+export PATH="$T/bin:$PATH" FAKE_RECORD="$T/record" FAKE_LOG="$T/canned.log" DISPLAY=:9 WINE_LOG="$T/wine.log"
 unset REA_WINE_TARGET REA_WINE_TEST_PREFIX CARGO_TARGET_DIR
 
 run() { (cd "$T/ws" && FAKE_MODE=$1 && export FAKE_MODE && shift && sh "$WT" "$@") >"$T/out" 2>"$T/err"; }
@@ -80,6 +81,17 @@ grep -qx "prefix=$T/ws/target/wine/prefix" "$T/record" && ok "prefix inside the 
 grep -qx "target_dir=$T/ws/target/wine" "$T/record" && ok "target dir absolute" || bad "target dir: $(grep target_dir "$T/record")"
 grep -qx 'display=' "$T/record" && ok "headless: DISPLAY cleared" || bad "headless: DISPLAY cleared"
 [ -f "$T/ws/target/wine/prefix/.rea-headless" ] && ok "prefix prepared once" || bad "prefix prepared once"
+grep -qF 'wine reg add HKCU\Software\Wine\Drivers /v Graphics /t REG_SZ /d null /f' "$T/wine.log" \
+  && ok "new prefix uses the null graphics driver" || bad "null driver: $(cat "$T/wine.log")"
+: > "$T/wine.log"
+run pass --workspace
+if grep -q 'reg add' "$T/wine.log"; then bad "registry set only once per prefix"; else ok "registry set only once per prefix"; fi
+# A prefix from an older wine-test (empty marker) gets the null driver once.
+mkdir -p "$T/old/prefix"; : > "$T/old/prefix/.rea-headless"; : > "$T/wine.log"
+(cd "$T/ws" && FAKE_MODE=pass REA_WINE_TEST_PREFIX="$T/old/prefix" sh "$WT" >/dev/null 2>&1)
+grep -q 'Drivers /v Graphics' "$T/wine.log" && ! grep -q 'WineDbg' "$T/wine.log" \
+  && ok "older prefix upgraded with the null driver only" || bad "older prefix: $(cat "$T/wine.log")"
+grep -qx 'graphics=null' "$T/old/prefix/.rea-headless" && ok "marker records the upgrade" || bad "marker records the upgrade"
 
 run pass --target x86_64-pc-windows-gnu -p rea-launcher -- --nocapture
 check "--target x86_64, test args kept after --" \

@@ -1,0 +1,169 @@
+name: compat
+
+# SDK canary: builds and tests every public launcher's default branch
+# against this SDK checkout instead of the tag it pins, so a change that
+# breaks a launcher shows up before the SDK is tagged.
+#
+# For each launcher: a [patch] on the SDK's git URL in the launcher's
+# .cargo/config.toml points rea-launcher* at ./sdk-src/crates, sdk/ is
+# re-vendored from this checkout, then the launcher's checks run: fmt, host
+# tests, clippy for its Windows target, linux/tests (e2e skipped) and the
+# Windows-target tests under Wine.
+#
+# A launcher still on an older SDK API may fail for a known reason. List it
+# (space-separated repository names) in the repository variable
+# REA_CANARY_ALLOW_FAILURE or the allow-failure input: its job may then
+# fail without failing the run. A red or allowed failure must be understood
+# before tagging (CONTRIBUTING.md, "Before tagging").
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      allow-failure:
+        description: Launcher repositories allowed to fail, space-separated (e.g. rea-screamer-trilogy).
+        type: string
+        default: ""
+
+concurrency:
+  group: compat-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  launcher:
+    name: ${{ matrix.repo }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    continue-on-error: ${{ contains(format(' {0} ', inputs.allow-failure || vars.REA_CANARY_ALLOW_FAILURE || ''), format(' {0} ', matrix.repo)) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: rea-colin-mcrae-3
+            target: i686-pc-windows-gnu
+            clippy-args: --all-targets
+            apt: ""
+          - repo: rea-colin-mcrae-4
+            target: i686-pc-windows-gnu
+            clippy-args: --all-targets
+            apt: ""
+          - repo: rea-screamer-trilogy
+            # Screamer ships an x86_64 Windows build; its Linux build is native.
+            target: x86_64-pc-windows-gnu
+            clippy-args: --all-targets
+            apt: libasound2-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev pkg-config
+          - repo: rea-sega-rally-revo
+            target: i686-pc-windows-gnu
+            clippy-args: ""
+            apt: ""
+          - repo: rea-outrun-2006
+            target: i686-pc-windows-gnu
+            clippy-args: --all-targets
+            apt: cabextract
+    env:
+      TARGET: ${{ matrix.target }}
+      CLIPPY_ARGS: ${{ matrix.clippy-args }}
+      SDK: ${{ github.workspace }}/sdk-src
+      LAUNCHER: ${{ github.workspace }}/launcher
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: sdk-src
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: akitaonrails/${{ matrix.repo }}
+          path: launcher
+          persist-credentials: false
+
+      - name: Install MinGW, LLD, Wine and test tools
+        shell: sh
+        env:
+          APT_EXTRA: ${{ matrix.apt }}
+        run: |
+          case $TARGET in
+            i686-pc-windows-gnu) mingw=gcc-mingw-w64-i686 ;;
+            x86_64-pc-windows-gnu) mingw=gcc-mingw-w64-x86-64 ;;
+            *) echo "::error::unexpected target $TARGET"; exit 1 ;;
+          esac
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          # shellcheck disable=SC2086 # the extra list is split on purpose
+          sudo apt-get install -y --no-install-recommends "$mingw" lld wine wine32:i386 wine64 dash mawk $APT_EXTRA
+
+      - name: Install Rust
+        shell: sh
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          rustup target add "$TARGET"
+
+      - name: Point the launcher at this SDK
+        id: point
+        shell: sh
+        run: |
+          case $SDK in *[!A-Za-z0-9._/-]*) echo "::error::unexpected characters in $SDK"; exit 1 ;; esac
+          cfg=$LAUNCHER/.cargo/config.toml
+          mkdir -p "$LAUNCHER/.cargo"
+          if [ -f "$cfg" ] && grep -q 'patch\."https://github.com/akitaonrails/rea-launcher-sdk"' "$cfg"; then
+            echo "::error::$cfg already patches the SDK source"; exit 1
+          fi
+          {
+            echo
+            echo '# rea-launcher-sdk canary: the SDK under test instead of the pinned tag.'
+            echo '[patch."https://github.com/akitaonrails/rea-launcher-sdk"]'
+            for c in rea-launcher rea-launcher-win32 rea-launcher-ui; do
+              if [ -f "$SDK/crates/$c/Cargo.toml" ]; then echo "$c = { path = \"$SDK/crates/$c\" }"; fi
+            done
+          } >> "$cfg"
+          cat "$cfg"
+          sh "$SDK/scripts/sdk-sync" --tag canary "$LAUNCHER"
+
+      # The patch rewrites the SDK entries of Cargo.lock, so --locked would
+      # refuse every run: the canary builds without it (cargo changes only
+      # what the patch needs). The launcher's own CI keeps --locked.
+      - name: Format
+        if: ${{ !cancelled() && steps.point.outcome == 'success' }}
+        working-directory: launcher
+        run: cargo fmt --all --check
+
+      - name: Host tests
+        if: ${{ !cancelled() && steps.point.outcome == 'success' }}
+        working-directory: launcher
+        run: cargo test --workspace
+
+      - name: Lint (Windows target)
+        if: ${{ !cancelled() && steps.point.outcome == 'success' }}
+        working-directory: launcher
+        shell: sh
+        run: |
+          set -f
+          # shellcheck disable=SC2086 # split the argument list on purpose
+          cargo clippy --workspace --target "$TARGET" $CLIPPY_ARGS -- -D warnings
+
+      - name: Linux helper tests
+        if: ${{ !cancelled() && steps.point.outcome == 'success' }}
+        working-directory: launcher
+        shell: sh
+        run: |
+          for t in linux/tests/*.sh; do
+            [ -f "$t" ] || continue
+            case $t in *e2e*) echo "skip $t"; continue ;; esac
+            echo "::group::$t"
+            dash "$t" || { echo "::endgroup::"; echo "::error file=$t::$t failed"; exit 1; }
+            echo "::endgroup::"
+          done
+
+      - name: Windows-target tests under Wine (headless)
+        if: ${{ !cancelled() && steps.point.outcome == 'success' }}
+        working-directory: launcher
+        run: sh "$SDK/scripts/wine-test" --target "$TARGET" --workspace

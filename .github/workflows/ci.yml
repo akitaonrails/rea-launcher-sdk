@@ -60,7 +60,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends dash mawk busybox curl xz-utils zip unzip
       - name: Shell syntax
         run: |
-          for f in packaging/*.sh packaging/tests/*.sh scripts/sdk-sync scripts/tests/*.sh shell/*.sh shell/example-play shell/tests/*.sh; do
+          for f in packaging/*.sh packaging/tests/*.sh scripts/sdk-sync scripts/sdk-bump scripts/clean scripts/wine-test scripts/dev-check scripts/tests/*.sh shell/*.sh shell/example-play shell/tests/*.sh; do
             [ -f "$f" ] || continue
             dash -n "$f" || { echo "::error file=$f::dash -n failed"; exit 1; }
             echo "ok   $f"
@@ -103,6 +103,86 @@ jobs:
       - name: cargo test under Wine
         # No display: wine-test clears DISPLAY/WAYLAND_DISPLAY; nothing opens a window.
         run: scripts/wine-test --locked --workspace
+
+  scaffold:
+    # A template change can never silently break new launchers: generate one
+    # from this checkout and run the checks its own CI would run.
+    name: New-launcher scaffold builds and passes its checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SDK: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install MinGW, LLD and Wine (32-bit)
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64 dash mawk zip unzip
+      - name: Install Rust (with the 32-bit Windows target)
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          rustup target add i686-pc-windows-gnu
+      - name: Generate the example launcher
+        run: |
+          echo "OUT=$RUNNER_TEMP/rea-example" >> "$GITHUB_ENV"
+          scripts/new-launcher --id exr --prefix EXR --game "Example Rally" \
+            --exe "Example Rally.exe" --out "$RUNNER_TEMP/rea-example" \
+            --repo akitaonrails/rea-example --no-lock
+      # The scaffold pins the SDK by tag (this commit's release tag, or
+      # v<workspace version> before it is tagged). That tag may not exist
+      # yet and is not the code under test, and a Cargo [patch] (compat.yml)
+      # still fetches the pinned tag first. So the SDK dependencies become
+      # path dependencies on this checkout. No Cargo.lock exists yet
+      # (--no-lock), so the checks run without --locked; a real launcher's
+      # CI keeps --locked.
+      - name: Point the scaffold at this checkout
+        shell: sh
+        run: |
+          case $SDK in *[!A-Za-z0-9._/-]*) echo "::error::unexpected characters in $SDK"; exit 1 ;; esac
+          toml=$OUT/Cargo.toml
+          sed 's#^\(rea-launcher[a-z0-9-]*\) = { git = "[^"]*", tag = "[^"]*" }$#\1 = { path = "'"$SDK"'/crates/\1" }#' "$toml" > "$toml.new"
+          mv "$toml.new" "$toml"
+          if grep -n '^rea-launcher[a-z0-9-]* *=.*git *=' "$toml"; then
+            echo "::error::the scaffold's SDK dependencies changed shape; update this step"; exit 1
+          fi
+          n=$(grep -c "^rea-launcher[a-z0-9-]* = { path = \"$SDK/crates/" "$toml")
+          [ "$n" -gt 0 ] || { echo "::error::no SDK dependency found in $toml"; exit 1; }
+          grep -n '^rea-launcher' "$toml"
+      - name: Format
+        working-directory: ${{ runner.temp }}/rea-example
+        run: cargo fmt --all --check
+      - name: Host tests
+        working-directory: ${{ runner.temp }}/rea-example
+        run: cargo test --workspace
+      - name: Lint (host)
+        working-directory: ${{ runner.temp }}/rea-example
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Lint (i686 Windows)
+        working-directory: ${{ runner.temp }}/rea-example
+        run: cargo clippy --workspace --all-targets --target i686-pc-windows-gnu -- -D warnings
+      - name: Linux helper and packaging tests
+        working-directory: ${{ runner.temp }}/rea-example
+        run: |
+          for t in linux/tests/*.sh packaging/tests/package.sh; do
+            echo "::group::$t"
+            dash "$t" || { echo "::endgroup::"; echo "::error::$t failed"; exit 1; }
+            echo "::endgroup::"
+          done
+      - name: Both Windows targets link with lld
+        working-directory: ${{ runner.temp }}/rea-example
+        run: sh sdk/packaging/check-lld.sh i686-pc-windows-gnu x86_64-pc-windows-gnu
+      - name: Release build (i686) and every import resolves
+        working-directory: ${{ runner.temp }}/rea-example
+        run: |
+          cargo build --release --workspace --target i686-pc-windows-gnu
+          sh sdk/packaging/check-imports.sh target/i686-pc-windows-gnu/release/*.exe
+      - name: Windows-target tests under Wine (headless, the vendored wine-test)
+        working-directory: ${{ runner.temp }}/rea-example
+        run: sh sdk/scripts/wine-test --workspace
 
   deny:
     name: Dependency advisories, licences and sources

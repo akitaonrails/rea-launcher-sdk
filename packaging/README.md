@@ -31,7 +31,9 @@ scripts/sdk-sync --check ../rea-colin-mcrae-4  # exit 1 on drift
 
 Layout in the launcher: `sdk/rea-play.sh` (the play library, from the SDK's
 `shell/`), `sdk/scripts/wine-test` (Windows-target tests under Wine),
-`sdk/packaging/...` (as here). Helpers look for `rea-play.sh`
+`sdk/packaging/...` (as here), and `sdk/docs/STANDARDS.md` with
+`sdk/docs/playbooks/*.md`, so a launcher's `AGENTS.md`/`CLAUDE.md` point at
+the SDK's wording instead of copying it. Helpers look for `rea-play.sh`
 beside themselves first, then at `../sdk/rea-play.sh`; a zip that ships the
 helper ships the library beside it too.
 
@@ -90,14 +92,30 @@ on: workflow_dispatch
 jobs:
   mirror:
     permissions: {contents: write}
-    uses: akitaonrails/rea-launcher-sdk/.github/workflows/mirror.yml@v0.2.0
+    uses: akitaonrails/rea-launcher-sdk/.github/workflows/mirror.yml@v0.3.0
     with:
-      pins: packaging/third-party.txt
+      pins: packaging/third-party.txt   # or a folder (packaging) or a glob (packaging/*.txt)
 ```
+
+`pins` takes pin files, folders of one-pin `<name>.txt` files (OutRun's
+`packaging/*.txt`) or globs of either; unmarked and malformed files are
+skipped.
 
 Never mark a pin `mirror` without a licence that allows redistribution
 (record it in `THIRD_PARTY.md`); a licence-less download stays a download
 from its author.
+
+**Licence-less files the owner decided to host** (CMR4's dgVoodoo2 2.80,
+CMR3's HD UI) are marked `hosted` instead (never both words):
+
+```
+dgvoodoo <the author's download url> <sha256 of the zip> hosted https://github.com/akitaonrails/rea-colin-mcrae-4/releases/download/thirdparty/dgVoodoo2_80.zip
+```
+
+`pin_hosted NAME` tells them apart from `pin_mirrorable NAME`. The mirror
+workflow skips `hosted` pins (with a notice) unless the caller sets
+`include-hosted: true`. Set it only once the owner's decision (who decided,
+when, why, the author's terms) is recorded in `THIRD_PARTY.md`.
 
 ## AppImage
 
@@ -229,14 +247,15 @@ Inputs of `launcher-ci.yml` (all optional):
 | `wine-test-args` | `--locked --workspace` | |
 | `audit` | `true` | cargo-audit 0.22.1 + cargo-deny 0.19.8; fails without a `deny.toml` |
 | `sdk-check`, `sdk-dir`, `sdk-repository` | `true`, `sdk`, this repo | drift check against `sdk/VERSION` |
+| `imports-check` | `true` | for a Windows target: `.cargo/config.toml` links it with lld (`check-lld.sh`), and every import of the built `.exe`/`.dll` belongs to a descriptor (`check-imports.sh`) |
 | `imports-test`, `package-command` | empty | bash commands |
 | `package-dir`, `package-allowlist` | empty | glob of package folders/zips and the allowlist |
 | `artifact-name`, `artifact-paths` | empty | upload |
 
-Commands run in bash with Commands run in bash with
-`REA_VERSION_NAME`, `REA_RELEASE_DIR`, `REA_CACHE` and `REA_SDK` set. SRR's
-import check, for example:
-`imports-test: SRR_LAUNCHER_EXE="$REA_RELEASE_DIR/SRRLauncher.exe" cargo test --locked --test imports -- --ignored`.
+Commands run in bash with
+`REA_VERSION_NAME`, `REA_RELEASE_DIR`, `REA_CACHE` and `REA_SDK` set.
+`imports-check` replaces SRR's own import test (`tests/imports.rs`); a
+launcher may still run extra checks through `imports-test`.
 Every check fails its step on error: `scripts/tests/workflows.sh` runs the
 shell steps as GitHub does (`sh -e`) against fixtures.
 
@@ -265,6 +284,98 @@ jobs:
       pins: packaging/third-party.txt
       watch-list: packaging/upstream-watch.txt
 ```
+
+## Staying current
+
+A launcher moves to a new SDK tag with one command and one review:
+
+```sh
+sdk/scripts/sdk-bump v0.3.0            # from the launcher's root
+sdk/scripts/sdk-bump --notes migration.md v0.3.0
+```
+
+`sdk-bump vX.Y.Z [repo]` rewrites the tag of every `rea-launcher-sdk` git
+dependency (inline or `[dependencies.x]` tables) in every `Cargo.toml`, runs
+`cargo update -p` for the SDK crates in `Cargo.lock` (`--no-cargo` skips
+it), re-vendors `sdk/` with that tag's `sdk-sync`, moves every
+`akitaonrails/rea-launcher-sdk/.github/workflows/*.yml@…` to `@vX.Y.Z`, and
+prints the CHANGELOG **Migration** items after the launcher's old version
+(`--since vA.B.C` to choose the start). The SDK comes from a clean SDK
+checkout at the tag, else a clone cached in `$REA_SDK_CACHE` (default
+`~/.cache/rea-launcher-sdk/checkout`) fetched from `$REA_SDK_URL` or GitHub.
+It refuses a dirty work tree and a downgrade unless `--force`; running it
+again changes nothing.
+
+Weekly, as a pull request (`sdk-update.yml`): the workflow finds the newest
+`vX.Y.Z` tag, compares it with `sdk/VERSION`, runs that tag's `sdk-bump` on
+the branch `sdk-update/vX.Y.Z`, pushes, and opens or updates a PR whose body
+lists the Migration items and a review checklist. It never merges.
+
+```yaml
+# .github/workflows/sdk-update.yml in the launcher
+name: sdk-update
+on:
+  schedule: [{cron: "17 5 * * 1"}]
+  workflow_dispatch:
+jobs:
+  update:
+    permissions: {contents: write, pull-requests: write}
+    uses: akitaonrails/rea-launcher-sdk/.github/workflows/sdk-update.yml@v0.3.0
+    # secrets: {token: ${{ secrets.SDK_UPDATE_TOKEN }}}  # so the PR runs CI
+```
+
+Enable "Allow GitHub Actions to create and approve pull requests" in the
+repository settings. A PR opened with the default `GITHUB_TOKEN` triggers
+no workflows; pass a fine-grained token (contents and pull requests: write)
+as the `token` secret to get CI on it. Inputs: `version` (move to this tag
+instead of the newest), `base`, `sdk-dir`, `sdk-repository`, `runs-on`.
+`sdk-bump` moves the `@vX.Y.Z` of this workflow too.
+
+The SDK side, `compat.yml`, builds every launcher's default branch against
+the SDK under test before a tag exists (CONTRIBUTING.md, "Before tagging").
+
+## Linking with lld
+
+GNU ld 2.47 mis-links rust's raw-dylib Windows imports for **both** i686 and
+x86_64: some import address table slots end up outside every import
+descriptor, the loader never fills them, and the program jumps into data on
+that call, often before `main`. Every launcher therefore sets, for each
+Windows target it builds:
+
+```toml
+[target.x86_64-pc-windows-gnu]   # and [target.i686-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+```
+
+Two checks, both run by `launcher-ci.yml` (`imports-check`, on by default)
+and usable by hand:
+
+```sh
+sdk/packaging/check-lld.sh i686-pc-windows-gnu x86_64-pc-windows-gnu   # the config
+sdk/packaging/check-imports.sh target/i686-pc-windows-gnu/release/*.exe  # the built file
+```
+
+`check-imports.sh` reads PE32 and PE32+ files and names every orphaned
+import; it exits 1 on any, 2 on a file that isn't a PE image.
+
+## Cleaning up
+
+`sdk/scripts/clean` (from a launcher or the SDK) frees what builds and a
+task's scratch took, following STANDARDS "Clean up after yourself". A dry
+run by default: it lists `target/` (with `target/wine/`), `dist/` and the
+`.work/` entries named in `.work/.task-created`, each with its size, and a
+total; `--yes` removes exactly those.
+
+- **The manifest:** whenever an agent creates scratch under `.work/` for the
+  task, it appends the path (repo-relative, e.g. `.work/probe-2026-11-02`) to
+  `.work/.task-created`. Everything else in `.work/` is kept (earlier
+  sessions' evidence); `--work-all` includes all of it, with a warning.
+- **Safety:** each path must resolve inside the repository, be ignored by
+  Git and hold nothing tracked; a symlink out of the repository is refused.
+  Any refusal removes nothing and exits 1. `--keep PATH` protects a path
+  (a candidate holding it is skipped). It never runs `git clean` and never
+  globs beyond that list.
 
 ## Migrating a launcher
 

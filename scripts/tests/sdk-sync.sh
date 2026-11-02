@@ -14,7 +14,12 @@ git() { command git -c user.name=test -c user.email=test@example.com -c init.def
 S=$T/sdk-src
 mkdir -p "$S/scripts" "$S/shell"
 cp -R "$ROOT/packaging" "$S/packaging"
-cp "$ROOT/scripts/sdk-sync" "$ROOT/scripts/wine-test" "$S/scripts/"
+mkdir -p "$S/docs/playbooks"
+echo '# Standards' > "$S/docs/STANDARDS.md"
+echo '# Playbook A' > "$S/docs/playbooks/a.md"
+echo '# Playbook B' > "$S/docs/playbooks/b.md"
+echo '# Design, not vendored' > "$S/docs/DESIGN.md"
+cp "$ROOT/scripts/sdk-sync" "$ROOT/scripts/wine-test" "$ROOT/scripts/sdk-bump" "$ROOT/scripts/clean" "$S/scripts/"
 printf '# play library\n' > "$S/shell/rea-play.sh"
 (cd "$S" && git init -q && git add -A && git commit -qm sdk && git tag v9.9.9) || { echo "git setup failed"; exit 1; }
 SYNC=$S/scripts/sdk-sync
@@ -29,12 +34,18 @@ if cmp -s "$S/shell/rea-play.sh" "$L/sdk/rea-play.sh"; then ok "play library ven
 [ ! -e "$L/sdk/shell" ] && ok "no sdk/shell folder" || bad "no sdk/shell folder"
 [ -x "$L/sdk/scripts/wine-test" ] && cmp -s "$S/scripts/wine-test" "$L/sdk/scripts/wine-test" \
   && ok "vendored scripts/wine-test (executable)" || bad "vendored scripts/wine-test (executable)"
+[ -x "$L/sdk/scripts/sdk-bump" ] && ok "vendored scripts/sdk-bump" || bad "vendored scripts/sdk-bump"
+[ -x "$L/sdk/scripts/clean" ] && cmp -s "$S/scripts/clean" "$L/sdk/scripts/clean" && ok "vendored scripts/clean" || bad "vendored scripts/clean"
 [ ! -e "$L/sdk/scripts/sdk-sync" ] && ok "sdk-sync itself not vendored" || bad "sdk-sync itself not vendored"
 for f in packaging/pins.sh packaging/appimage-wine.sh packaging/smoke-package.sh \
   packaging/release-notes.sh packaging/appimage/AppRun.in packaging/appimage/tools.pins \
   packaging/appimage/wine/COPYING.LIB packaging/appimage/wine/LICENSE packaging/appimage/wine/SOURCE.txt; do
   if cmp -s "$S/$f" "$L/sdk/$f"; then ok "vendored $f"; else bad "vendored $f"; fi
 done
+for f in docs/STANDARDS.md docs/playbooks/a.md docs/playbooks/b.md; do
+  if cmp -s "$S/$f" "$L/sdk/$f"; then ok "vendored $f"; else bad "vendored $f"; fi
+done
+[ ! -e "$L/sdk/docs/DESIGN.md" ] && ok "other SDK docs not vendored" || bad "other SDK docs not vendored"
 [ ! -e "$L/sdk/packaging/tests" ] && ok "tests not vendored" || bad "tests not vendored"
 [ -x "$L/sdk/packaging/appimage-wine.sh" ] && ok "exec bit kept" || bad "exec bit kept"
 [ ! -x "$L/sdk/packaging/pins.sh" ] && ok "library stays non-executable" || bad "library stays non-executable"
@@ -54,6 +65,12 @@ check_drift "extra file is drift" "not from the SDK: sdk/packaging/mine.sh"
 rm "$L/sdk/packaging/mine.sh"
 rm "$L/sdk/packaging/release-notes.sh"
 check_drift "missing file is drift" "missing: sdk/packaging/release-notes.sh"
+sh "$SYNC" "$L" >/dev/null 2>&1
+echo "# local rule" >> "$L/sdk/docs/STANDARDS.md"
+check_drift "edited vendored STANDARDS is drift" "changed: sdk/docs/STANDARDS.md"
+sh "$SYNC" "$L" >/dev/null 2>&1
+rm "$L/sdk/docs/playbooks/b.md"
+check_drift "missing vendored playbook is drift" "missing: sdk/docs/playbooks/b.md"
 sh "$SYNC" "$L" >/dev/null 2>&1
 echo "# local" >> "$L/sdk/rea-play.sh"
 check_drift "edited play library is drift" "changed: sdk/rea-play.sh"

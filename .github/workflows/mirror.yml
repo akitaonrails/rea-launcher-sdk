@@ -4,10 +4,13 @@ name: mirror
 # own GitHub release (tag `thirdparty` by default), so a build survives an
 # upstream move or deletion. Generalised from CMR3's mirror.yml.
 #
-# Only pins marked with the word `mirror` (their licence allows
-# republishing) are uploaded, each under the pin's file name (pins.sh
-# pin_file: the primary url's basename), so the fallback url the pin lists,
-# `pin_mirror_url <name>`, always names the uploaded asset. Every file is
+# Pins come from pin files, folders of one-pin <name>.txt files, or globs
+# (input `pins`). Pins marked with the word `mirror` (their licence allows
+# republishing) are uploaded; pins marked `hosted` (no licence, the owner
+# decided to host them) only with include-hosted: true. Each is uploaded
+# under the pin's file name (pins.sh pin_file: the primary url's basename),
+# so the fallback url the pin lists, `pin_mirror_url <name>`, always names
+# the uploaded asset. Every file is
 # checked against its sha256 before upload. The release is never deleted:
 # it is created only when missing, and assets are replaced with --clobber.
 #
@@ -18,9 +21,19 @@ on:
   workflow_call:
     inputs:
       pins:
-        description: Pin files to read, space-separated.
+        description: >-
+          Pins to read, space-separated: pin files (name url sha256 ...),
+          folders of one-pin <name>.txt files, or globs of either
+          (e.g. packaging/*.txt).
         type: string
         default: packaging/third-party.txt
+      include-hosted:
+        description: >-
+          Also upload pins marked `hosted` (no licence; the owner decided to
+          host them). Set true only when that decision is recorded in
+          THIRD_PARTY.md.
+        type: boolean
+        default: false
       tag:
         description: Tag of the mirror release.
         type: string
@@ -48,6 +61,7 @@ jobs:
       PINS: ${{ inputs.pins }}
       TAG: ${{ inputs.tag }}
       SDK_DIR: ${{ inputs.sdk-dir }}
+      INCLUDE_HOSTED: ${{ inputs.include-hosted }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,34 +73,57 @@ jobs:
           case $TAG in '' | *[!A-Za-z0-9._-]*) echo "::error::bad tag '$TAG'"; exit 1 ;; esac
           OUT=$RUNNER_TEMP/mirror
           . "$SDK_DIR/packaging/pins.sh"
-          PIN_CACHE='' PIN_DIR='' PIN_MIRROR_REPO=$GITHUB_REPOSITORY PIN_MIRROR_TAG=$TAG
+          PIN_CACHE='' PIN_MIRROR_REPO=$GITHUB_REPOSITORY PIN_MIRROR_TAG=$TAG
           mkdir -p "$OUT"
           : > "$RUNNER_TEMP/names"
           n=0
-          set -f
-          for PIN_FILE in $PINS; do
-            set +f
-            [ -f "$PIN_FILE" ] || { echo "::error::no pin file $PIN_FILE"; exit 1; }
-            for name in $(pin_names); do
-              pin_mirrorable "$name" || continue
-              file=$(pin_file "$name")
-              # Two pins must never share an asset name.
-              if grep -qxF "$file" "$RUNNER_TEMP/names"; then
-                echo "::error::$name: asset name $file is used by another pin"; exit 1
+          mirror_one() { # pin name, where it came from
+            if pin_mirrorable "$1" 2>/dev/null; then
+              :
+            elif pin_hosted "$1" 2>/dev/null; then
+              if [ "$INCLUDE_HOSTED" != true ]; then
+                echo "::notice file=$2::$1 is marked hosted (no licence): skipped; set include-hosted: true once the owner's decision is recorded in THIRD_PARTY.md"
+                return 0
               fi
-              echo "$file" >> "$RUNNER_TEMP/names"
-              echo "::group::$name -> $file"
-              got=$(pin_fetch "$name" "$OUT") || { echo "::error::$name: no source matched its sha256"; exit 1; }
-              pin_verify "$got" "$(pin_sha "$name")"
-              url=$(pin_mirror_url "$name")
-              if ! pin_urls "$name" | grep -qxF "$url"; then
-                echo "::warning file=$PIN_FILE::$name: add the mirror url as a fallback: $url"
-              fi
-              echo "::endgroup::"
-              n=$((n + 1))
-            done
+              echo "::notice file=$2::$1 is hosted by the owner's decision (include-hosted)"
+            else
+              return 0
+            fi
+            file=$(pin_file "$1")
+            # Two pins must never share an asset name.
+            if grep -qxF "$file" "$RUNNER_TEMP/names"; then
+              echo "::error::$1: asset name $file is used by another pin"; exit 1
+            fi
+            echo "$file" >> "$RUNNER_TEMP/names"
+            echo "::group::$1 -> $file"
+            got=$(pin_fetch "$1" "$OUT") || { echo "::error::$1: no source matched its sha256"; exit 1; }
+            pin_verify "$got" "$(pin_sha "$1")"
+            url=$(pin_mirror_url "$1")
+            if ! pin_urls "$1" | grep -qxF "$url"; then
+              echo "::warning file=$2::$1: add the mirror url as a fallback: $url"
+            fi
+            echo "::endgroup::"
+            n=$((n + 1))
+          }
+          # Unquoted on purpose: split the list and expand each glob.
+          for src in $PINS; do
+            if [ -d "$src" ]; then
+              # A folder of one-pin <name>.txt files.
+              PIN_FILE='' PIN_DIR=$src
+              for name in $(pin_names); do mirror_one "$name" "$src/$name.txt"; done
+            elif [ -f "$src" ] && awk '!/^[ \t]*(#|$)/ { exit !($1 ~ /:\/\//) }' "$src"; then
+              # One one-pin file: its name is the file name.
+              PIN_FILE='' PIN_DIR=$(dirname "$src")
+              name=$(basename "$src" .txt)
+              mirror_one "$name" "$src"
+            elif [ -f "$src" ]; then
+              PIN_FILE=$src PIN_DIR=''
+              for name in $(pin_names); do mirror_one "$name" "$src"; done
+            else
+              echo "::error::no pin file or folder $src"; exit 1
+            fi
           done
-          [ "$n" -gt 0 ] || { echo "::error::no pin is marked mirror in $PINS"; exit 1; }
+          [ "$n" -gt 0 ] || { echo "::error::no pin in $PINS is marked mirror (or hosted, with include-hosted)"; exit 1; }
           ls -l "$OUT"
 
       - name: Upload to the mirror release

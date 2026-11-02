@@ -1,0 +1,178 @@
+name: sdk-update
+
+# Reusable: opens (or updates) a pull request that moves a launcher to the
+# newest rea-launcher-sdk tag, with that range's CHANGELOG Migration items
+# in its body. It never merges: a person applies the Migration items,
+# checks the launcher and merges.
+#
+# Steps: find the newest vX.Y.Z tag of the SDK (git ls-remote) and compare
+# it with sdk/VERSION; when newer, run that tag's scripts/sdk-bump on the
+# branch sdk-update/vX.Y.Z (Cargo tags, cargo update, sdk/ re-vendored,
+# reusable workflow refs); push; open or update the PR.
+#
+# The caller schedules it (packaging/README.md, "Staying current"):
+#   on: { schedule: [{cron: "17 5 * * 1"}], workflow_dispatch: }
+#   jobs: { update: { permissions: {contents: write, pull-requests: write},
+#           uses: akitaonrails/rea-launcher-sdk/.github/workflows/sdk-update.yml@vX.Y.Z } }
+# The repository must allow GitHub Actions to create pull requests
+# (Settings > Actions > General). A PR opened with the default token runs
+# no workflows; pass a fine-grained token as the `token` secret to get CI
+# on the PR.
+
+on:
+  workflow_call:
+    inputs:
+      sdk-repository:
+        type: string
+        default: akitaonrails/rea-launcher-sdk
+      sdk-dir:
+        description: Where sdk-sync vendored the SDK.
+        type: string
+        default: sdk
+      base:
+        description: Branch the PR targets; empty means the repository's default branch.
+        type: string
+        default: ""
+      version:
+        description: A tag to move to instead of the newest (vX.Y.Z).
+        type: string
+        default: ""
+      runs-on:
+        type: string
+        default: ubuntu-24.04
+    secrets:
+      token:
+        description: Token for push and PR, so the PR triggers CI. Default GITHUB_TOKEN.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    name: Move to the newest SDK tag
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    concurrency:
+      group: rea-sdk-update-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.token || github.token }}
+      SDK_URL: https://github.com/${{ inputs.sdk-repository }}
+      SDK_DIR: ${{ inputs.sdk-dir }}
+      BASE_INPUT: ${{ inputs.base }}
+      VERSION_INPUT: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base }}
+          fetch-depth: 0
+          token: ${{ secrets.token || github.token }}
+
+      - name: Find the SDK version
+        id: version
+        shell: sh
+        run: |
+          if [ -n "$VERSION_INPUT" ]; then
+            latest=$VERSION_INPUT
+          else
+            latest=$(git ls-remote --tags --refs "$SDK_URL" \
+              | sed -n 's|.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' \
+              | sort -t. -k1.2,1n -k2,2n -k3,3n | tail -n 1)
+          fi
+          case $latest in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::no SDK version found ('$latest')"; exit 1 ;;
+          esac
+          case $latest in *[!A-Za-z0-9.+-]*) echo "::error::unsafe tag '$latest'"; exit 1 ;; esac
+          current=$(sed -n 's/^tag=//p' "$SDK_DIR/VERSION" 2>/dev/null || true)
+          newer=$(awk -v a="${latest#v}" -v b="${current#v}" 'BEGIN {
+            split(a, x, "."); split(b, y, ".")
+            for (i = 1; i <= 3; i++) {
+              if (x[i] + 0 > y[i] + 0) { print 1; exit }
+              if (x[i] + 0 < y[i] + 0) { print 0; exit }
+            }
+            print 0 }')
+          if [ -z "$current" ]; then newer=1; fi
+          echo "SDK: launcher ${current:-unknown}, newest $latest"
+          { echo "latest=$latest"; echo "current=$current"; echo "newer=$newer"; } >> "$GITHUB_OUTPUT"
+
+      - name: Bump on the update branch
+        id: bump
+        if: steps.version.outputs.newer == '1'
+        shell: sh
+        env:
+          LATEST: ${{ steps.version.outputs.latest }}
+          CURRENT: ${{ steps.version.outputs.current }}
+        run: |
+          branch="sdk-update/$LATEST"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Build on an existing update branch (keeps commits people added).
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            git fetch --quiet origin "refs/heads/$branch"
+            git checkout --quiet -B "$branch" FETCH_HEAD
+          else
+            git checkout --quiet -B "$branch"
+          fi
+          # That tag's own sdk-bump, from a clean checkout outside the work tree.
+          rm -rf "$RUNNER_TEMP/rea-sdk"
+          git clone --quiet "$SDK_URL" "$RUNNER_TEMP/rea-sdk"
+          git -C "$RUNNER_TEMP/rea-sdk" -c advice.detachedHead=false checkout --quiet --detach "refs/tags/$LATEST"
+          [ -f "$RUNNER_TEMP/rea-sdk/scripts/sdk-bump" ] \
+            || { echo "::error::SDK $LATEST has no scripts/sdk-bump"; exit 1; }
+          set --
+          if [ -n "$CURRENT" ]; then set -- --since "$CURRENT"; fi
+          sh "$RUNNER_TEMP/rea-sdk/scripts/sdk-bump" "$@" --notes "$RUNNER_TEMP/migration.md" "$LATEST" .
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit --quiet -m "build: bump rea-launcher-sdk to $LATEST"
+            git push --quiet origin "HEAD:refs/heads/$branch"
+            echo "pushed $branch"
+          else
+            echo "$branch already up to date"
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the pull request
+        if: steps.version.outputs.newer == '1'
+        shell: sh
+        env:
+          LATEST: ${{ steps.version.outputs.latest }}
+          CURRENT: ${{ steps.version.outputs.current }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+        run: |
+          base=$BASE_INPUT
+          if [ -z "$base" ]; then
+            base=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          fi
+          body=$RUNNER_TEMP/pr-body.md
+          {
+            echo "Moves this launcher from rea-launcher-sdk ${CURRENT:-(unknown)} to $LATEST: Cargo tags and Cargo.lock, the vendored \`$SDK_DIR/\`, and the reusable workflow refs (\`sdk-bump\`)."
+            echo
+            echo "Release notes: $SDK_URL/releases/tag/$LATEST"
+            echo
+            echo "## Migration items"
+            echo
+            if [ -s "$RUNNER_TEMP/migration.md" ]; then cat "$RUNNER_TEMP/migration.md"; else echo "None in the SDK CHANGELOG for this range."; fi
+            echo
+            echo "## Before merging"
+            echo
+            echo "- [ ] Each Migration item applied (or not relevant here) and verified as its entry says"
+            echo "- [ ] CI green, including the Windows-target tests under Wine"
+            echo "- [ ] The game played once from the built package"
+            echo "- [ ] CHANGELOG entry for the bump"
+            echo
+            echo "Opened by the sdk-update workflow; it never merges."
+          } > "$body"
+          existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --body-file "$body"
+            echo "updated PR #$existing"
+          else
+            gh pr create --base "$base" --head "$BRANCH" \
+              --title "build: bump rea-launcher-sdk to $LATEST" --body-file "$body"
+          fi

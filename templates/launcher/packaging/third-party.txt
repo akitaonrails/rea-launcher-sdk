@@ -1,0 +1,9 @@
+# Pinned third-party components (rea-launcher-sdk packaging/README.md, "Pin
+# files"; docs/playbooks/community-components.md). One per line:
+#
+#   name url sha256 [fallback-url ...] [mirror]
+#
+# Fetched at package time by packaging/package.sh through
+# sdk/packaging/pins.sh, never committed. Record each one's licence and
+# source in THIRD_PARTY.md; mark it `mirror` only when its licence allows
+# republishing.

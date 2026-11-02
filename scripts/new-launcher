@@ -1,0 +1,201 @@
+#!/bin/sh
+# rea-launcher-sdk scripts/new-launcher: creates a new launcher repository
+# from templates/launcher, with the SDK pinned at this checkout's release.
+#
+#   scripts/new-launcher --id ID --prefix PREFIX --game "TITLE" --exe GAME.exe \
+#       --out DIR [options]
+#
+# Required:
+#   --id ID            short lower-case launcher id, e.g. cmr3 (crate ID-launcher,
+#                      linux/ID-play, ~/.local/share/ID-launcher)
+#   --prefix PREFIX    the helper's environment prefix, e.g. CMR3 (CMR3_ also works)
+#   --game TITLE       the game's title, e.g. "Colin McRae Rally 3"
+#   --exe FILE         the game's executable, e.g. Rally_3PC.exe
+#   --out DIR          the new repository (must not exist, or be empty)
+# Options:
+#   --repo OWNER/NAME  GitHub repository, for links and the issue template
+#                      (default: the SDK's GitHub owner / the --out folder name)
+#   --author NAME      copyright holder in LICENSE-MIT (default: git config user.name)
+#   --launcher-exe F   the launcher program (default: <Id>Launcher.exe: CMR3Launcher.exe
+#                      for ids of up to 4 characters, else e.g. ScreamerLauncher.exe)
+#   --no-lock          skip Cargo.lock (no network; `cargo generate-lockfile` later)
+#   --git              git init and commit the scaffold
+#   -h, --help         this text
+#
+# The SDK version is this checkout's: its exact release tag, else
+# v<workspace version>. Wine/Win32 games only; a native launcher (the game
+# runs natively or in an emulator we ship, like Screamer) starts from this
+# scaffold and follows STANDARDS "Native launchers" by hand.
+set -eu
+die() { echo "new-launcher: $*" >&2; exit 1; }
+usage() { sed -n '2,/^set -eu/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit "${1:-2}"; }
+need() { [ $# -ge 2 ] || die "$1 needs a value"; }
+
+SDK=$(cd "$(dirname "$0")/.." && pwd -P)
+TEMPLATE=$SDK/templates/launcher
+[ -d "$TEMPLATE" ] || die "no $TEMPLATE"
+
+ID='' PREFIX='' GAME='' GAME_EXE='' OUT='' REPO='' AUTHOR='' LAUNCHER_EXE='' LOCK=1 GIT=''
+while [ $# -gt 0 ]; do
+  case $1 in
+    --id) need "$@"; ID=$2; shift 2 ;;
+    --prefix) need "$@"; PREFIX=$2; shift 2 ;;
+    --game) need "$@"; GAME=$2; shift 2 ;;
+    --exe) need "$@"; GAME_EXE=$2; shift 2 ;;
+    --out) need "$@"; OUT=$2; shift 2 ;;
+    --repo) need "$@"; REPO=$2; shift 2 ;;
+    --author) need "$@"; AUTHOR=$2; shift 2 ;;
+    --launcher-exe) need "$@"; LAUNCHER_EXE=$2; shift 2 ;;
+    --no-lock) LOCK=''; shift ;;
+    --git) GIT=1; shift ;;
+    -h | --help) usage 0 ;;
+    *) die "unknown argument $1 (see --help)" ;;
+  esac
+done
+
+# --- validation: every value lands in Rust, TOML, YAML, shell and Markdown --
+[ -n "$ID" ] && [ -n "$PREFIX" ] && [ -n "$GAME" ] && [ -n "$GAME_EXE" ] && [ -n "$OUT" ] \
+  || { echo "new-launcher: --id, --prefix, --game, --exe and --out are required" >&2; usage; }
+case $ID in
+  [a-z]*) ;; *) die "--id must start with a lower-case letter: '$ID'" ;;
+esac
+case $ID in *[!a-z0-9-]* | *- | *--*) die "--id takes a-z, 0-9 and single hyphens: '$ID'" ;; esac
+PREFIX=${PREFIX%_}
+case $PREFIX in [A-Z]*) ;; *) die "--prefix must start with an upper-case letter: '$PREFIX'" ;; esac
+case $PREFIX in *[!A-Z0-9_]*) die "--prefix takes A-Z, 0-9 and _: '$PREFIX'" ;; esac
+one_line() { # name value: no characters that would need escaping somewhere
+  case $2 in *'
+'* | *'"'* | *'\'* | *'`'* | *'$'* | *'@'*) die "$1 may not contain newlines, quotes, \\, \`, \$ or @: '$2'" ;; esac
+}
+one_line --game "$GAME"
+case $GAME_EXE in
+  -* | *[!A-Za-z0-9\ ._+\(\)-]*) die "--exe takes letters, digits, spaces and ._+()-: '$GAME_EXE'" ;;
+esac
+case $GAME_EXE in *.exe | *.EXE | *.Exe) ;; *) die "--exe must name a .exe: '$GAME_EXE'" ;; esac
+
+if [ -z "$LAUNCHER_EXE" ]; then
+  if [ ${#ID} -le 4 ]; then
+    stem=$(printf '%s' "$ID" | tr -d - | tr a-z A-Z)
+  else
+    stem=$(printf '%s' "$ID" | awk -F- '{ for (i = 1; i <= NF; i++) printf "%s%s", toupper(substr($i, 1, 1)), substr($i, 2) }')
+  fi
+  LAUNCHER_EXE=${stem}Launcher.exe
+fi
+case $LAUNCHER_EXE in
+  [A-Za-z]*.exe) ;; *) die "--launcher-exe must be like NameLauncher.exe: '$LAUNCHER_EXE'" ;;
+esac
+LAUNCHER_NAME=${LAUNCHER_EXE%.exe}
+case $LAUNCHER_NAME in *[!A-Za-z0-9_]*) die "--launcher-exe takes letters, digits and _: '$LAUNCHER_EXE'" ;; esac
+
+# --- the SDK: its git URL and release tag -----------------------------------
+SDK_GIT=$(sed -n 's/^repository *= *"\(.*\)"/\1/p' "$SDK/Cargo.toml" | head -n 1)
+case $SDK_GIT in https://github.com/*/*) ;; *) die "cannot read the SDK repository URL from $SDK/Cargo.toml" ;; esac
+SDK_REPO=${SDK_GIT#https://github.com/}
+SDK_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' "$SDK/Cargo.toml")
+[ -n "$SDK_VERSION" ] || die "cannot read the SDK workspace version from $SDK/Cargo.toml"
+EXACT=$(git -C "$SDK" describe --tags --exact-match HEAD 2>/dev/null || true)
+SDK_TAG=${EXACT:-v$SDK_VERSION}
+if [ "$EXACT" != "v$SDK_VERSION" ]; then
+  echo "new-launcher: warning: this SDK checkout is not at release tag v$SDK_VERSION" \
+    "(HEAD: ${EXACT:-untagged}); the launcher pins $SDK_TAG, and its CI checks sdk/ against that tag" >&2
+fi
+
+if [ -z "$REPO" ]; then
+  REPO=${SDK_REPO%%/*}/$(basename "$OUT")
+fi
+case $REPO in */*/* | /* | */) die "--repo must be OWNER/NAME: '$REPO'" ;; esac
+case $REPO in */*) ;; *) die "--repo must be OWNER/NAME: '$REPO'" ;; esac
+case $REPO in *[!A-Za-z0-9_./-]*) die "--repo takes OWNER/NAME: '$REPO'" ;; esac
+
+if [ -z "$AUTHOR" ]; then
+  AUTHOR=$(git config user.name 2>/dev/null || true)
+  [ -n "$AUTHOR" ] || die "no --author and no git config user.name"
+fi
+one_line --author "$AUTHOR"
+
+if [ -e "$OUT" ]; then
+  [ -d "$OUT" ] || die "$OUT exists and is not a folder"
+  [ -z "$(ls -A "$OUT")" ] || die "$OUT is not empty"
+fi
+case $OUT in /*) abs=$OUT ;; *) abs=$(pwd -P)/$OUT ;; esac
+case $abs/ in "$SDK"/*) die "refusing to create a launcher inside the SDK" ;; esac
+mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd -P)
+case $OUT/ in "$SDK"/*) rmdir "$OUT" 2>/dev/null; die "refusing to create a launcher inside the SDK" ;; esac
+
+# --- copy the template, filling the placeholders ------------------------------
+export NL_ID=$ID NL_PREFIX=$PREFIX NL_GAME=$GAME NL_GAME_EXE=$GAME_EXE NL_REPO=$REPO \
+  NL_AUTHOR=$AUTHOR NL_YEAR=$(date +%Y) NL_CRATE=$ID-launcher \
+  NL_CRATE_SNAKE=$(printf '%s' "$ID-launcher" | tr - _) NL_LAUNCHER_EXE=$LAUNCHER_EXE \
+  NL_LAUNCHER_NAME=$LAUNCHER_NAME NL_SDK_TAG=$SDK_TAG NL_SDK_GIT=$SDK_GIT NL_SDK_REPO=$SDK_REPO
+fill() { # template file -> destination: literal @NAME@ replacement, no escapes
+  awk 'BEGIN { n = split("ID PREFIX GAME GAME_EXE REPO AUTHOR YEAR CRATE CRATE_SNAKE LAUNCHER_EXE LAUNCHER_NAME SDK_TAG SDK_GIT SDK_REPO", names, " ") }
+  {
+    line = $0
+    for (i = 1; i <= n; i++) {
+      token = "@" names[i] "@"; value = ENVIRON["NL_" names[i]]; out = ""
+      while ((p = index(line, token)) > 0) {
+        out = out substr(line, 1, p - 1) value
+        line = substr(line, p + length(token))
+      }
+      line = out line
+    }
+    print line
+  }' "$1" > "$2"
+}
+# Template names: __ID__ is the id, dot-x is .x, a .tmpl suffix is dropped.
+dest() {
+  printf '%s\n' "$1" | sed "s/__ID__/$ID/g; s|^dot-|.|; s|/dot-|/.|g; s/\.tmpl\$//"
+}
+(cd "$TEMPLATE" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | while IFS= read -r rel; do
+  to=$OUT/$(dest "$rel")
+  mkdir -p "$(dirname "$to")"
+  case $rel in
+    *.png | *.jpg) cp "$TEMPLATE/$rel" "$to" ;;
+    *) fill "$TEMPLATE/$rel" "$to" ;;
+  esac
+  if [ -x "$TEMPLATE/$rel" ]; then chmod 755 "$to"; else chmod 644 "$to"; fi
+done
+cp "$SDK/templates/deny.toml" "$OUT/deny.toml"
+cp "$SDK/LICENSE-APACHE" "$OUT/LICENSE-APACHE"
+mkdir -p "$OUT/packaging/licenses"
+cp "$SDK/crates/rea-launcher-ui/assets/fonts/OFL.txt" "$OUT/packaging/licenses/Barlow-OFL.txt"
+chmod 644 "$OUT/deny.toml" "$OUT/LICENSE-APACHE" "$OUT/packaging/licenses/Barlow-OFL.txt"
+
+if grep -rIl '@[A-Z_]*@' "$OUT" | grep -q .; then
+  die "unfilled placeholders: $(grep -rIl '@[A-Z_]*@' "$OUT" | tr '\n' ' ')"
+fi
+
+# --- sdk/, Cargo.lock, git ------------------------------------------------------
+sh "$SDK/scripts/sdk-sync" "$OUT" >/dev/null
+
+# Line lengths depend on the names filled in: let rustfmt lay the code out.
+if command -v cargo >/dev/null 2>&1; then
+  (cd "$OUT" && cargo fmt --all) || die "cargo fmt failed in $OUT"
+else
+  echo "new-launcher: warning: no cargo; run cargo fmt --all in $OUT" >&2
+fi
+
+if [ -n "$LOCK" ]; then
+  # Start from the SDK's own lock, so the launcher builds with the crate
+  # versions the SDK was tested with; cargo drops what it doesn't need and
+  # adds the SDK crates from the tag.
+  cp "$SDK/Cargo.lock" "$OUT/Cargo.lock"
+  (cd "$OUT" && cargo metadata --format-version 1 >/dev/null) \
+    || die "cargo could not resolve the dependencies (network? tag $SDK_TAG published?); re-run with --no-lock and run cargo generate-lockfile later"
+fi
+
+if [ -n "$GIT" ]; then
+  (cd "$OUT" && git init -q && git add -A &&
+    git commit -q -m "chore: scaffold from rea-launcher-sdk $SDK_TAG")
+fi
+
+cat <<EOF
+Created $OUT
+  game:     $GAME ($GAME_EXE)
+  launcher: $LAUNCHER_EXE (crate $ID-launcher), linux/$ID-play, env prefix ${PREFIX}_
+  repo:     https://github.com/$REPO
+  SDK:      $SDK_TAG ($SDK_GIT)
+Next (docs/playbooks/new-launcher.md, Phase 3): ${GIT:+the scaffold is committed; }run the checks
+in its AGENTS.md, then Phase 4.
+EOF

@@ -1,0 +1,48 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  # The shared rea-launcher-sdk CI: formatting, host tests, cargo audit and
+  # deny, sdk/ drift, shell syntax and the Linux helper and packaging tests,
+  # Windows-target clippy, the release build, the Windows-target tests under
+  # Wine (headless), packaging and the package allowlist
+  # (rea-launcher-sdk docs/playbooks/ci-and-releases.md).
+  ci:
+    uses: @SDK_REPO@/.github/workflows/launcher-ci.yml@@SDK_TAG@
+    with:
+      rust-target: i686-pc-windows-gnu
+      wine-tests: true
+      package-command: packaging/package.sh "dist/@LAUNCHER_NAME@-$REA_VERSION_NAME"
+      package-dir: dist/@LAUNCHER_NAME@-*/
+      package-allowlist: packaging/package.allow
+      artifact-name: @LAUNCHER_NAME@-packages
+      artifact-paths: |
+        dist/*.zip
+        dist/*.AppImage
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: ci
+    # All three, even with attest: false (GitHub checks a called workflow's
+    # permissions before any if:).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: @SDK_REPO@/.github/workflows/launcher-release.yml@@SDK_TAG@
+    with:
+      package: @CRATE@
+      artifact-pattern: @LAUNCHER_NAME@-*

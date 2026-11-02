@@ -106,6 +106,55 @@ echo dxvk > "$M/up/dxvk.tar.gz"
 echo "dup file://$M/up/dup/Xidi-v4.3.1.zip $(sha "$M/up/Xidi-v4.3.1.zip") mirror" >> "$M/repo/pins.txt"
 if (cd "$M/repo" && mirror_env && sh -e "$S") >"$T/out" 2>&1; then bad "mirror: duplicate asset name refused"
 elif grep -q 'is used by another pin' "$T/out"; then ok "mirror: duplicate asset name refused"; else bad "mirror: duplicate: $(cat "$T/out")"; fi
+sed -i '/^dup /d' "$M/repo/pins.txt"
+# hosted: skipped unless include-hosted, then uploaded like a mirror.
+echo dgv > "$M/up/dgVoodoo2_80.zip"
+echo "dgvoodoo file://$M/up/dgVoodoo2_80.zip $(sha "$M/up/dgVoodoo2_80.zip") hosted" >> "$M/repo/pins.txt"
+rm -rf "$M/rt/mirror"
+(cd "$M/repo" && mirror_env && sh -e "$S") >"$T/out" 2>&1
+[ ! -e "$M/rt/mirror/dgVoodoo2_80.zip" ] && grep -q 'dgvoodoo is marked hosted (no licence): skipped' "$T/out" \
+  && ok "mirror: hosted pin skipped without include-hosted" || bad "mirror: hosted skip: $(cat "$T/out")"
+rm -rf "$M/rt/mirror"
+if (cd "$M/repo" && mirror_env && INCLUDE_HOSTED=true && export INCLUDE_HOSTED && sh -e "$S") >"$T/out" 2>&1 \
+  && [ -f "$M/rt/mirror/dgVoodoo2_80.zip" ]; then ok "mirror: hosted pin uploaded with include-hosted"; else bad "mirror: include-hosted: $(cat "$T/out")"; fi
+grep -q "hosted by the owner's decision" "$T/out" && ok "mirror: hosted upload is announced" || bad "mirror: hosted notice"
+# One-pin-per-file folders (OutRun's packaging/<name>.txt), alone, as a
+# glob, and mixed with a pin file; unmarked and malformed files are skipped.
+mkdir -p "$M/repo/pd"
+echo vc > "$M/up/vc_redist.x86.exe"
+printf '# VC++ runtime\nfile://%s %s mirror\n' "$M/up/vc_redist.x86.exe" "$(sha "$M/up/vc_redist.x86.exe")" > "$M/repo/pd/vcredist.txt"
+printf 'file://%s %s\n' "$M/up/hd.zip" "$(sha "$M/up/hd.zip")" > "$M/repo/pd/wine.txt"
+printf 'https://example.com/hd.zip %s 325966152 3168683238\n' "$(sha "$M/up/hd.zip")" > "$M/repo/pd/hd-pack.txt"
+for pins in pd 'pd/*.txt' 'pd/vcredist.txt'; do
+  rm -rf "$M/rt/mirror"
+  if (cd "$M/repo" && mirror_env && PINS=$pins && export PINS && sh -e "$S") >"$T/out" 2>&1 \
+    && [ "$(ls "$M/rt/mirror")" = vc_redist.x86.exe ]; then ok "mirror: pins '$pins' (one pin per file)"; else bad "mirror: pins '$pins': $(ls "$M/rt/mirror" 2>&1) $(cat "$T/out")"; fi
+done
+rm -rf "$M/rt/mirror"
+(cd "$M/repo" && mirror_env && PINS='pins.txt pd' && export PINS && sh -e "$S") >"$T/out" 2>&1
+[ "$(ls "$M/rt/mirror" | LC_ALL=C sort | tr '\n' ' ')" = "Xidi-v4.3.1.zip dxvk.tar.gz vc_redist.x86.exe " ] \
+  && ok "mirror: a pin file and a folder together" || bad "mirror: mixed: $(ls "$M/rt/mirror")"
+if (cd "$M/repo" && mirror_env && PINS=nowhere && export PINS && sh -e "$S") >"$T/out" 2>&1; then bad "mirror: a missing source fails"; else grep -q 'no pin file or folder nowhere' "$T/out" && ok "mirror: a missing source fails" || bad "mirror: missing: $(cat "$T/out")"; fi
+
+# compat.yml: the launcher's own cargo config is kept, the SDK crates that
+# exist are patched in, sdk/ is re-vendored, a second patch is refused.
+C=$T/compat
+mkdir -p "$C/sdk-src/crates/rea-launcher" "$C/sdk-src/crates/rea-launcher-ui" "$C/sdk-src/scripts" "$C/launcher/.cargo"
+cp -R "$HERE/../../packaging" "$C/sdk-src/packaging"
+cp "$HERE/../sdk-sync" "$C/sdk-src/scripts/"
+: > "$C/sdk-src/crates/rea-launcher/Cargo.toml"; : > "$C/sdk-src/crates/rea-launcher-ui/Cargo.toml"
+printf '[target.i686-pc-windows-gnu]\nlinker = "i686-w64-mingw32-gcc"\n' > "$C/launcher/.cargo/config.toml"
+S=$(step compat.yml "Point the launcher at this SDK") || exit 1
+export SDK="$C/sdk-src" LAUNCHER="$C/launcher"
+if sh -e "$S" >"$T/out" 2>&1; then ok "compat: patch step passes"; else bad "compat: patch step: $(cat "$T/out")"; fi
+cfg=$C/launcher/.cargo/config.toml
+grep -qx 'linker = "i686-w64-mingw32-gcc"' "$cfg" && ok "compat: launcher's cargo config kept" || bad "compat: config kept"
+grep -qx '\[patch\."https://github.com/akitaonrails/rea-launcher-sdk"\]' "$cfg" && ok "compat: patch table added" || bad "compat: patch table: $(cat "$cfg")"
+grep -qx "rea-launcher = { path = \"$C/sdk-src/crates/rea-launcher\" }" "$cfg" && ok "compat: crate patched to the SDK checkout" || bad "compat: crate path: $(cat "$cfg")"
+if grep -q 'rea-launcher-win32' "$cfg"; then bad "compat: absent crates not patched"; else ok "compat: absent crates not patched"; fi
+grep -qx 'tag=canary' "$C/launcher/sdk/VERSION" && ok "compat: sdk/ re-vendored from the checkout" || bad "compat: sdk/VERSION"
+if sh -e "$S" >"$T/out" 2>&1; then bad "compat: second patch refused"; else grep -q 'already patches' "$T/out" && ok "compat: second patch refused" || bad "compat: second: $(cat "$T/out")"; fi
+unset SDK LAUNCHER
 
 # No status-swallowing "check && echo" anywhere in the workflows.
 if grep -n '&& echo' "$WF"/*.yml; then bad "no '&& echo' checks in workflows"; else ok "no '&& echo' checks in workflows"; fi

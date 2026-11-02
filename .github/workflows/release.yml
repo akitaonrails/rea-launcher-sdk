@@ -1,0 +1,43 @@
+# Publishes a GitHub release for an SDK version tag. Launchers pin the tag
+# itself; the release page is where people read what changed.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish (e.g. v0.2.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Tag matches the workspace version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
+          [ "v$version" = "$TAG" ] || { echo "::error::tag $TAG but Cargo.toml says $version"; exit 1; }
+      - name: Release notes from CHANGELOG.md
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: sh packaging/release-notes.sh "$TAG" CHANGELOG.md > notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" --verify-tag --title "rea-launcher-sdk $TAG" --notes-file notes.md
+          fi

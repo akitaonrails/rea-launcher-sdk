@@ -4,7 +4,7 @@
 # A pin file holds one download per line (blank lines and # comments are
 # skipped):
 #
-#   name url sha256 [fallback-url ...] [mirror]
+#   name url sha256 [fallback-url ...] [mirror | hosted]
 #
 # The first url whose download matches sha256 wins; later urls are mirrors
 # for the day an upstream moves or disappears. A url of "-" records a
@@ -16,7 +16,9 @@
 # allows us to republish it: the reusable mirror.yml uploads it to the
 # repository's own release (tag "thirdparty" by default) under the pin's
 # file name, and the pin should list that release url (pin_mirror_url) as a
-# fallback.
+# fallback. The word "hosted" marks a file with no licence that the owner
+# decided to host anyway (recorded in THIRD_PARTY.md): mirror.yml uploads it
+# the same way, but only when the caller sets include-hosted: true.
 #
 # Settings, read on every call:
 #   PIN_FILE   pin file, looked up first
@@ -36,9 +38,10 @@
 #   pin_verify FILE SHA256  checks a file's digest
 #   pin_file NAME           the file name pin_fetch writes (primary url's basename)
 #   pin_mirrorable NAME     succeeds when the pin is marked "mirror"
+#   pin_hosted NAME         succeeds when the pin is marked "hosted"
 #   pin_mirror_url NAME [REPO [TAG]]  the pin's url in the mirror release
 
-# Prints "sha256", then "mirror" or "-", then each url (primary first; "-"
+# Prints "sha256", then "mirror", "hosted" or "-", then each url (primary first; "-"
 # when checksum-only).
 _pin_record() {
   case $1 in
@@ -59,19 +62,23 @@ _pin_record() {
     _pin_src=$PIN_DIR/$1.txt
   fi
   [ -n "$_pin_rec" ] || { echo "pins: no pin named $1" >&2; return 1; }
-  # Validate: url (or -), 64-hex sha256, then only urls and "mirror".
+  # Validate: url (or -), 64-hex sha256, then only urls and one of
+  # "mirror"/"hosted" (never both; never on a checksum-only pin).
   printf '%s\n' "$_pin_rec" | awk '{
     if (NF < 2 || $2 !~ /^[0-9a-f]+$/ || length($2) != 64) exit 1
     if ($1 != "-" && $1 !~ /:\/\//) exit 1
     m = "-"
     for (i = 3; i <= NF; i++) {
-      if ($i == "mirror") { if ($1 == "-") exit 1; m = "mirror" }
+      if ($i == "mirror" || $i == "hosted") {
+        if ($1 == "-" || (m != "-" && m != $i)) exit 1
+        m = $i
+      }
       else if ($i !~ /:\/\//) exit 1
     }
     print $2; print m; print $1
-    for (i = 3; i <= NF; i++) if ($i != "mirror") print $i
+    for (i = 3; i <= NF; i++) if ($i != "mirror" && $i != "hosted") print $i
   }' || {
-    echo "pins: malformed pin $1 in $_pin_src (want: url sha256 [fallback-url ...] [mirror])" >&2
+    echo "pins: malformed pin $1 in $_pin_src (want: url sha256 [fallback-url ...] [mirror | hosted])" >&2
     return 1
   }
 }
@@ -94,6 +101,11 @@ pin_urls() {
 pin_mirrorable() {
   _pin_r=$(_pin_record "$1") || return 1
   [ "$(printf '%s\n' "$_pin_r" | sed -n 2p)" = mirror ]
+}
+
+pin_hosted() {
+  _pin_r=$(_pin_record "$1") || return 1
+  [ "$(printf '%s\n' "$_pin_r" | sed -n 2p)" = hosted ]
 }
 
 # The primary url's basename; the pin name when that is unusable.

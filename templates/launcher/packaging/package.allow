@@ -1,0 +1,13 @@
+# Everything the zip folder (dist/@LAUNCHER_NAME@-<version>/) may hold; anything
+# else fails sdk/packaging/smoke-package.sh in CI. Never game files.
+# Flags: x (executable), empty (may be empty), optional (may be missing).
+@LAUNCHER_EXE@
+README.md
+THIRD_PARTY.md
+CHANGELOG.md
+LICENSE-MIT
+LICENSE-APACHE
+linux/@ID@-play x
+linux/rea-play.sh
+linux/README.md
+licenses/Barlow-OFL.txt

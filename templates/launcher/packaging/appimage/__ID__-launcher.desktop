@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=@GAME@ Launcher
+Comment=Play your own copy of @GAME@ with modern compatibility fixes
+Exec=@ID@-play
+Icon=@ID@-launcher
+Terminal=false
+Categories=Game;

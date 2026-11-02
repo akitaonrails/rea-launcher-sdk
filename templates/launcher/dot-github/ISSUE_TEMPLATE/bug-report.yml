@@ -1,0 +1,68 @@
+name: Bug report
+description: "@LAUNCHER_EXE@ does not run @GAME@ as it should."
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Never attach @GAME_EXE@, DLLs, saves, media or any other
+        game files. Remove usernames and personal paths from settings and logs.
+  - type: dropdown
+    id: system
+    attributes:
+      label: Where did you play?
+      options:
+        - Windows 11
+        - Windows 10
+        - Steam Deck (Game Mode)
+        - Steam Deck (Desktop Mode)
+        - Linux with Steam / Proton
+        - Linux with the AppImage
+        - Linux with Wine and @ID@-play
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Launcher version
+      description: The first line of launcher.log, e.g. "@LAUNCHER_NAME@ 0.1.0".
+    validations:
+      required: true
+  - type: input
+    id: sha256
+    attributes:
+      label: SHA-256 of @GAME_EXE@
+      description: |
+        launcher.log names the game's edition, or the SHA-256 of a build it does not know.
+        Windows: `certutil -hashfile @GAME_EXE@ SHA256`. Linux: `sha256sum @GAME_EXE@`.
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: CPU, graphics card, controller and screen
+      description: e.g. "Ryzen 7 7800X3D, RTX 3060, Xbox-style pad, 2560x1440 at 144 Hz".
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings used
+      description: The look and anything you changed, or launcher.cfg without personal paths.
+  - type: textarea
+    id: log
+    attributes:
+      label: launcher.log
+      description: |
+        Windows: %LOCALAPPDATA%\@LAUNCHER_NAME@\launcher.log. Under Wine or Proton it is inside
+        the prefix (@ID@-play and the AppImage: ~/.local/share/@ID@-launcher/prefix).
+        Remove personal paths before posting.
+      render: text
+    validations:
+      required: true

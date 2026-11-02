@@ -88,6 +88,15 @@ on:
         description: The SDK repository sdk/VERSION refers to.
         type: string
         default: akitaonrails/rea-launcher-sdk
+      imports-check:
+        description: >-
+          For a Windows rust-target: check that the launcher's
+          .cargo/config.toml links it with lld, and that every import of the
+          built .exe/.dll files belongs to an import descriptor
+          (sdk/packaging/check-lld.sh, check-imports.sh). GNU ld 2.47
+          mis-links both i686 and x86_64 builds.
+        type: boolean
+        default: true
       imports-test:
         description: >-
           Command run after the release build (e.g. an import-resolution
@@ -187,6 +196,8 @@ jobs:
         run: |
           case $APT_PACKAGES in *[!A-Za-z0-9.+:=\ -]*) echo "::error::unexpected characters in apt-packages"; exit 1 ;; esac
           if [ "$APT_I386" = true ]; then sudo dpkg --add-architecture i386; fi
+          # A Windows target always links with lld, whatever the list says.
+          case $RUST_TARGET in *-windows-gnu*) APT_PACKAGES="$APT_PACKAGES lld" ;; esac
           sudo apt-get update
           # shellcheck disable=SC2086
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
@@ -200,6 +211,15 @@ jobs:
           rustup default "$RUST_TOOLCHAIN"
           if [ -n "$RUST_TARGET" ]; then rustup target add "$RUST_TARGET"; fi
           rustc --version
+
+      - name: Windows targets link with lld
+        if: inputs.imports-check && inputs.rust-target != ''
+        shell: sh
+        run: |
+          [ -f "$SDK_DIR/packaging/check-lld.sh" ] \
+            || { echo "::error::no $SDK_DIR/packaging/check-lld.sh: re-run scripts/sdk-sync from a newer SDK, or pass imports-check: false"; exit 1; }
+          sh "$SDK_DIR/packaging/check-lld.sh" "$RUST_TARGET" \
+            || { echo "::error file=.cargo/config.toml::$RUST_TARGET must link with lld (GNU ld 2.47 mis-links Windows imports)"; exit 1; }
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -278,6 +298,18 @@ jobs:
           ref=$(printf '%s' "$GITHUB_REF_NAME" | tr '/' '-')
           case $ref in '' | *[!A-Za-z0-9._-]*) echo "::error::unexpected ref name"; exit 1 ;; esac
           echo "REA_VERSION_NAME=$ref" >> "$GITHUB_ENV"
+
+      - name: Every import resolves (built programs)
+        if: inputs.imports-check && inputs.rust-target != ''
+        shell: sh
+        run: |
+          case $RUST_TARGET in *-windows-gnu*) ;; *) echo "not a Windows target"; exit 0 ;; esac
+          set --
+          for f in "$REA_RELEASE_DIR"/*.exe "$REA_RELEASE_DIR"/*.dll; do
+            if [ -f "$f" ]; then set -- "$@" "$f"; fi
+          done
+          [ $# -gt 0 ] || { echo "::error::no .exe or .dll in $REA_RELEASE_DIR"; exit 1; }
+          sh "$SDK_DIR/packaging/check-imports.sh" "$@"
 
       - name: Install Wine for the Windows-target tests
         if: inputs.wine-tests
