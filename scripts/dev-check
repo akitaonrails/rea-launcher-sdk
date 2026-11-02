@@ -1,0 +1,112 @@
+#!/bin/sh
+# Runs every SDK check CI runs, from any folder:
+#
+#   scripts/dev-check            run them all, then print a summary
+#   scripts/dev-check --list     only say what would run or be skipped
+#
+# A check whose tool is missing (dash, actionlint, shellcheck, Wine,
+# MinGW, cargo-deny...) is SKIPPED with a warning, never failed: install the
+# tool (README, "Development machine") to run it. Exits 1 only when a check
+# that ran failed.
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
+cd "$ROOT" || exit 2
+LIST=''
+case ${1:-} in
+  --list) LIST=1 ;;
+  '') ;;
+  *) echo "usage: $0 [--list]" >&2; exit 2 ;;
+esac
+
+passed='' failed='' skipped=''
+have() { command -v "$1" >/dev/null 2>&1; }
+skip() { # name, reason
+  echo "SKIP $1: $2" >&2
+  skipped="$skipped
+  $1 ($2)"
+}
+check() { # name, command...
+  name=$1; shift
+  if [ -n "$LIST" ]; then echo "RUN  $name"; return 0; fi
+  echo "==== $name"
+  if "$@"; then passed="$passed
+  $name"; else failed="$failed
+  $name"; echo "FAIL $name" >&2; fi
+}
+# Runs each script with the given shell; fails if any does.
+each() { # shell, scripts...
+  sh_=$1; shift; rc=0
+  for t; do
+    [ -f "$t" ] || continue
+    echo "-- $sh_ $t"
+    "$sh_" "$t" || rc=1
+  done
+  return $rc
+}
+# The i686 cross target needs its rustup target, MinGW and LLD.
+win_target() { # triple, mingw-gcc
+  if ! have "$2"; then echo "$2 missing"; return 1; fi
+  if ! have ld.lld && ! have lld; then echo "lld missing"; return 1; fi
+  if have rustup && ! rustup target list --installed 2>/dev/null | grep -qx "$1"; then
+    echo "rustup target $1 missing"; return 1
+  fi
+  return 0
+}
+
+if have cargo; then
+  check "cargo fmt" cargo fmt --all --check
+  check "cargo test (host)" cargo test --workspace --locked
+  check "cargo clippy (host)" cargo clippy --workspace --all-targets --locked -- -D warnings
+  if why=$(win_target i686-pc-windows-gnu i686-w64-mingw32-gcc); then
+    check "cargo clippy (i686 Windows)" cargo clippy --workspace --all-targets --locked --target i686-pc-windows-gnu -- -D warnings
+  else
+    skip "cargo clippy (i686 Windows)" "$why"
+  fi
+  if have cargo-deny; then check "cargo deny" cargo deny check; else skip "cargo deny" "cargo-deny not installed"; fi
+  if have cargo-audit; then check "cargo audit" cargo audit; else skip "cargo audit" "cargo-audit not installed"; fi
+else
+  skip "Rust checks" "cargo not on PATH"
+fi
+
+# Shell: the play library's runner picks dash and busybox itself.
+have dash || skip "shell suites under dash" "dash not installed (runs under sh only)"
+check "shell suites (shell/tests/run-all.sh)" sh shell/tests/run-all.sh
+check "packaging and scripts tests (sh)" each sh packaging/tests/*.sh scripts/tests/*.sh
+if have dash; then
+  check "packaging and scripts tests (dash)" each dash packaging/tests/*.sh scripts/tests/*.sh
+else
+  skip "packaging and scripts tests (dash)" "dash not installed"
+fi
+if have shellcheck; then
+  check "shellcheck" shellcheck -s sh -S warning -e SC2010 packaging/*.sh packaging/tests/*.sh \
+    scripts/sdk-sync scripts/wine-test scripts/dev-check scripts/tests/*.sh
+else
+  skip "shellcheck" "shellcheck not installed"
+fi
+# A mise shim without a selected version exists but fails: run it to know.
+if have actionlint && actionlint -version >/dev/null 2>&1; then
+  check "actionlint" actionlint
+else
+  skip "actionlint" "actionlint not installed"
+fi
+
+# Windows-target tests under Wine.
+if ! have cargo; then
+  skip "wine-test" "cargo not on PATH"
+elif ! have wine; then
+  skip "wine-test" "wine not installed"
+elif why=$(win_target i686-pc-windows-gnu i686-w64-mingw32-gcc); then
+  check "wine-test (i686)" sh scripts/wine-test --locked --workspace
+else
+  skip "wine-test" "$why"
+fi
+
+[ -n "$LIST" ] && exit 0
+echo
+echo "passed:${passed:- none}"
+[ -z "$skipped" ] || echo "skipped (install the tool to run it):$skipped"
+if [ -n "$failed" ]; then
+  echo "FAILED:$failed"
+  exit 1
+fi
+echo "all checks that ran passed"

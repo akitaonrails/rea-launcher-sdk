@@ -4,7 +4,7 @@
 # A pin file holds one download per line (blank lines and # comments are
 # skipped):
 #
-#   name url sha256 [fallback-url ...]
+#   name url sha256 [fallback-url ...] [mirror]
 #
 # The first url whose download matches sha256 wins; later urls are mirrors
 # for the day an upstream moves or disappears. A url of "-" records a
@@ -12,12 +12,20 @@
 # refuses. Per-name files also work: $PIN_DIR/<name>.txt with one line
 # "url sha256 [fallback-url ...]".
 #
+# The word "mirror" (anywhere after the sha256) marks a file whose licence
+# allows us to republish it: the reusable mirror.yml uploads it to the
+# repository's own release (tag "thirdparty" by default) under the pin's
+# file name, and the pin should list that release url (pin_mirror_url) as a
+# fallback.
+#
 # Settings, read on every call:
 #   PIN_FILE   pin file, looked up first
 #   PIN_DIR    folder of <name>.txt pins, looked up second
 #   PIN_CACHE  download cache keyed by sha256 (default
 #              ${XDG_CACHE_HOME:-~/.cache}/rea-launcher-sdk/pins; empty: none)
 #   PIN_RETRY  curl --retry count (default 3)
+#   PIN_MIRROR_REPO  owner/repo of the mirror release (default $GITHUB_REPOSITORY)
+#   PIN_MIRROR_TAG   its tag (default thirdparty)
 #
 # Functions return non-zero with a message on stderr; they never exit.
 #   pin_sha NAME            the sha256
@@ -26,8 +34,12 @@
 #   pin_names               every name in PIN_FILE and PIN_DIR
 #   pin_fetch NAME DEST_DIR downloads into DEST_DIR, prints the file's path
 #   pin_verify FILE SHA256  checks a file's digest
+#   pin_file NAME           the file name pin_fetch writes (primary url's basename)
+#   pin_mirrorable NAME     succeeds when the pin is marked "mirror"
+#   pin_mirror_url NAME [REPO [TAG]]  the pin's url in the mirror release
 
-# Prints "sha256" then each url (primary first; "-" when checksum-only).
+# Prints "sha256", then "mirror" or "-", then each url (primary first; "-"
+# when checksum-only).
 _pin_record() {
   case $1 in
     '' | *[!A-Za-z0-9._-]*) echo "pins: bad pin name '$1'" >&2; return 1 ;;
@@ -47,15 +59,19 @@ _pin_record() {
     _pin_src=$PIN_DIR/$1.txt
   fi
   [ -n "$_pin_rec" ] || { echo "pins: no pin named $1" >&2; return 1; }
-  # Validate: url (or -), 64-hex sha256, then only urls.
+  # Validate: url (or -), 64-hex sha256, then only urls and "mirror".
   printf '%s\n' "$_pin_rec" | awk '{
     if (NF < 2 || $2 !~ /^[0-9a-f]+$/ || length($2) != 64) exit 1
     if ($1 != "-" && $1 !~ /:\/\//) exit 1
-    for (i = 3; i <= NF; i++) if ($i !~ /:\/\//) exit 1
-    print $2; print $1
-    for (i = 3; i <= NF; i++) print $i
+    m = "-"
+    for (i = 3; i <= NF; i++) {
+      if ($i == "mirror") { if ($1 == "-") exit 1; m = "mirror" }
+      else if ($i !~ /:\/\//) exit 1
+    }
+    print $2; print m; print $1
+    for (i = 3; i <= NF; i++) if ($i != "mirror") print $i
   }' || {
-    echo "pins: malformed pin $1 in $_pin_src (want: url sha256 [fallback-url ...])" >&2
+    echo "pins: malformed pin $1 in $_pin_src (want: url sha256 [fallback-url ...] [mirror])" >&2
     return 1
   }
 }
@@ -67,12 +83,41 @@ pin_sha() {
 
 pin_url() {
   _pin_r=$(_pin_record "$1") || return 1
-  printf '%s\n' "$_pin_r" | sed -n 2p
+  printf '%s\n' "$_pin_r" | sed -n 3p
 }
 
 pin_urls() {
   _pin_r=$(_pin_record "$1") || return 1
-  printf '%s\n' "$_pin_r" | sed -n '2,$p' | grep -v '^-$' || true
+  printf '%s\n' "$_pin_r" | sed -n '3,$p' | grep -v '^-$' || true
+}
+
+pin_mirrorable() {
+  _pin_r=$(_pin_record "$1") || return 1
+  [ "$(printf '%s\n' "$_pin_r" | sed -n 2p)" = mirror ]
+}
+
+# The primary url's basename; the pin name when that is unusable.
+pin_file() {
+  _pin_r=$(_pin_record "$1") || return 1
+  _pin_f=$(printf '%s\n' "$_pin_r" | sed -n 3p)
+  [ "$_pin_f" != - ] || { echo "pins: $1 is checksum-only; it has no file" >&2; return 1; }
+  _pin_f=${_pin_f%%[?#]*}
+  _pin_f=${_pin_f##*/}
+  case $_pin_f in '' | . | .. | *[!A-Za-z0-9._+-]*) _pin_f=$1 ;; esac
+  printf '%s\n' "$_pin_f"
+}
+
+pin_mirror_url() {
+  _pin_repo=${2:-${PIN_MIRROR_REPO:-${GITHUB_REPOSITORY:-}}}
+  _pin_tag=${3:-${PIN_MIRROR_TAG:-thirdparty}}
+  case $_pin_repo in
+    */*/* | /* | */ | *[!A-Za-z0-9._/-]*) echo "pins: bad mirror repository '$_pin_repo'" >&2; return 1 ;;
+    */*) ;;
+    *) echo "pins: no mirror repository (pass owner/repo or set PIN_MIRROR_REPO)" >&2; return 1 ;;
+  esac
+  case $_pin_tag in '' | *[!A-Za-z0-9._-]*) echo "pins: bad mirror tag '$_pin_tag'" >&2; return 1 ;; esac
+  _pin_f=$(pin_file "$1") || return 1
+  printf 'https://github.com/%s/releases/download/%s/%s\n' "$_pin_repo" "$_pin_tag" "$_pin_f"
 }
 
 pin_names() {
@@ -108,12 +153,10 @@ pin_fetch() {
   [ $# -eq 2 ] || { echo "usage: pin_fetch NAME DEST_DIR" >&2; return 2; }
   _pin_r=$(_pin_record "$1") || return 1
   _pin_sha=$(printf '%s\n' "$_pin_r" | sed -n 1p)
-  _pin_primary=$(printf '%s\n' "$_pin_r" | sed -n 2p)
+  _pin_primary=$(printf '%s\n' "$_pin_r" | sed -n 3p)
   [ "$_pin_primary" != - ] || { echo "pins: $1 is checksum-only; nothing to fetch" >&2; return 1; }
   # The file keeps the primary url's name whichever mirror served it.
-  _pin_file=${_pin_primary%%[?#]*}
-  _pin_file=${_pin_file##*/}
-  case $_pin_file in '' | . | .. | *[!A-Za-z0-9._+-]*) _pin_file=$1 ;; esac
+  _pin_file=$(pin_file "$1") || return 1
   mkdir -p "$2" || return 1
   _pin_dest=$2/$_pin_file
   _pin_cache=${PIN_CACHE-${XDG_CACHE_HOME:-$HOME/.cache}/rea-launcher-sdk/pins}
@@ -151,7 +194,7 @@ pin_fetch() {
     fi
     echo "pins: unavailable or wrong checksum: $_pin_u" >&2
   done <<EOF
-$(printf '%s\n' "$_pin_r" | sed -n '2,$p')
+$(printf '%s\n' "$_pin_r" | sed -n '3,$p')
 EOF
   rm -f "$_pin_part"
   echo "pins: no source for $1 matched sha256 $_pin_sha" >&2

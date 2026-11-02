@@ -14,7 +14,7 @@ git() { command git -c user.name=test -c user.email=test@example.com -c init.def
 S=$T/sdk-src
 mkdir -p "$S/scripts" "$S/shell"
 cp -R "$ROOT/packaging" "$S/packaging"
-cp "$ROOT/scripts/sdk-sync" "$S/scripts/"
+cp "$ROOT/scripts/sdk-sync" "$ROOT/scripts/wine-test" "$S/scripts/"
 printf '# play library\n' > "$S/shell/rea-play.sh"
 (cd "$S" && git init -q && git add -A && git commit -qm sdk && git tag v9.9.9) || { echo "git setup failed"; exit 1; }
 SYNC=$S/scripts/sdk-sync
@@ -27,6 +27,9 @@ grep -qx 'tag=v9.9.9' "$L/sdk/VERSION" && grep -qx "commit=$COMMIT" "$L/sdk/VERS
   && ok "VERSION has tag and commit" || bad "VERSION: $(cat "$L/sdk/VERSION")"
 if cmp -s "$S/shell/rea-play.sh" "$L/sdk/rea-play.sh"; then ok "play library vendored as sdk/rea-play.sh"; else bad "play library vendored as sdk/rea-play.sh"; fi
 [ ! -e "$L/sdk/shell" ] && ok "no sdk/shell folder" || bad "no sdk/shell folder"
+[ -x "$L/sdk/scripts/wine-test" ] && cmp -s "$S/scripts/wine-test" "$L/sdk/scripts/wine-test" \
+  && ok "vendored scripts/wine-test (executable)" || bad "vendored scripts/wine-test (executable)"
+[ ! -e "$L/sdk/scripts/sdk-sync" ] && ok "sdk-sync itself not vendored" || bad "sdk-sync itself not vendored"
 for f in packaging/pins.sh packaging/appimage-wine.sh packaging/smoke-package.sh \
   packaging/release-notes.sh packaging/appimage/AppRun.in packaging/appimage/tools.pins \
   packaging/appimage/wine/COPYING.LIB packaging/appimage/wine/LICENSE packaging/appimage/wine/SOURCE.txt; do

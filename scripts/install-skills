@@ -1,0 +1,20 @@
+#!/bin/sh
+# Links this SDK's Claude Code skills into ~/.claude/skills so they are
+# available in any folder (for example a brand-new launcher repository).
+#   scripts/install-skills            link (existing links are refreshed)
+#   scripts/install-skills --remove   unlink
+set -eu
+sdk=$(cd "$(dirname "$0")/.." && pwd)
+dest=${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}
+mkdir -p "$dest"
+for s in "$sdk"/.claude/skills/*/; do
+    name=$(basename "$s")
+    if [ "${1-}" = --remove ]; then
+        [ -L "$dest/$name" ] && rm "$dest/$name" && echo "removed $name"
+        continue
+    fi
+    if [ -e "$dest/$name" ] && [ ! -L "$dest/$name" ]; then
+        echo "skip $name: $dest/$name exists and is not a link" >&2; continue
+    fi
+    ln -sfn "$sdk/.claude/skills/$name" "$dest/$name"; echo "linked $name"
+done

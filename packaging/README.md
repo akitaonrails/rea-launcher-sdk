@@ -15,6 +15,7 @@ busybox) and is vendored into each launcher by `scripts/sdk-sync`.
 | `../.github/workflows/launcher-ci.yml` | Reusable: checks, build, package, allowlist, upload |
 | `../.github/workflows/launcher-release.yml` | Reusable: tag/version check, SHA256SUMS, attestation, release |
 | `../.github/workflows/upstream-watch.yml` | Reusable: opens an issue when an upstream release no longer matches its pin |
+| `../.github/workflows/mirror.yml` | Reusable: copies pins marked `mirror` into the repository's own `thirdparty` release |
 
 Tests: `sh packaging/tests/<name>.sh` and `sh scripts/tests/sdk-sync.sh`
 (no network: downloads come from `file://` urls).
@@ -29,7 +30,8 @@ scripts/sdk-sync --check ../rea-colin-mcrae-4  # exit 1 on drift
 ```
 
 Layout in the launcher: `sdk/rea-play.sh` (the play library, from the SDK's
-`shell/`), `sdk/packaging/...` (as here). Helpers look for `rea-play.sh`
+`shell/`), `sdk/scripts/wine-test` (Windows-target tests under Wine),
+`sdk/packaging/...` (as here). Helpers look for `rea-play.sh`
 beside themselves first, then at `../sdk/rea-play.sh`; a zip that ships the
 helper ships the library beside it too.
 
@@ -60,8 +62,42 @@ sha=$(pin_sha dxvk-d3d9-sha256)
 pin_verify thirdparty/dxvk/d3d9.dll "$sha"
 ```
 
-Fetched files keep the primary url's file name whichever mirror served them.
-Only `https://` and `file://` are allowed (redirects: `https` only).
+Fetched files keep the primary url's file name whichever mirror served them
+(`pin_file NAME`). Only `https://` and `file://` are allowed (redirects:
+`https` only).
+
+### Mirroring
+
+When a component's licence allows republishing, add the word `mirror` to its
+pin and list our mirror url as the last fallback:
+
+```
+xidi https://github.com/samuelgr/Xidi/releases/download/v4.3.1/Xidi-v4.3.1.zip 78120f44…17ff mirror https://github.com/akitaonrails/rea-colin-mcrae-3/releases/download/thirdparty/Xidi-v4.3.1.zip
+```
+
+`pin_mirror_url xidi [owner/repo [tag]]` prints that url (repository from
+`PIN_MIRROR_REPO` or `GITHUB_REPOSITORY`, tag `thirdparty`); the asset is
+always named by `pin_file`, so the fallback and the upload can't disagree.
+The mirror workflow (`mirror.yml`) fetches every pin marked `mirror`,
+checks its sha256, creates the release if it is missing (never as "latest")
+and uploads with `--clobber`. It never deletes the release, so the fallback
+urls stay valid while it runs, and it warns about a marked pin whose
+fallbacks lack the mirror url. Run it by hand after adopting a new pin:
+
+```yaml
+name: mirror
+on: workflow_dispatch
+jobs:
+  mirror:
+    permissions: {contents: write}
+    uses: akitaonrails/rea-launcher-sdk/.github/workflows/mirror.yml@v0.2.0
+    with:
+      pins: packaging/third-party.txt
+```
+
+Never mark a pin `mirror` without a licence that allows redistribution
+(record it in `THIRD_PARTY.md`); a licence-less download stays a download
+from its author.
 
 ## AppImage
 
@@ -189,6 +225,8 @@ Inputs of `launcher-ci.yml` (all optional):
 | `shell-syntax` | `linux/*-play packaging/*.sh …` | globs checked with `sh -n`; any error fails |
 | `shell-tests` | `linux/tests/*.sh packaging/tests/*.sh` | globs; each match runs with `sh` (dash) and must exit 0; unmatched globs are skipped |
 | `shell-tests-skip` | `*e2e*` | patterns of tests not to run (CMR3's `e2e.sh` needs a dev kit) |
+| `wine-tests` | `false` | `true` installs Wine and the target's MinGW and runs `sdk/scripts/wine-test --target <rust-target>` headless |
+| `wine-test-args` | `--locked --workspace` | |
 | `audit` | `true` | cargo-audit 0.22.1 + cargo-deny 0.19.8; fails without a `deny.toml` |
 | `sdk-check`, `sdk-dir`, `sdk-repository` | `true`, `sdk`, this repo | drift check against `sdk/VERSION` |
 | `imports-test`, `package-command` | empty | bash commands |

@@ -60,6 +60,16 @@ on:
         description: Extra cargo clippy arguments (empty lints only the library and binaries).
         type: string
         default: --all-targets
+      wine-tests:
+        description: >-
+          Also run cargo test for rust-target under Wine, headless, with the
+          vendored sdk/scripts/wine-test (installs Wine and the matching MinGW).
+        type: boolean
+        default: false
+      wine-test-args:
+        description: Arguments for sdk/scripts/wine-test (the target is added from rust-target).
+        type: string
+        default: --locked --workspace
       audit:
         description: >-
           Run cargo audit and cargo deny check. Needs a deny.toml that allows
@@ -268,6 +278,31 @@ jobs:
           ref=$(printf '%s' "$GITHUB_REF_NAME" | tr '/' '-')
           case $ref in '' | *[!A-Za-z0-9._-]*) echo "::error::unexpected ref name"; exit 1 ;; esac
           echo "REA_VERSION_NAME=$ref" >> "$GITHUB_ENV"
+
+      - name: Install Wine for the Windows-target tests
+        if: inputs.wine-tests
+        shell: sh
+        run: |
+          case $RUST_TARGET in
+            i686-pc-windows-gnu) mingw=gcc-mingw-w64-i686 ;;
+            x86_64-pc-windows-gnu) mingw=gcc-mingw-w64-x86-64 ;;
+            *) echo "::error::wine-tests needs rust-target i686-pc-windows-gnu or x86_64-pc-windows-gnu"; exit 1 ;;
+          esac
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "$mingw" lld wine wine32:i386 wine64
+
+      - name: Windows-target tests under Wine (headless)
+        if: inputs.wine-tests
+        shell: sh
+        env:
+          WINE_TEST_ARGS: ${{ inputs.wine-test-args }}
+        run: |
+          case $WINE_TEST_ARGS in *[!A-Za-z0-9_=,.:/\ -]*) echo "::error::unexpected characters in wine-test-args"; exit 1 ;; esac
+          [ -f "$SDK_DIR/scripts/wine-test" ] || { echo "::error::no $SDK_DIR/scripts/wine-test: re-run scripts/sdk-sync from SDK v0.2.0 or later"; exit 1; }
+          set -f
+          # shellcheck disable=SC2086 # split the argument list on purpose
+          sh "$SDK_DIR/scripts/wine-test" --target "$RUST_TARGET" $WINE_TEST_ARGS
 
       - name: Imports test
         if: inputs.imports-test != ''

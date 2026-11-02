@@ -82,6 +82,28 @@ jobs:
           dash shell/tests/run-all.sh
           echo "::endgroup::"
 
+  wine:
+    name: Windows-target tests under Wine (i686, headless)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install MinGW, LLD and Wine (32-bit)
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64
+      - name: Install Rust (with the 32-bit Windows target)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add i686-pc-windows-gnu
+      - name: cargo test under Wine
+        # No display: wine-test clears DISPLAY/WAYLAND_DISPLAY; nothing opens a window.
+        run: scripts/wine-test --locked --workspace
+
   deny:
     name: Dependency advisories, licences and sources
     runs-on: ubuntu-24.04

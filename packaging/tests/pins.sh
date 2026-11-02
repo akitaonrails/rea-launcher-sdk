@@ -92,6 +92,34 @@ check "stale destination replaced" "real payload" "$(cat "$f" 2>/dev/null)"
 pin_verify "$T/up/tool.tar.gz" "$GOOD" && ok "pin_verify accepts" || bad "pin_verify accepts"
 if pin_verify "$T/up/evil.zip" "$GOOD" 2>/dev/null; then bad "pin_verify rejects"; else ok "pin_verify rejects"; fi
 
+# Mirror marking and the mirror url.
+cat > "$T/mpins" <<EOF
+xidi https://github.com/samuelgr/Xidi/releases/download/v4.3.1/Xidi-v4.3.1.zip $GOOD mirror https://github.com/me/game/releases/download/thirdparty/Xidi-v4.3.1.zip
+plain https://example.com/a/plain.tar.gz?raw=1 $GOOD
+summed - $GOOD mirror
+weird https://example.com/get/?id=7 $GOOD mirror
+EOF
+(
+  PIN_FILE=$T/mpins PIN_DIR='' GITHUB_REPOSITORY=me/game
+  pin_mirrorable xidi && ok "mirror word marks a pin" || bad "mirror word marks a pin"
+  if pin_mirrorable plain; then bad "unmarked pin is not mirrorable"; else ok "unmarked pin is not mirrorable"; fi
+  check "mirror word is not a url" "https://github.com/samuelgr/Xidi/releases/download/v4.3.1/Xidi-v4.3.1.zip
+https://github.com/me/game/releases/download/thirdparty/Xidi-v4.3.1.zip" "$(pin_urls xidi)"
+  check "pin_sha with mirror word" "$GOOD" "$(pin_sha xidi)"
+  check "pin_file: primary url's name" "Xidi-v4.3.1.zip" "$(pin_file xidi)"
+  check "pin_file drops the query" "plain.tar.gz" "$(pin_file plain)"
+  check "pin_file falls back to the pin name" "weird" "$(pin_file weird)"
+  check "mirror url from GITHUB_REPOSITORY" "https://github.com/me/game/releases/download/thirdparty/Xidi-v4.3.1.zip" "$(pin_mirror_url xidi)"
+  check "mirror url, explicit repo and tag" "https://github.com/o/r/releases/download/mirror-1/plain.tar.gz" "$(pin_mirror_url plain o/r mirror-1)"
+  check "the listed fallback is exactly the mirror url" "$(pin_mirror_url xidi)" "$(pin_urls xidi | grep '/releases/download/thirdparty/')"
+  if pin_sha summed 2>/dev/null; then bad "checksum-only pin cannot be mirrored"; else ok "checksum-only pin cannot be mirrored"; fi
+  if pin_mirror_url xidi 'a/b/c' 2>/dev/null; then bad "bad repository refused"; else ok "bad repository refused"; fi
+  if pin_mirror_url xidi o/r 'x y' 2>/dev/null; then bad "bad tag refused"; else ok "bad tag refused"; fi
+  if (unset GITHUB_REPOSITORY PIN_MIRROR_REPO; pin_mirror_url xidi) 2>/dev/null; then bad "no repository refused"; else ok "no repository refused"; fi
+  echo "fails=$fails" > "$T/sub"
+)
+. "$T/sub"
+
 # The SDK's own tool pins parse.
 PIN_FILE=$HERE/../appimage/tools.pins PIN_DIR=
 for n in wine appimagetool appimage-runtime; do
