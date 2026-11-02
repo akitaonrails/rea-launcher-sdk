@@ -4,7 +4,7 @@
 set -u
 TESTS=$(dirname "$(readlink -f "$0")")
 LIB=$TESTS/../rea-play.sh
-T=$(mktemp -d)
+T=$(readlink -f "$(mktemp -d)")   # canonical: the library resolves links
 trap 'rm -rf "$T"' EXIT
 export T HOME=$T
 unset XDG_CONFIG_HOME GAMESCOPE_WAYLAND_DISPLAY DRI_PRIME __NV_PRIME_RENDER_OFFLOAD \

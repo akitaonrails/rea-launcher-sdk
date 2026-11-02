@@ -60,7 +60,7 @@ rea_hook_before_start() {
   rea_wine_no_crash_dialog
   rea_seed_winebus
   # Post-processing for the game only (gamescope must not load the layer).
-  if [ "$(rea_get_key postfx)" = sharpen ] && [ -f "$REA_HERE/thirdparty/vkbasalt/vkBasalt.json" ]; then
+  if [ "$(rea_get_value postfx)" = sharpen ] && [ -f "$REA_HERE/thirdparty/vkbasalt/vkBasalt.json" ]; then
     rea_game_env VK_LAYER_PATH "$REA_HERE/thirdparty/vkbasalt"
     rea_game_env VK_INSTANCE_LAYERS VK_LAYER_VKBASALT_post_processing
   fi

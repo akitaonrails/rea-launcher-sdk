@@ -198,6 +198,49 @@ rea_cmd_play_test
 contains "through rea_main --play" "$(ran)" "-F nis --"
 REA_HELPER_KEYS=
 
+echo "# values compared as the launchers do (any case, boolean spellings)"
+REA_HELPER_KEYS="scaler resolution display_mode postfx dxvk" REA_WINDOWED_KEY=display_mode
+printf 'resolution = 1920x1080\n' > "$C"
+for m in Windowed BORDERLESS; do
+  rm -f "$T/ran"; rea_start --display-mode "$m" > /dev/null
+  lacks "--display-mode $m skips gamescope" "$(ran)" "gamescope"
+done
+printf 'display_mode = Borderless\n' > "$C"
+rm -f "$T/ran"; rea_start > /dev/null
+lacks "display_mode = Borderless in the file too" "$(ran)" "gamescope"
+REA_WINDOWED_VALUES="Windowed"
+printf 'display_mode = windowed\n' > "$C"
+rm -f "$T/ran"; rea_start > /dev/null
+lacks "REA_WINDOWED_VALUES in any case" "$(ran)" "gamescope"
+REA_WINDOWED_VALUES="windowed borderless" REA_WINDOWED_KEY=
+printf 'resolution = 1920x1080\n' > "$C"
+rm -f "$T/ran"; rea_start --scaler FSR --resolution 1280X720 > /dev/null
+contains "one-run scaler and size in any case" "$(ran)" "-w 1280 -h 720 -f -S fit -F fsr --"
+rea_hook_before_start() { rea_get_value postfx > "$T/v"; if rea_is_off dxvk; then echo off; elif rea_is_on dxvk; then echo on; else echo neither; fi > "$T/b"; }
+rea_start --postfx Color > /dev/null
+check "rea_get_value lowercases (--postfx Color)" "$(cat "$T/v")" color
+for spell in off OFF False no 0; do
+  rea_start --dxvk "$spell" > /dev/null; check "rea_is_off: $spell" "$(cat "$T/b")" off
+done
+for spell in on On TRUE yes 1; do
+  rea_start --dxvk "$spell" > /dev/null; check "rea_is_on: $spell" "$(cat "$T/b")" on
+done
+rea_start > /dev/null; check "unset is neither" "$(cat "$T/b")" neither
+rea_start --dxvk maybe > /dev/null; check "other words are neither" "$(cat "$T/b")" neither
+printf 'dxvk = No \r\n' > "$C"
+rea_start > /dev/null; check "file spellings too (No, CRLF)" "$(cat "$T/b")" off
+rea_hook_before_start() { :; }
+printf 'game = C:\\Games\\CMR3\n' > "$C"
+check "rea_get_key keeps the case (paths)" "$(rea_get_key game)" 'C:\Games\CMR3'
+
+echo "# --flag=value reaches the launcher as --flag value"
+rm -f "$T/ran"; rea_start --scaler=nearest --game='C:\a=b' plain > /dev/null
+check "split for the launcher's parser" "$(tail -5 "$T/args" | tr '\n' ' ')" "<--scaler> <nearest> <--game> <C:\a=b> <plain> "
+contains "...and still read as a one-run value" "$(ran)" "-F nearest --"
+echo 0 > "$T/rc"; rea_settings --which=rally > /dev/null
+contains "the settings window gets the split spelling too" "$(cat "$T/settings")" "--settings --linux --which rally"
+REA_HELPER_KEYS=
+
 echo "# player values never glob"
 mkdir -p "$T/globdir"; : > "$T/globdir/AAA"; : > "$T/globdir/BBB"
 cd "$T/globdir"

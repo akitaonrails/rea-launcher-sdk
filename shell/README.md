@@ -152,7 +152,9 @@ empty value (empty means "none").
 | `REA_FLAG_SWITCHES` † | `--no-window --settings --linux --check` | launcher flags that take no value; every other `--flag` takes the next word |
 
 `x-play --play --scaler fsr --resolution 1280x720` passes the flags to the
-launcher unchanged (it applies them for one run, without saving them).
+launcher (it applies them for one run, without saving them). A
+`--flag=value` argument, to the game or to the settings window, reaches the
+launcher as `--flag value`, the spelling every launcher's parser reads.
 `rea_start` also reads `--<key> value` and `--<key>=value` for each key in
 `REA_HELPER_KEYS` into `REA_ONE_RUN`. For that run `rea_get_key KEY` returns
 the flag's value over `launcher.cfg`: gamescope's size, filter and
@@ -230,7 +232,16 @@ normal setting (Screamer maps `SCREAMER_SCREEN` to it).
   matching the launchers' parser, which applies lines in order and so
   matches `set_key`'s file. Keys and values are trimmed of spaces, tabs and
   CR. `#` lines are comments. The key is compared as text, never used as a
-  pattern.
+  pattern. It keeps the value's case, which matters for paths.
+- Values: the launchers accept any case and several boolean spellings, so
+  compare through these, never against `rea_get_key`'s raw text:
+  `rea_get_value KEY [FILE]` (lowercased: `postfx = Color` and
+  `--postfx Color` read `color`), `rea_is_on KEY [FILE]`
+  (`on|true|yes|1`, any case) and `rea_is_off KEY [FILE]`
+  (`off|false|no|0`). Unset or any other word is neither on nor off, so a
+  caller keeps its default. The library's own comparisons (resolution and
+  `REA_ORIGINAL_WORDS`, scaler, `REA_WINDOWED_KEY` against
+  `REA_WINDOWED_VALUES`, all in any case) use them too.
 - Sizes: `rea_parse_size TEXT` prints `WxH`. It accepts `1920X1080`,
   spaces, CRLF and leading zeros. It rejects `0`, half sizes, extra parts,
   letters, `$()` and more than 5 digits. Also `rea_screen_size`,
@@ -361,7 +372,7 @@ only changes invalid input:
 | CMR3 `prepare_prefix` | `rea_wine_no_crash_dialog` in `rea_hook_before_start` |
 | CMR3 `display_mode` | `REA_WINDOWED_KEY=display_mode` |
 | CMR3 `rea_hook_command` + `one_run_cfg` (one-run `--scaler/--postfx/--resolution/--display-mode/--dxvk`) | delete both; set `REA_HELPER_KEYS="scaler postfx resolution display_mode dxvk"`. `--play`/`play`/`start` then reach `rea_cmd_play` directly, and `one-run.cfg` is no longer written |
-| CMR3 `postfx_env`, `grade` | stay in cmr3-play, called from `rea_hook_before_start`. Replace the three `export CMR3_VK_*` lines with `rea_game_env VK_LAYER_PATH …`, `rea_game_env VK_INSTANCE_LAYERS …`, `rea_game_env VKBASALT_CONFIG_FILE …`. `$HERE` becomes `$REA_HERE`, `$STATE` becomes `$REA_STATE`, `$LAUNCHER` becomes `$REA_EXE` |
+| CMR3 `postfx_env`, `grade` | stay in cmr3-play, called from `rea_hook_before_start`. Read `fx=$(rea_get_value postfx)` and test `rea_is_off dxvk` instead of `[ "$(rea_get_key dxvk)" = off ]`, so `Color`, `--dxvk False` and the like work. Replace the three `export CMR3_VK_*` lines with `rea_game_env VK_LAYER_PATH …`, `rea_game_env VK_INSTANCE_LAYERS …`, `rea_game_env VKBASALT_CONFIG_FILE …`. `$HERE` becomes `$REA_HERE`, `$STATE` becomes `$REA_STATE`, `$LAUNCHER` becomes `$REA_EXE` |
 | SRR `GAME_ALIVE` / `game_alive`, `SRR_PROC` | `REA_GAME_PROCS`, `rea_game_alive`, `REA_PROC` |
 | SRR `prefix_wine` | `rea_wine` |
 | SRR `seed_winebus` | `rea_seed_winebus` with `REA_WINEBUS_MARKER=.srr-winebus-v2` (existing prefixes are not seeded again) |

@@ -21,7 +21,7 @@
 #   REA_LAUNCH_CMD       command run instead of the whole supervised launch
 #   REA_PROC             replaces /proc for the game-process check
 
-REA_SDK_VERSION=0.3.1
+REA_SDK_VERSION=0.3.2
 
 # --- configuration -------------------------------------------------------------
 # Every configuration variable the library reads. Sourcing unsets them, so
@@ -226,6 +226,24 @@ rea_get_key() {
     END { if (found) print val }' "$_rea_f"
 }
 
+# rea_get_value KEY [FILE]: rea_get_key's value as the launchers compare it,
+# lowercased (they accept any case: `postfx = Color`, `--display-mode
+# Windowed`). Use it for every comparison; keep rea_get_key for paths.
+rea_get_value() { rea_get_key "$@" | tr 'A-Z' 'a-z'; }
+
+# rea_is_on / rea_is_off KEY [FILE]: the launchers' boolean spellings
+# (on|true|yes|1, off|false|no|0, any case). Unset or anything else is
+# neither, so a caller keeps its default.
+rea_is_on() {
+  case $(rea_get_value "$@") in on|true|yes|1) return 0 ;; esac
+  return 1
+}
+rea_is_off() {
+  case $(rea_get_value "$@") in off|false|no|0) return 0 ;; esac
+  return 1
+}
+
+
 # rea_one_run ARGS...: reads `--<key> value` and `--<key>=value` among the
 # launcher arguments of one run, for each key in REA_HELPER_KEYS (the flag
 # spells the key with - for _: display_mode is --display-mode), into
@@ -302,7 +320,7 @@ rea_screen_size() {
 # screen, when REA_FULLSCREEN_SIZE=screen); anything else is
 # REA_DEFAULT_SIZE.
 rea_game_size() {
-  _rea_r=$(rea_get_key "$REA_RES_KEY" | tr -d ' \t\r' | tr 'A-Z' 'a-z')
+  _rea_r=$(rea_get_value "$REA_RES_KEY" | tr -d ' \t\r')
   _rea_size=
   rea_noglob
   # shellcheck disable=SC2086
@@ -326,7 +344,7 @@ rea_game_size() {
 # would refuse to start) are the default.
 rea_scaler() {
   _rea_f=
-  [ -n "$REA_SCALER_KEY" ] && _rea_f=$(rea_get_key "$REA_SCALER_KEY" | tr 'A-Z' 'a-z')
+  [ -n "$REA_SCALER_KEY" ] && _rea_f=$(rea_get_value "$REA_SCALER_KEY")
   case $_rea_f in
     linear|nearest|fsr|nis|pixel) ;;
     bilinear) _rea_f=linear ;;
@@ -734,11 +752,11 @@ rea_has_gamescope() {
 # value one of REA_WINDOWED_VALUES): windowed games size themselves.
 rea_windowed() {
   [ -n "$REA_WINDOWED_KEY" ] || return 1
-  _rea_mode=$(rea_get_key "$REA_WINDOWED_KEY" | tr 'A-Z' 'a-z')
+  _rea_mode=$(rea_get_value "$REA_WINDOWED_KEY")
   [ -n "$_rea_mode" ] || return 1
   rea_noglob
   # shellcheck disable=SC2086
-  set -- $REA_WINDOWED_VALUES
+  set -- $(printf '%s' "$REA_WINDOWED_VALUES" | tr 'A-Z' 'a-z')
   rea_glob
   for _rea_v in "$@"; do
     [ "$_rea_mode" = "$_rea_v" ] && return 0
@@ -764,6 +782,16 @@ rea_use_gamescope() {
 rea_settings() {
   rea_gpu_init
   rea_hook_before_settings
+  # `--flag=value` reaches the launcher as `--flag value`, the spelling
+  # every launcher's parser reads.
+  _rea_n=$#
+  while [ "$_rea_n" -gt 0 ]; do
+    _rea_a=$1; shift; _rea_n=$((_rea_n - 1))
+    case $_rea_a in
+      --?*=*) set -- "$@" "${_rea_a%%=*}" "${_rea_a#*=}" ;;
+      *) set -- "$@" "$_rea_a" ;;
+    esac
+  done
   _rea_sdl=
   [ "$REA_SDL_SETTINGS" = 1 ] && _rea_sdl=$(rea_sdl_env)
   rea_noglob
@@ -797,6 +825,16 @@ rea_settings() {
 rea_start() {
   rea_require_exe || exit 1
   rea_one_run "$@"
+  # `--flag=value` reaches the launcher as `--flag value`, the spelling
+  # every launcher's parser reads.
+  _rea_n=$#
+  while [ "$_rea_n" -gt 0 ]; do
+    _rea_a=$1; shift; _rea_n=$((_rea_n - 1))
+    case $_rea_a in
+      --?*=*) set -- "$@" "${_rea_a%%=*}" "${_rea_a#*=}" ;;
+      *) set -- "$@" "$_rea_a" ;;
+    esac
+  done
   rea_gpu_init
   [ -f "$REA_CFG" ] || rea_find_cfg   # the settings window may have made it
   REA_GAME_ENV=
