@@ -1,0 +1,101 @@
+name: upstream-watch
+
+# Reusable watch over a launcher's third-party pins, generalised from
+# CMR3's watch-upstream: resolves each watched repository's latest release,
+# hashes the matching asset and compares it with the pin. A difference
+# opens (or comments on) one issue per component; moving a pin stays a
+# human decision, made in a PR after playing with the new release.
+#
+# Watch list, one per line (# comments): name owner/repo asset-name-prefix
+# where name is a pin in the pin file (sdk/packaging/pins.sh format).
+#
+# The calling job grants contents: read and issues: write; schedule it from
+# the launcher (on: schedule) as CMR3 does.
+
+on:
+  workflow_call:
+    inputs:
+      pins:
+        type: string
+        default: packaging/third-party.txt
+      watch-list:
+        type: string
+        default: packaging/upstream-watch.txt
+      sdk-dir:
+        type: string
+        default: sdk
+      runs-on:
+        type: string
+        default: ubuntu-24.04
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    name: Compare upstream releases with the pins
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PINS: ${{ inputs.pins }}
+      WATCH_LIST: ${{ inputs.watch-list }}
+      SDK_DIR: ${{ inputs.sdk-dir }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare upstream latest with the pins
+        id: check
+        shell: sh
+        run: |
+          set -u
+          . "$SDK_DIR/packaging/pins.sh"
+          PIN_FILE=$PINS
+          report=$RUNNER_TEMP/upstream-report.txt
+          : > "$report"
+          awk '!/^[ \t]*(#|$)/' "$WATCH_LIST" > "$RUNNER_TEMP/watch.txt"
+          while read -r name repo prefix; do
+            case $repo in */* ) ;; *) echo "$name: bad repository '$repo'" >> "$report"; continue ;; esac
+            case $repo in *[!A-Za-z0-9_./-]*) echo "$name: bad repository '$repo'" >> "$report"; continue ;; esac
+            pinned=$(pin_sha "$name") || { echo "$name: no pin in $PINS" >> "$report"; continue; }
+            latest=$(gh api "repos/$repo/releases/latest") || { echo "$name: cannot read the latest release of $repo" >> "$report"; continue; }
+            tag=$(printf '%s' "$latest" | jq -r .tag_name)
+            url=$(printf '%s' "$latest" | jq -r --arg p "$prefix" \
+              '[.assets[] | select(.name | startswith($p)) | .browser_download_url][0] // empty')
+            [ -n "$url" ] || { echo "$name: no asset starting with '$prefix' in $repo $tag" >> "$report"; continue; }
+            rm -f "$RUNNER_TEMP/latest.bin"
+            curl -fsSL --proto '=https' --retry 2 --max-time 300 -o "$RUNNER_TEMP/latest.bin" "$url" \
+              || { echo "$name: download failed: $url" >> "$report"; continue; }
+            now=$(sha256sum "$RUNNER_TEMP/latest.bin" | cut -d' ' -f1)
+            if [ "$now" = "$pinned" ]; then
+              echo "$name unchanged ($tag)"
+            else
+              echo "$name changed: pinned $pinned, upstream $tag is $now ($url)" >> "$report"
+            fi
+          done < "$RUNNER_TEMP/watch.txt"
+          cat "$report"
+          if [ -s "$report" ]; then echo "changed=1"; else echo "changed=0"; fi >> "$GITHUB_OUTPUT"
+
+      - name: Open or update an issue per component
+        if: steps.check.outputs.changed == '1'
+        shell: sh
+        run: |
+          # The report holds text from upstream releases: it is read from a
+          # file and only ever passed as arguments.
+          while IFS= read -r line; do
+            name=${line%%[ :]*}
+            title="third-party update: $name"
+            existing=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty' || true)
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "$line"
+            else
+              body=$(printf '%s\n\n%s\n' "$line" \
+                "The pin is in \`$PINS\`. To adopt the new release: play with it, then move the pin (and refresh any mirror) in a PR.")
+              gh issue create --title "$title" --body "$body"
+            fi
+          done < "$RUNNER_TEMP/upstream-report.txt"

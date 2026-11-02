@@ -1,0 +1,298 @@
+//! The component ownership ledger: what the launcher installed into the
+//! runtime, by SHA-256.
+//!
+//! From CMR4 `components.rs` (ported to CMR3 in 53c91f0): the runtime
+//! starts as a copy of the player's folder, which may already hold a
+//! `dinput8.dll` or `d3d9.dll` — the game's, or a mod of the player's
+//! (DSOAL, SpecialK). CMR3's Xidi "Off" deleted any `dinput8.dll`. Now a
+//! file is installed only over our own or an untouched copy of the game's,
+//! taken out only while its bytes are still what we wrote (or a known
+//! bundle file, for runtimes from before the ledger), and taking it out
+//! brings the game's own file back. Names are plain relative paths
+//! (CMR3 c59356a: a record never reaches outside the runtime).
+//!
+//! The ledger file holds `hex-sha256\trel` lines.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use crate::fsx;
+use crate::identify::{hex, sha256};
+use crate::paths::native;
+use crate::runtime;
+
+/// What [`Ledger::install`] and [`Ledger::take_out`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Installed (or already ours with these bytes, rewritten anyway).
+    Installed,
+    /// Ours, taken out: the game's own file is back, or none.
+    Restored,
+    /// Nothing there, or nothing of ours.
+    Absent,
+    /// Someone else's file (a player's mod, a changed copy): left alone.
+    NotOurs,
+}
+
+/// The ledger of one runtime folder.
+#[derive(Debug, Clone)]
+pub struct Ledger {
+    game: PathBuf,
+    runtime: PathBuf,
+    file: PathBuf,
+    owned: BTreeMap<String, String>,
+}
+
+/// True for a plain relative `/`-separated path that stays below the
+/// folder it is joined to: no root, drive, `.` or `..`, on any host.
+pub fn is_plain_relative(rel: &str) -> bool {
+    !rel.is_empty()
+        && rel
+            .split(['/', '\\'])
+            .all(|part| !part.is_empty() && part != "." && part != ".." && !part.contains(':'))
+}
+
+fn plain(rel: &str) -> io::Result<()> {
+    if is_plain_relative(rel) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("not a plain relative path: {rel:?}"),
+        ))
+    }
+}
+
+impl Ledger {
+    /// Reads `runtime/name` (a missing or unreadable ledger is empty;
+    /// lines with other than plain relative paths are dropped).
+    pub fn load(game: &Path, runtime: &Path, name: &str) -> Ledger {
+        let file = runtime.join(name);
+        let owned = fs::read_to_string(&file)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| {
+                let (digest, rel) = line.split_once('\t')?;
+                is_plain_relative(rel).then(|| (rel.to_owned(), digest.to_owned()))
+            })
+            .collect();
+        Ledger {
+            game: game.to_path_buf(),
+            runtime: runtime.to_path_buf(),
+            file,
+            owned,
+        }
+    }
+
+    fn save(&self) -> io::Result<()> {
+        let text: String = self
+            .owned
+            .iter()
+            .map(|(rel, digest)| format!("{digest}\t{rel}\n"))
+            .collect();
+        fsx::write_atomic(&self.file, text)
+    }
+
+    /// The names the ledger records.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.owned.keys().map(String::as_str)
+    }
+
+    /// True when the runtime's `rel` holds what the ledger recorded, or one
+    /// of `known` (bundle files we may have written before the ledger).
+    pub fn owns(&self, rel: &str, known: &[&[u8]]) -> io::Result<bool> {
+        plain(rel)?;
+        match fs::read(native(&self.runtime, rel)) {
+            Ok(bytes) => Ok(self.owned.get(rel) == Some(&hex(&sha256(&bytes)))
+                || known.contains(&bytes.as_slice())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// True when the runtime's `rel` is byte-equal to the game's own.
+    fn untouched_game_copy(&self, rel: &str) -> io::Result<bool> {
+        let game = native(&self.game, rel);
+        if !game.is_file() {
+            return Ok(false);
+        }
+        Ok(fs::read(game)? == fs::read(native(&self.runtime, rel))?)
+    }
+
+    /// Installs `bytes` as the runtime's `rel` and records it — only when
+    /// nothing is there, it is ours (see [`Ledger::owns`]), or it is an
+    /// untouched copy of the game's own file. Returns
+    /// [`Outcome::NotOurs`] (writing nothing) otherwise.
+    pub fn install(&mut self, rel: &str, bytes: &[u8], known: &[&[u8]]) -> io::Result<Outcome> {
+        plain(rel)?;
+        let path = native(&self.runtime, rel);
+        if fs::symlink_metadata(&path).is_ok()
+            && !self.owns(rel, known)?
+            && !self.untouched_game_copy(rel)?
+        {
+            return Ok(Outcome::NotOurs);
+        }
+        fsx::install(&path, bytes)?;
+        self.owned.insert(rel.to_owned(), hex(&sha256(bytes)));
+        self.save()?;
+        Ok(Outcome::Installed)
+    }
+
+    /// Takes the runtime's `rel` out when it is ours: the game's own file
+    /// comes back (copied), or the file goes. Someone else's file stays.
+    /// The record goes either way.
+    pub fn take_out(&mut self, rel: &str, known: &[&[u8]]) -> io::Result<Outcome> {
+        plain(rel)?;
+        let outcome = if self.owns(rel, known)? {
+            runtime::restore(&self.game, &self.runtime, rel, false)?;
+            Outcome::Restored
+        } else if fs::symlink_metadata(native(&self.runtime, rel)).is_ok()
+            && !self.untouched_game_copy(rel)?
+        {
+            Outcome::NotOurs
+        } else {
+            Outcome::Absent
+        };
+        if self.owned.remove(rel).is_some() {
+            self.save()?;
+        }
+        Ok(outcome)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_dir;
+
+    const NAME: &str = ".test-components";
+
+    fn setup(name: &str) -> (PathBuf, PathBuf) {
+        (
+            test_dir(&format!("{name}-game")),
+            test_dir(&format!("{name}-rt")),
+        )
+    }
+
+    #[test]
+    fn installs_and_takes_out_only_what_it_put_in() {
+        let (game, rt) = setup("ledger-own");
+        // The game ships its own dinput8.dll; the runtime has its copy.
+        fs::write(game.join("dinput8.dll"), b"game's own").unwrap();
+        fs::write(rt.join("dinput8.dll"), b"game's own").unwrap();
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        assert_eq!(
+            ledger.install("dinput8.dll", b"xidi", &[]).unwrap(),
+            Outcome::Installed
+        );
+        assert_eq!(
+            ledger.install("d3d9.dll", b"dxvk", &[]).unwrap(),
+            Outcome::Installed
+        );
+        assert_eq!(fs::read(rt.join("dinput8.dll")).unwrap(), b"xidi");
+
+        // A fresh load sees the record.
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        assert_eq!(
+            ledger.names().collect::<Vec<_>>(),
+            ["d3d9.dll", "dinput8.dll"]
+        );
+        assert_eq!(
+            ledger.take_out("dinput8.dll", &[]).unwrap(),
+            Outcome::Restored
+        );
+        assert_eq!(fs::read(rt.join("dinput8.dll")).unwrap(), b"game's own");
+
+        // A d3d9.dll the player dropped in after ours is not ours.
+        fs::write(rt.join("d3d9.dll"), b"player's d3d9").unwrap();
+        assert_eq!(ledger.take_out("d3d9.dll", &[]).unwrap(), Outcome::NotOurs);
+        assert_eq!(fs::read(rt.join("d3d9.dll")).unwrap(), b"player's d3d9");
+        assert_eq!(
+            ledger.install("d3d9.dll", b"dxvk", &[]).unwrap(),
+            Outcome::NotOurs
+        );
+        assert_eq!(fs::read(rt.join("d3d9.dll")).unwrap(), b"player's d3d9");
+        assert!(Ledger::load(&game, &rt, NAME).names().next().is_none());
+
+        // The game's untouched copy is already the "off" state.
+        assert_eq!(
+            ledger.take_out("dinput8.dll", &[]).unwrap(),
+            Outcome::Absent
+        );
+        assert_eq!(ledger.take_out("never.dll", &[]).unwrap(), Outcome::Absent);
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn known_bundle_bytes_count_as_ours_before_the_ledger() {
+        let (game, rt) = setup("ledger-known");
+        fs::write(rt.join("dinput8.dll"), b"xidi 1.0").unwrap();
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        assert_eq!(
+            ledger.take_out("dinput8.dll", &[b"xidi 2.0"]).unwrap(),
+            Outcome::NotOurs
+        );
+        assert!(rt.join("dinput8.dll").exists());
+        assert_eq!(
+            ledger
+                .install("dinput8.dll", b"xidi 2.0", &[b"xidi 1.0"])
+                .unwrap(),
+            Outcome::Installed
+        );
+        assert_eq!(
+            ledger.take_out("dinput8.dll", &[]).unwrap(),
+            Outcome::Restored
+        );
+        assert!(!rt.join("dinput8.dll").exists(), "the game has none");
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn only_plain_relative_names_are_accepted() {
+        let (game, rt) = setup("ledger-plain");
+        fs::write(
+            rt.join(NAME),
+            "00\t../outside.dll\n00\tC:\\x.dll\n00\t/abs.dll\n00\tData/ok.dds\n",
+        )
+        .unwrap();
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        assert_eq!(ledger.names().collect::<Vec<_>>(), ["Data/ok.dds"]);
+        assert!(ledger.install("../evil.dll", b"x", &[]).is_err());
+        assert!(ledger.take_out("a/./b", &[]).is_err());
+        assert!(is_plain_relative("fonts/hel_18pt.dds"));
+        assert!(!is_plain_relative(""));
+        assert!(!is_plain_relative("a//b"));
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restoring_never_writes_through_a_hard_link() {
+        let (game, rt) = setup("ledger-link");
+        fs::write(game.join("dsound.dll"), b"game's").unwrap();
+        fs::hard_link(game.join("dsound.dll"), rt.join("dsound.dll")).unwrap();
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        // A linked game copy counts as untouched.
+        assert_eq!(
+            ledger.install("dsound.dll", b"loader", &[]).unwrap(),
+            Outcome::Installed
+        );
+        assert_eq!(fs::read(game.join("dsound.dll")).unwrap(), b"game's");
+        assert_eq!(
+            ledger.take_out("dsound.dll", &[]).unwrap(),
+            Outcome::Restored
+        );
+        assert_eq!(fs::read(rt.join("dsound.dll")).unwrap(), b"game's");
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+}

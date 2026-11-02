@@ -1,0 +1,262 @@
+name: launcher-ci
+
+# Reusable checks, build and packaging for a rea launcher. A launcher's
+# build.yml calls it by tag; see packaging/README.md for an example.
+#
+# Every caller-supplied string reaches the shell through the environment,
+# never pasted into a script.
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-24.04
+      rust-toolchain:
+        description: rustup toolchain (e.g. stable, 1.95.0).
+        type: string
+        default: stable
+      rust-target:
+        description: Cross target for clippy and the release build; empty builds for the host.
+        type: string
+        default: i686-pc-windows-gnu
+      apt-packages:
+        description: Extra Ubuntu packages, space-separated.
+        type: string
+        default: gcc-mingw-w64-i686 lld zip unzip
+      submodules:
+        description: actions/checkout submodules (false, true, recursive).
+        type: string
+        default: "false"
+      shell-syntax:
+        description: Globs of POSIX sh scripts checked with sh -n (missing ones are skipped).
+        type: string
+        default: linux/*-play packaging/*.sh packaging/appimage/AppRun packaging/appimage/*.sh sdk/packaging/*.sh sdk/rea-play.sh
+      shell-tests:
+        description: Globs of shell test scripts, each run with sh (dash).
+        type: string
+        default: linux/tests/*.sh packaging/tests/*.sh
+      audit:
+        description: Run cargo audit and cargo deny check.
+        type: boolean
+        default: true
+      sdk-check:
+        description: Fail when sdk/ drifted from the SDK version in sdk/VERSION.
+        type: boolean
+        default: true
+      sdk-dir:
+        description: Where sdk-sync vendored the SDK.
+        type: string
+        default: sdk
+      sdk-repository:
+        description: The SDK repository sdk/VERSION refers to.
+        type: string
+        default: akitaonrails/rea-launcher-sdk
+      imports-test:
+        description: >-
+          Command run after the release build (e.g. an import-resolution
+          test); REA_RELEASE_DIR is the release output folder.
+        type: string
+        default: ""
+      package-command:
+        description: >-
+          Command that builds the packages (bash). REA_VERSION_NAME is the
+          ref name with / as -, REA_RELEASE_DIR the release output folder,
+          REA_CACHE a download cache, REA_SDK the vendored SDK folder.
+        type: string
+        default: ""
+      package-dir:
+        description: Glob of unpacked package folders (or zips) for the allowlist check.
+        type: string
+        default: ""
+      package-allowlist:
+        description: Allowlist file for sdk/packaging/smoke-package.sh.
+        type: string
+        default: ""
+      artifact-name:
+        description: Artifact to upload (empty uploads nothing).
+        type: string
+        default: ""
+      artifact-paths:
+        description: Newline-separated paths or globs for the artifact.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Check, build and package
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 90
+    # Distinct from the caller's own concurrency group (sharing one would
+    # deadlock); a newer push cancels an older run, never a tag build.
+    concurrency:
+      group: rea-launcher-ci-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    env:
+      RUST_TARGET: ${{ inputs.rust-target }}
+      SDK_DIR: ${{ inputs.sdk-dir }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: ${{ inputs.submodules }}
+          persist-credentials: false
+
+      - name: Read the vendored SDK version
+        id: sdk
+        if: inputs.sdk-check
+        shell: sh
+        run: |
+          [ -f "$SDK_DIR/VERSION" ] || { echo "::error::no $SDK_DIR/VERSION: vendor the SDK with scripts/sdk-sync"; exit 1; }
+          tag=$(sed -n 's/^tag=//p' "$SDK_DIR/VERSION")
+          commit=$(sed -n 's/^commit=//p' "$SDK_DIR/VERSION")
+          case $commit in *-dirty | unknown | '') echo "::error::$SDK_DIR was vendored from an uncommitted SDK ($commit)"; exit 1 ;; esac
+          case $commit in *[!0-9a-f]*) echo "::error::bad commit in $SDK_DIR/VERSION"; exit 1 ;; esac
+          case $tag in '' | *[!A-Za-z0-9._+-]*) echo "::error::bad tag in $SDK_DIR/VERSION"; exit 1 ;; esac
+          ref=$tag
+          if [ "$tag" = untagged ]; then ref=$commit; fi
+          { echo "ref=$ref"; echo "tag=$tag"; echo "commit=$commit"; } >> "$GITHUB_OUTPUT"
+
+      - name: Fetch that SDK version
+        if: inputs.sdk-check
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.sdk-repository }}
+          ref: ${{ steps.sdk.outputs.ref }}
+          path: .rea-sdk
+          persist-credentials: false
+
+      - name: The vendored SDK matches it
+        if: inputs.sdk-check
+        shell: sh
+        env:
+          SDK_TAG: ${{ steps.sdk.outputs.tag }}
+          SDK_COMMIT: ${{ steps.sdk.outputs.commit }}
+        run: |
+          got=$(git -C .rea-sdk rev-parse HEAD)
+          [ "$got" = "$SDK_COMMIT" ] || { echo "::error::SDK $SDK_TAG is $got now, $SDK_DIR/VERSION says $SDK_COMMIT"; exit 1; }
+          sh .rea-sdk/scripts/sdk-sync --check --tag "$SDK_TAG" .
+          rm -rf .rea-sdk
+
+      - name: Install build tools
+        shell: sh
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          case $APT_PACKAGES in *[!A-Za-z0-9.+:=\ -]*) echo "::error::unexpected characters in apt-packages"; exit 1 ;; esac
+          sudo apt-get update
+          # shellcheck disable=SC2086
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+
+      - name: Install Rust
+        shell: sh
+        env:
+          RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+          if [ -n "$RUST_TARGET" ]; then rustup target add "$RUST_TARGET"; fi
+          rustc --version
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Unit tests (host)
+        run: cargo test --workspace --locked
+
+      - name: Dependency advisories, licences and sources
+        if: inputs.audit
+        run: |
+          cargo install --locked cargo-audit@0.22.1 cargo-deny@0.19.8
+          cargo audit
+          cargo deny check
+
+      - name: Shell syntax
+        shell: sh
+        env:
+          GLOBS: ${{ inputs.shell-syntax }}
+        run: |
+          n=0
+          # Unquoted on purpose: split the list, expand each glob.
+          for f in $GLOBS; do
+            [ -f "$f" ] || continue
+            sh -n "$f" && echo "ok   $f"
+            n=$((n + 1))
+          done
+          echo "$n script(s) checked"
+
+      - name: Shell tests
+        shell: sh
+        env:
+          GLOBS: ${{ inputs.shell-tests }}
+        run: |
+          for t in $GLOBS; do
+            [ -f "$t" ] || continue
+            echo "::group::$t"
+            sh "$t"
+            echo "::endgroup::"
+          done
+
+      - name: Lint (release target)
+        shell: sh
+        run: |
+          set -- --release --workspace --all-targets --locked
+          if [ -n "$RUST_TARGET" ]; then set -- "$@" --target "$RUST_TARGET"; fi
+          cargo clippy "$@" -- -D warnings
+
+      - name: Release build
+        shell: sh
+        run: |
+          set -- --release --workspace --locked
+          release=target/release
+          if [ -n "$RUST_TARGET" ]; then set -- "$@" --target "$RUST_TARGET"; release=target/$RUST_TARGET/release; fi
+          cargo build "$@"
+          echo "REA_RELEASE_DIR=$PWD/$release" >> "$GITHUB_ENV"
+          ref=$(printf '%s' "$GITHUB_REF_NAME" | tr '/' '-')
+          case $ref in '' | *[!A-Za-z0-9._-]*) echo "::error::unexpected ref name"; exit 1 ;; esac
+          echo "REA_VERSION_NAME=$ref" >> "$GITHUB_ENV"
+
+      - name: Imports test
+        if: inputs.imports-test != ''
+        env:
+          CMD: ${{ inputs.imports-test }}
+        run: bash -euo pipefail -c "$CMD"
+
+      - name: Package
+        if: inputs.package-command != ''
+        env:
+          CMD: ${{ inputs.package-command }}
+          REA_CACHE: ${{ runner.temp }}/rea-cache
+        run: |
+          export REA_SDK="$PWD/$SDK_DIR"
+          bash -euo pipefail -c "$CMD"
+
+      - name: Package allowlist
+        if: inputs.package-allowlist != ''
+        shell: sh
+        env:
+          ALLOWLIST: ${{ inputs.package-allowlist }}
+          PACKAGES: ${{ inputs.package-dir }}
+        run: |
+          [ -n "$PACKAGES" ] || { echo "::error::package-allowlist needs package-dir"; exit 1; }
+          n=0
+          for p in $PACKAGES; do
+            [ -e "$p" ] || continue
+            sh "$SDK_DIR/packaging/smoke-package.sh" "$p" "$ALLOWLIST"
+            n=$((n + 1))
+          done
+          [ "$n" -gt 0 ] || { echo "::error::no package matches $PACKAGES"; exit 1; }
+
+      - name: Upload the packages
+        if: inputs.artifact-name != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-paths }}
+          if-no-files-found: error

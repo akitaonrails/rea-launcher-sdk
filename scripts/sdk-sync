@@ -1,0 +1,117 @@
+#!/bin/sh
+# rea-launcher-sdk scripts/sdk-sync: vendors the SDK's shell and packaging
+# files into a launcher repository under sdk/, stamped with sdk/VERSION.
+#
+#   scripts/sdk-sync [--tag TAG] <launcher-repo>   write <launcher-repo>/sdk
+#   scripts/sdk-sync --check <launcher-repo>       exit 1 when sdk/ drifted
+#
+# Layout: sdk/rea-play.sh (from shell/), sdk/packaging/... (as in the SDK).
+# sdk/ belongs to this script: never edit it by hand, re-run the sync.
+# VERSION records the SDK tag (git describe --exact-match, or --tag, or
+# "untagged") and commit ("-dirty" when the SDK files had local changes).
+set -eu
+die() { echo "sdk-sync: $*" >&2; exit 1; }
+usage() { echo "usage: $0 [--tag TAG] <launcher-repo> | $0 --check <launcher-repo>" >&2; exit 2; }
+
+SDK=$(cd "$(dirname "$0")/.." && pwd -P)
+MODE=sync TAG=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --check) MODE=check; shift ;;
+    --tag) [ $# -ge 2 ] || usage; TAG=$2; shift 2 ;;
+    -h | --help) usage ;;
+    -*) die "unknown option $1" ;;
+    *) break ;;
+  esac
+done
+[ $# -eq 1 ] || usage
+[ -d "$1" ] || die "no launcher repository $1"
+REPO=$(cd "$1" && pwd -P)
+[ "$REPO" != "$SDK" ] || die "refusing to vendor the SDK into itself"
+
+# The vendored set, SDK-relative (dest() maps it into sdk/).
+files() {
+  (
+    cd "$SDK"
+    for f in shell/rea-play.sh packaging/*.sh packaging/appimage/AppRun.in \
+      packaging/appimage/tools.pins packaging/appimage/wine/COPYING.LIB \
+      packaging/appimage/wine/LICENSE packaging/appimage/wine/SOURCE.txt; do
+      if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+    done
+  )
+}
+
+# Stamp: tag and commit of the SDK checkout.
+if [ -z "$TAG" ]; then
+  TAG=$(git -C "$SDK" describe --tags --exact-match HEAD 2>/dev/null || echo untagged)
+fi
+case $TAG in *[!A-Za-z0-9._+-]*) die "unsafe tag '$TAG'" ;; esac
+COMMIT=$(git -C "$SDK" rev-parse HEAD 2>/dev/null || echo unknown)
+# shellcheck disable=SC2046
+if [ "$COMMIT" != unknown ] && [ -n "$(git -C "$SDK" status --porcelain -- $(files) 2>/dev/null)" ]; then
+  COMMIT=$COMMIT-dirty
+fi
+
+T=$(mktemp -d "${TMPDIR:-/tmp}/sdk-sync.XXXXXX")
+trap 'rm -rf "$T"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+STAGE=$T/sdk
+mkdir -p "$STAGE"
+files > "$T/list"
+[ -s "$T/list" ] || die "no SDK files found in $SDK"
+# The play library sits at sdk/rea-play.sh, where the helpers look for it.
+dest() { case $1 in shell/rea-play.sh) echo rea-play.sh ;; *) echo "$1" ;; esac; }
+while IFS= read -r f; do
+  d=$(dest "$f")
+  mkdir -p "$STAGE/$(dirname "$d")"
+  cp "$SDK/$f" "$STAGE/$d"
+  if [ -x "$SDK/$f" ]; then chmod 755 "$STAGE/$d"; else chmod 644 "$STAGE/$d"; fi
+done < "$T/list"
+{
+  echo "# Vendored by rea-launcher-sdk scripts/sdk-sync; do not edit sdk/ by hand."
+  echo "tag=$TAG"
+  echo "commit=$COMMIT"
+} > "$STAGE/VERSION"
+
+if [ "$MODE" = check ]; then
+  [ -d "$REPO/sdk" ] || die "$REPO has no sdk/ (run scripts/sdk-sync $REPO)"
+  (cd "$STAGE" && find . -type f | LC_ALL=C sort) > "$T/want"
+  (cd "$REPO/sdk" && find . ! -type d | LC_ALL=C sort) > "$T/have"
+  LC_ALL=C comm -23 "$T/want" "$T/have" | sed 's|^\./|  missing: sdk/|' > "$T/report"
+  LC_ALL=C comm -13 "$T/want" "$T/have" | sed 's|^\./|  not from the SDK: sdk/|' >> "$T/report"
+  LC_ALL=C comm -12 "$T/want" "$T/have" > "$T/both"
+  while IFS= read -r f; do
+    f=${f#./}
+    if [ -L "$REPO/sdk/$f" ] || ! cmp -s "$STAGE/$f" "$REPO/sdk/$f"; then
+      echo "  changed: sdk/$f" >> "$T/report"
+    else
+      want_x=0 have_x=0
+      if [ -x "$STAGE/$f" ]; then want_x=1; fi
+      if [ -x "$REPO/sdk/$f" ]; then have_x=1; fi
+      [ "$want_x" = "$have_x" ] || echo "  mode differs: sdk/$f" >> "$T/report"
+    fi
+  done < "$T/both"
+  if [ -s "$T/report" ]; then
+    echo "sdk-sync: $REPO/sdk differs from rea-launcher-sdk $TAG ($COMMIT):" >&2
+    cat "$T/report" >&2
+    echo "sdk-sync: re-run scripts/sdk-sync from the SDK version the launcher should use" >&2
+    exit 1
+  fi
+  echo "sdk/ matches rea-launcher-sdk $TAG ($COMMIT)"
+  exit 0
+fi
+
+# Sync: replace sdk/ as a whole, but never a folder this script didn't write.
+if [ -e "$REPO/sdk" ] && [ ! -f "$REPO/sdk/VERSION" ]; then
+  die "$REPO/sdk exists without sdk/VERSION; move it away first"
+fi
+NEW=$REPO/.sdk-sync.new.$$ OLD=$REPO/.sdk-sync.old.$$
+rm -rf "$NEW" "$OLD"
+cp -R "$STAGE" "$NEW"
+if [ -e "$REPO/sdk" ]; then mv "$REPO/sdk" "$OLD"; fi
+mv "$NEW" "$REPO/sdk"
+rm -rf "$OLD"
+echo "vendored rea-launcher-sdk $TAG ($COMMIT) into $REPO/sdk"

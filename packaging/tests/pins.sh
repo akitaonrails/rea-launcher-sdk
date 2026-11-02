@@ -1,0 +1,102 @@
+#!/bin/sh
+# shellcheck disable=SC2034 # PIN_* settings are read by the sourced pins.sh
+# Tests packaging/pins.sh with file:// urls (no network): sh packaging/tests/pins.sh
+set -u
+HERE=$(cd "$(dirname "$0")" && pwd -P)
+T=$(mktemp -d "${TMPDIR:-/tmp}/rea-pins-test.XXXXXX")
+trap 'rm -rf "$T"' EXIT
+. "$HERE/../pins.sh"
+fails=0
+ok() { echo "ok   $1"; }
+bad() { echo "FAIL $1"; fails=$((fails + 1)); }
+check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1: want '$2', got '$3'"; fi; }
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+
+mkdir -p "$T/up" "$T/mirror" "$T/pins.d"
+echo "real payload" > "$T/up/tool.tar.gz"
+echo "real payload" > "$T/mirror/tool-mirror.tar.gz"
+echo "tampered" > "$T/up/evil.zip"
+GOOD=$(sha "$T/up/tool.tar.gz")
+EVIL_URL=file://$T/up/evil.zip
+cat > "$T/pins" <<EOF
+# a comment
+tool file://$T/up/tool.tar.gz $GOOD file://$T/mirror/tool-mirror.tar.gz
+
+moved file://$T/up/gone.tar.gz $GOOD file://$T/missing/also-gone.tar.gz file://$T/mirror/tool-mirror.tar.gz
+tampered $EVIL_URL $GOOD file://$T/mirror/tool-mirror.tar.gz
+nowhere file://$T/up/gone.tar.gz $GOOD
+inner - $GOOD
+dup file://a/x $GOOD
+dup file://a/y $GOOD
+shortsha file://$T/up/tool.tar.gz abc123
+junkfield file://$T/up/tool.tar.gz $GOOD 325966152
+EOF
+echo "file://$T/up/tool.tar.gz $GOOD" > "$T/pins.d/perfile.txt"
+printf '# just a comment\n' > "$T/pins.d/empty.txt"
+
+# shellcheck disable=SC2034 # read by pins.sh
+PIN_FILE=$T/pins PIN_DIR=$T/pins.d PIN_CACHE=$T/cache PIN_RETRY=0
+
+check "pin_sha" "$GOOD" "$(pin_sha tool)"
+check "pin_url is the primary" "file://$T/up/tool.tar.gz" "$(pin_url tool)"
+check "pin_urls lists mirrors in order" "file://$T/up/tool.tar.gz
+file://$T/mirror/tool-mirror.tar.gz" "$(pin_urls tool)"
+check "checksum-only pin has a sha" "$GOOD" "$(pin_sha inner)"
+check "checksum-only pin has no urls" "" "$(pin_urls inner)"
+check "per-name file (PIN_DIR)" "$GOOD" "$(pin_sha perfile)"
+check "pin_names" "tool moved tampered nowhere inner dup dup shortsha junkfield empty perfile" \
+  "$(pin_names | tr '\n' ' ' | sed 's/ $//')"
+
+if pin_sha missing 2>/dev/null; then bad "unknown name fails"; else ok "unknown name fails"; fi
+if pin_sha empty 2>/dev/null; then bad "empty per-name file fails"; else ok "empty per-name file fails"; fi
+if pin_sha dup 2>/dev/null; then bad "duplicate name fails"; else ok "duplicate name fails"; fi
+if pin_sha shortsha 2>/dev/null; then bad "short sha fails"; else ok "short sha fails"; fi
+if pin_sha junkfield 2>/dev/null; then bad "non-url trailing field fails"; else ok "non-url trailing field fails"; fi
+if pin_sha 'a b' 2>/dev/null; then bad "unsafe name fails"; else ok "unsafe name fails"; fi
+if pin_sha '../x' 2>/dev/null; then bad "path name fails"; else ok "path name fails"; fi
+
+f=$(pin_fetch tool "$T/dl" 2>/dev/null)
+check "fetch from the primary url" "$T/dl/tool.tar.gz" "$f"
+check "fetched content" "real payload" "$(cat "$f")"
+[ -f "$T/cache/$GOOD" ] && ok "fetch fills the cache" || bad "fetch fills the cache"
+
+rm -rf "$T/dl"
+f=$(PIN_CACHE='' pin_fetch moved "$T/dl" 2>"$T/log")
+check "fallback keeps the primary file name" "$T/dl/gone.tar.gz" "$f"
+check "fallback content" "real payload" "$(cat "$f" 2>/dev/null)"
+grep -q 'also-gone' "$T/log" && ok "mirrors tried in order" || bad "mirrors tried in order"
+
+f=$(PIN_CACHE='' pin_fetch tampered "$T/dl" 2>/dev/null)
+check "a wrong checksum falls through to the mirror" "real payload" "$(cat "$f" 2>/dev/null)"
+[ -z "$(ls -A "$T/dl" | grep '\.part' || true)" ] && ok "no .part leftovers" || bad "no .part leftovers"
+
+if (PIN_CACHE=''; pin_fetch nowhere "$T/dl2") >/dev/null 2>&1; then bad "no source fails"; else ok "no source fails"; fi
+[ ! -e "$T/dl2/gone.tar.gz" ] && ok "a failed fetch leaves no file" || bad "a failed fetch leaves no file"
+if pin_fetch inner "$T/dl2" >/dev/null 2>&1; then bad "checksum-only fetch fails"; else ok "checksum-only fetch fails"; fi
+
+# Served from the cache once upstream and mirror are gone.
+mv "$T/up" "$T/up.off"; mv "$T/mirror" "$T/mirror.off"
+f=$(pin_fetch tool "$T/dl3" 2>/dev/null)
+check "cache serves an offline fetch" "real payload" "$(cat "$f" 2>/dev/null)"
+# A corrupted cache entry is dropped, never used.
+rm -rf "$T/dl3"; echo corrupt > "$T/cache/$GOOD"
+if pin_fetch tool "$T/dl3" >/dev/null 2>&1; then bad "corrupt cache is not trusted"; else ok "corrupt cache is not trusted"; fi
+[ ! -e "$T/cache/$GOOD" ] && ok "corrupt cache entry removed" || bad "corrupt cache entry removed"
+mv "$T/up.off" "$T/up"; mv "$T/mirror.off" "$T/mirror"
+
+# An already verified destination file is reused; a stale one is replaced.
+echo stale > "$T/dl4.tar.gz"; mkdir -p "$T/dl4"; cp "$T/dl4.tar.gz" "$T/dl4/tool.tar.gz"
+f=$(PIN_CACHE='' pin_fetch tool "$T/dl4" 2>/dev/null)
+check "stale destination replaced" "real payload" "$(cat "$f" 2>/dev/null)"
+
+pin_verify "$T/up/tool.tar.gz" "$GOOD" && ok "pin_verify accepts" || bad "pin_verify accepts"
+if pin_verify "$T/up/evil.zip" "$GOOD" 2>/dev/null; then bad "pin_verify rejects"; else ok "pin_verify rejects"; fi
+
+# The SDK's own tool pins parse.
+PIN_FILE=$HERE/../appimage/tools.pins PIN_DIR=
+for n in wine appimagetool appimage-runtime; do
+  pin_sha "$n" >/dev/null && ok "tools.pins: $n" || bad "tools.pins: $n"
+done
+if pin_urls appimage-runtime | grep -q /continuous/; then bad "runtime pinned to a dated release"; else ok "runtime pinned to a dated release"; fi
+
+[ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

@@ -1,0 +1,125 @@
+name: launcher-release
+
+# Reusable release for a rea launcher's version tag: checks the tag against
+# the Cargo version, gathers the packages uploaded by earlier jobs, writes
+# SHA256SUMS, attests provenance and publishes the GitHub release with the
+# tag's CHANGELOG section as notes.
+#
+# The calling job must grant contents: write, id-token: write and
+# attestations: write, and run only for tags:
+#   if: startsWith(github.ref, 'refs/tags/v')
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: Cargo package whose version the tag must match (v<version>).
+        type: string
+        required: true
+      artifact-pattern:
+        description: Artifacts to publish (actions/download-artifact pattern).
+        type: string
+        required: true
+      changelog:
+        description: Changelog with a "## <version>" section per release.
+        type: string
+        default: CHANGELOG.md
+      notes:
+        description: "changelog: the tag's CHANGELOG section; generate: GitHub's generated notes."
+        type: string
+        default: changelog
+      attest:
+        description: Attest build provenance for every published file.
+        type: boolean
+        default: true
+      sdk-dir:
+        description: Where sdk-sync vendored the SDK.
+        type: string
+        default: sdk
+      runs-on:
+        type: string
+        default: ubuntu-24.04
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Publish the release
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Only for version tags
+        shell: sh
+        run: |
+          [ "$GITHUB_REF_TYPE" = tag ] || { echo "::error::launcher-release runs for tags only"; exit 1; }
+          case $GITHUB_REF_NAME in v[0-9]*) ;; *) echo "::error::tags look like v1.2.3"; exit 1 ;; esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The tag matches the package version
+        shell: sh
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r --arg p "$PACKAGE" '.packages[] | select(.name == $p) | .version')
+          [ -n "$version" ] || { echo "::error::no Cargo package named $PACKAGE"; exit 1; }
+          [ "$GITHUB_REF_NAME" = "v$version" ] \
+            || { echo "::error::tag $GITHUB_REF_NAME does not match $PACKAGE $version"; exit 1; }
+
+      - name: Release notes
+        shell: sh
+        env:
+          NOTES: ${{ inputs.notes }}
+          CHANGELOG: ${{ inputs.changelog }}
+          SDK_DIR: ${{ inputs.sdk-dir }}
+        run: |
+          case $NOTES in
+            changelog) sh "$SDK_DIR/packaging/release-notes.sh" "$GITHUB_REF_NAME" "$CHANGELOG" > "$RUNNER_TEMP/notes.md"
+                       cat "$RUNNER_TEMP/notes.md" ;;
+            generate) ;;
+            *) echo "::error::notes must be changelog or generate"; exit 1 ;;
+          esac
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ inputs.artifact-pattern }}
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        shell: sh
+        run: |
+          cd dist
+          [ -z "$(find . -mindepth 1 -type d)" ] || { echo "::error::artifacts must hold files only"; find . -type d; exit 1; }
+          set -- *
+          [ -f "$1" ] || { echo "::error::no artifacts downloaded"; exit 1; }
+          sha256sum -- "$@" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        if: inputs.attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+      - name: Create the GitHub release
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          if [ "$NOTES" = generate ]; then
+            set -- --generate-notes
+          else
+            set -- --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --verify-tag "$@"

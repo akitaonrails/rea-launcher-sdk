@@ -1,0 +1,71 @@
+#!/bin/sh
+# Plays Example Rally (a hypothetical Win32 game) on Linux through Wine and
+# gamescope, using the rea-launcher-sdk play library.
+#
+#   example-play             show the settings window, then start the game
+#   example-play --play      start with the saved settings (no window)
+#   example-play stop        end the game session and its private Wine prefix
+#   example-play status      running or idle
+#   example-play --fix-pads  re-seed Wine's controller bridge (game command)
+#
+# Optional environment:
+#   EXR_PREFIX    Wine prefix   (default ~/.local/share/exr-launcher/prefix)
+#   EXR_LAUNCHER  EXRLauncher.exe (default: next to this script, or one up)
+#   EXR_RUN       a wrapper that runs wine and gamescope, e.g.
+#                 "distrobox enter gaming --" when they live in a container
+#   EXR_WAIT      set by the AppImage (every launch waits anyway)
+set -u
+
+# --- configuration (read by rea-play.sh when it is sourced) ---------------
+REA_APP=exr-launcher                  # ~/.config/exr-launcher, the prefix name
+REA_EXE_NAME=EXRLauncher.exe
+REA_EXE_HINT=EXR_LAUNCHER
+REA_EXE=${EXR_LAUNCHER:-}
+REA_PREFIX=${EXR_PREFIX:-}
+REA_RUN=${EXR_RUN:-}
+REA_WAIT=${EXR_WAIT:-}
+REA_CFG_APPDATA=EXRLauncher           # AppData\Local\EXRLauncher\launcher.cfg
+REA_ORIGINAL_SIZE=640x480             # resolution = original
+REA_WINDOWED_KEY=display_mode         # windowed/borderless skip gamescope
+REA_DLL_OVERRIDES='dinput8,d3d9=n,b'  # Xidi + DXVK from the game's folder
+REA_WINEDBG_OFF=1                     # a fault ends the game, no hidden debugger
+REA_GAME_PROCS='ExampleRally.exe'     # the launcher may return before the game
+REA_WINEBUS_MARKER=.exr-winebus
+
+# --- the library: next to this script in a package, else the vendored copy --
+_here=$(dirname "$(readlink -f "$0")")
+if [ -f "$_here/rea-play.sh" ]; then
+  . "$_here/rea-play.sh"
+elif [ -f "$_here/../sdk/rea-play.sh" ]; then
+  . "$_here/../sdk/rea-play.sh"
+else
+  echo "rea-play.sh not found next to $0 or in ../sdk (run scripts/sdk-sync)" >&2
+  exit 1
+fi
+
+# --- game hooks ----------------------------------------------------------------
+
+# Once per prefix: no crash dialog, the pad bridge seeded.
+rea_hook_before_start() {
+  rea_wine_no_crash_dialog
+  rea_seed_winebus
+  # Post-processing for the game only (gamescope must not load the layer).
+  if [ "$(rea_get_key postfx)" = sharpen ] && [ -f "$REA_HERE/thirdparty/vkbasalt/vkBasalt.json" ]; then
+    rea_game_env VK_LAYER_PATH "$REA_HERE/thirdparty/vkbasalt"
+    rea_game_env VK_INSTANCE_LAYERS VK_LAYER_VKBASALT_post_processing
+  fi
+}
+
+rea_hook_command() {
+  case "$1" in
+    --fix-pads)
+      rm -f "$REA_PREFIX/$REA_WINEBUS_MARKER"
+      rea_seed_winebus ;;
+    *) return 127 ;;
+  esac
+}
+rea_hook_usage() { echo "  --fix-pads          re-seed Wine's controller bridge"; }
+
+# Tests load the configuration and hooks without running anything.
+[ -n "${EXR_PLAY_FUNCTIONS_ONLY:-}" ] && return 0
+rea_main "$@"

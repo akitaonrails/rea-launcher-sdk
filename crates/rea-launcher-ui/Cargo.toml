@@ -1,0 +1,18 @@
+[package]
+name = "rea-launcher-ui"
+description = "Settings-window kit for the rea retro-game launchers: theme, Barlow fonts, widgets, window sizing, pad navigation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rea-launcher.workspace = true
+eframe.workspace = true
+jpeg-decoder.workspace = true
+
+# winit needs a windowing backend to build on Linux (host tests, and SCR's
+# native Linux launcher). Windows builds are unaffected.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { workspace = true, features = ["x11", "wayland"] }

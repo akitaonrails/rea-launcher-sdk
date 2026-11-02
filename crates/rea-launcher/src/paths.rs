@@ -1,0 +1,249 @@
+//! Path resolution and the runtime/game overlap check.
+//!
+//! `resolve` is CMR4's (canonicalise the nearest existing ancestor, so a
+//! runtime folder that does not exist yet, is relative, or is reached
+//! through `..` or a symlink is still compared by its real place) with the
+//! lexical fallback all five adopted after "Incorrect function" on Windows
+//! RAM disks and `subst` drives (CMR3 3d63927). `check_separate` adds CMR3's
+//! second, lexical comparison as written: when only one side canonicalises,
+//! the two spellings differ (`\\?\` prefixes, resolved aliases).
+//! `simplify_extended_length` is OR's/CMR4's.
+
+use std::ffi::{OsStr, OsString};
+use std::io;
+use std::path::{Component, Path, PathBuf};
+
+type Canonicalize<'a> = &'a dyn Fn(&Path) -> io::Result<PathBuf>;
+
+/// The native path of a `/`-separated relative path below `root`.
+pub fn native(root: &Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .filter(|part| !part.is_empty())
+        .fold(root.to_path_buf(), |p, part| p.join(part))
+}
+
+/// Drops `.` and folds `..` into the component before it, as text.
+pub fn normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !normalized.has_root() {
+                    normalized.push("..");
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn absolute(path: &Path, cwd: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
+/// The absolute, real form of `path`, even when its last components do not
+/// exist yet: the nearest existing ancestor is canonicalised (symlinks,
+/// Windows aliases), the rest appended with `.`/`..` handled as text.
+/// Relative paths start at `cwd`. Where the volume cannot canonicalise at
+/// all (any error but NotFound), the whole path is normalised as text.
+pub fn resolve(path: &Path, cwd: &Path) -> Result<PathBuf, String> {
+    resolve_with(path, cwd, &|p| std::fs::canonicalize(p))
+}
+
+fn resolve_with(path: &Path, cwd: &Path, canonicalize: Canonicalize) -> Result<PathBuf, String> {
+    let absolute = absolute(path, cwd);
+    let mut ancestor = absolute.as_path();
+    let mut suffix = Vec::new();
+    loop {
+        match canonicalize(ancestor) {
+            Ok(real) => {
+                let mut resolved = simplify_extended_length(&real);
+                for component in suffix.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(normalize(&resolved));
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let Some(component) = ancestor.components().next_back() else {
+                    return Err(format!("cannot resolve {}", path.display()));
+                };
+                match component {
+                    Component::Normal(name) => suffix.push(name.to_os_string()),
+                    Component::ParentDir => suffix.push("..".into()),
+                    Component::CurDir => {}
+                    _ => return Ok(normalize(&absolute)),
+                }
+                let Some(parent) = ancestor.parent() else {
+                    return Ok(normalize(&absolute));
+                };
+                ancestor = parent;
+            }
+            Err(_) => return Ok(normalize(&absolute)),
+        }
+    }
+}
+
+/// Refuses a folder the launcher writes (`runtime`, or a saves folder)
+/// that overlaps the game folder, including one that does not exist yet
+/// or reaches it through `..` or a symlink. Nothing is created.
+pub fn check_separate(game: &Path, runtime: &Path) -> Result<(), String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
+    check_separate_with(game, runtime, &cwd, &|p| std::fs::canonicalize(p))
+}
+
+fn check_separate_with(
+    game: &Path,
+    runtime: &Path,
+    cwd: &Path,
+    canonicalize: Canonicalize,
+) -> Result<(), String> {
+    let overlap = |a: &Path, b: &Path| a.starts_with(b) || b.starts_with(a);
+    let g = resolve_with(game, cwd, canonicalize)?;
+    let r = resolve_with(runtime, cwd, canonicalize)?;
+    let lexical = |p: &Path| normalize(&absolute(p, cwd));
+    if overlap(&r, &g) || overlap(&lexical(runtime), &lexical(game)) {
+        return Err(format!(
+            "{} must be outside the game folder {}",
+            runtime.display(),
+            game.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn strip_prefix_os(value: &OsStr, prefix: &str) -> Option<OsString> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let wide: Vec<u16> = value.encode_wide().collect();
+    let prefix: Vec<u16> = prefix.encode_utf16().collect();
+    wide.starts_with(&prefix)
+        .then(|| OsString::from_wide(&wide[prefix.len()..]))
+}
+
+#[cfg(unix)]
+fn strip_prefix_os(value: &OsStr, prefix: &str) -> Option<OsString> {
+    use std::os::unix::ffi::OsStrExt;
+    let rest = value.as_bytes().strip_prefix(prefix.as_bytes())?;
+    Some(OsStr::from_bytes(rest).to_os_string())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn strip_prefix_os(value: &OsStr, prefix: &str) -> Option<OsString> {
+    value.to_str()?.strip_prefix(prefix).map(OsString::from)
+}
+
+/// Turns Win32 extended-length paths (`\\?\C:\…`, `\\?\UNC\server\…`, what
+/// `canonicalize` returns on Windows) back into drive and UNC paths, so
+/// they compare with paths that were only normalised and old games accept
+/// them. Other paths are returned unchanged.
+pub fn simplify_extended_length(path: &Path) -> PathBuf {
+    if let Some(rest) = strip_prefix_os(path.as_os_str(), r"\\?\") {
+        if let Some(unc) = strip_prefix_os(&rest, r"UNC\") {
+            let mut simplified = OsString::from(r"\\");
+            simplified.push(unc);
+            return PathBuf::from(simplified);
+        }
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_dir;
+
+    #[test]
+    fn native_joins_slash_separated_parts() {
+        let p = native(Path::new("root"), "Data/Tracks/a.dat");
+        assert_eq!(
+            p,
+            Path::new("root").join("Data").join("Tracks").join("a.dat")
+        );
+        assert_eq!(native(Path::new("root"), ""), Path::new("root"));
+    }
+
+    #[test]
+    fn overlapping_folders_are_refused() {
+        let game = test_dir("paths-overlap");
+        assert!(check_separate(&game, &game.join("rt")).is_err());
+        assert!(check_separate(&game.join("inner"), &game).is_err());
+        assert!(check_separate(&game, &test_dir("paths-elsewhere")).is_ok());
+        std::fs::remove_dir_all(&game).unwrap();
+    }
+
+    #[test]
+    fn missing_relative_and_dotdot_runtimes_are_resolved() {
+        let canon = |p: &Path| std::fs::canonicalize(p);
+        let game = test_dir("paths-relative");
+        let outside = resolve(Path::new("../outside-runtime"), &game).unwrap();
+        assert_eq!(
+            outside,
+            std::fs::canonicalize(game.parent().unwrap())
+                .unwrap()
+                .join("outside-runtime")
+        );
+        assert!(check_separate_with(&game, Path::new("child"), &game, &canon).is_err());
+        assert!(check_separate_with(&game, Path::new("missing/../child"), &game, &canon).is_err());
+        assert!(check_separate_with(&game, Path::new("../outside"), &game, &canon).is_ok());
+        assert!(!game.join("child").exists(), "nothing is created");
+        std::fs::remove_dir_all(&game).unwrap();
+    }
+
+    #[test]
+    fn volumes_that_cannot_canonicalize_are_compared_lexically() {
+        let unsupported =
+            |_: &Path| -> io::Result<PathBuf> { Err(io::Error::other("Incorrect function")) };
+        let cwd = Path::new("/r/games");
+        assert_eq!(
+            resolve_with(Path::new("cmr3/./x/../rt"), cwd, &unsupported).unwrap(),
+            PathBuf::from("/r/games/cmr3/rt")
+        );
+        let game = Path::new("/r/games/cmr3");
+        assert!(check_separate_with(game, Path::new("cmr3/rt"), cwd, &unsupported).is_err());
+        assert!(check_separate_with(game, Path::new("../rt"), cwd, &unsupported).is_ok());
+        // Only the game canonicalises (to another spelling): still refused.
+        let game_only = move |p: &Path| -> io::Result<PathBuf> {
+            if p == game {
+                Ok(PathBuf::from("/canonical/cmr3"))
+            } else {
+                Err(io::Error::other("Incorrect function"))
+            }
+        };
+        assert!(check_separate_with(game, Path::new("/r/games/cmr3/rt"), cwd, &game_only).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_parent_is_resolved_before_the_check() {
+        let game = test_dir("paths-alias-game");
+        let alias = test_dir("paths-alias-link");
+        std::fs::remove_dir(&alias).unwrap();
+        std::os::unix::fs::symlink(&game, &alias).unwrap();
+        assert!(check_separate(&game, &alias.join("new-runtime")).is_err());
+        std::fs::remove_file(&alias).unwrap();
+        std::fs::remove_dir_all(&game).unwrap();
+    }
+
+    #[test]
+    fn extended_length_paths_become_drive_and_unc_paths() {
+        assert_eq!(
+            simplify_extended_length(Path::new(r"\\?\C:\Games\OutRun")),
+            PathBuf::from(r"C:\Games\OutRun")
+        );
+        assert_eq!(
+            simplify_extended_length(Path::new(r"\\?\UNC\server\share\OutRun")),
+            PathBuf::from(r"\\server\share\OutRun")
+        );
+        assert_eq!(
+            simplify_extended_length(Path::new(r"C:\Games")),
+            PathBuf::from(r"C:\Games")
+        );
+    }
+}
