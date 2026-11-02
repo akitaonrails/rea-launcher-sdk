@@ -5,7 +5,7 @@
 REA_APP=test-launcher REA_PREFIX=$T/prefix REA_SYSFS=$T/nosys
 : > "$T/TestLauncher.exe"
 REA_EXE=$T/TestLauncher.exe REA_CFG=$T/launcher.cfg REA_EXE_NAME=TestLauncher.exe REA_EXE_HINT=TEST_LAUNCHER
-load_lib
+init_lib
 make_fake_run
 REA_RUN=$T/fake-run REA_GPU=
 main() { ( rea_main "$@" ) > "$T/out" 2>&1; echo $?; }
@@ -76,5 +76,66 @@ checked --check now"
 check "hook: unknown still exits 2" "$(main nope)" 2
 main --help > /dev/null
 contains "hook: usage extended" "$(cat "$T/out")" "pick a game"
+
+echo "# the hook sees every command first (screamer-play's CLI, kept exactly)"
+mkdir -p "$T/scr/linux"
+cp "$LIB" "$T/scr/linux/rea-play.sh"
+cat > "$T/scr/ScreamerLauncher" <<'FAKE'
+#!/bin/sh
+case "$*" in *--settings*--linux*) echo "window $*" >> "$T/scr.log"; exit 0 ;; esac
+echo "launcher $*" >> "$T/scr.log"
+FAKE
+chmod +x "$T/scr/ScreamerLauncher"
+# The Screamer recipe from README.md.
+cat > "$T/scr/linux/screamer-play" <<'SCR'
+#!/bin/sh
+set -u
+_here=$(dirname "$(readlink -f "$0")")
+if [ -f "$_here/rea-play.sh" ]; then . "$_here/rea-play.sh"
+elif [ -f "$_here/../sdk/rea-play.sh" ]; then . "$_here/../sdk/rea-play.sh"
+else echo "rea-play.sh not found next to $0 or in ../sdk" >&2; exit 1; fi
+REA_MODE=native REA_APP=screamer-launcher REA_EXE_NAME=ScreamerLauncher
+REA_EXE_HINT=SCREAMER_LAUNCHER REA_EXE=${SCREAMER_LAUNCHER:-}
+REA_EXE_SEARCH="../target/release/ScreamerLauncher ../target/debug/ScreamerLauncher"
+REA_STATE_BASE=${XDG_CONFIG_HOME:-$HOME/.config}
+REA_GAMESCOPE_OUTPUT=0 REA_DEFAULT_SCALER=fsr REA_FULLSCREEN_SIZE=screen
+REA_SCREEN=${SCREAMER_SCREEN:-} REA_SDL_ENV= REA_WAIT=${SCREAMER_WAIT:-}
+rea_hook_command() {
+  case "${1:-}" in
+    --play|start|status|stop) return 127 ;;
+    1|2|3|s1|s2|sr|screamer|screamer1|screamer2|rally|screamer-rally) rea_cmd_default "$@" ;;
+    *) rea_require_exe || exit 1; exec "$REA_EXE" "$@" ;;
+  esac
+}
+rea_init
+[ -n "${SCREAMER_PLAY_FUNCTIONS_ONLY:-}" ] && return 0
+rea_main "$@"
+SCR
+scr() { rm -f "$T/scr.log"; PATH=$T/scr:$PATH sh "$T/scr/linux/screamer-play" "$@" > "$T/out" 2>&1; echo $?; }
+printf '#!/bin/sh\nexit 1\n' > "$T/scr/gamescope-absent"
+for cmd in --help -h help --settings settings play --status --stop --check --controllers; do
+  scr "$cmd" > /dev/null
+  check "screamer-play $cmd goes to ScreamerLauncher" "$(cat "$T/scr.log" 2>/dev/null)" "launcher $cmd"
+done
+check "screamer-play status is the helper's" "$(scr status; cat "$T/out")" "0
+idle"
+check "screamer-play stop is the helper's" "$(scr stop; cat "$T/out")" "0
+stopped"
+scr rally > /dev/null
+contains "screamer-play rally: the window with the game picked" "$(cat "$T/scr.log")" "window --settings --linux rally"
+contains "...then the game, without the selector (as today)" "$(cat "$T/scr.log")" "launcher --no-window"
+scr --play 2 > /dev/null
+check "screamer-play --play 2" "$(cat "$T/scr.log")" "launcher --no-window 2"
+XDG_CONFIG_HOME=$T/xdg scr status > /dev/null
+[ -d "$T/xdg/screamer-launcher" ] && ok "the state folder follows XDG_CONFIG_HOME for Screamer" || fail "Screamer state not under XDG"
+mkdir -p "$T/scr2/linux" "$T/scr2/target/release"
+cp "$T/scr/linux/screamer-play" "$T/scr/linux/rea-play.sh" "$T/scr2/linux/"
+cp "$T/scr/ScreamerLauncher" "$T/scr2/target/release/"
+rm -f "$T/scr.log"; (cd / && sh "$T/scr2/linux/screamer-play" --check > /dev/null 2>&1)
+check "a relative REA_EXE_SEARCH works from any cwd" "$(cat "$T/scr.log" 2>/dev/null)" "launcher --check"
+rm "$T/scr/ScreamerLauncher"
+check "no launcher for a pass-through: exit 1" "$(scr --check)" 1
+contains "with the reason" "$(cat "$T/out")" "ScreamerLauncher not found next to screamer-play (or set SCREAMER_LAUNCHER)"
+
 trap 'rm -rf "$T"' EXIT
 finish

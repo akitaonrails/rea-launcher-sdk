@@ -8,7 +8,7 @@
 REA_APP=test-launcher REA_PREFIX=$T/prefix REA_SYSFS=$T/nosys
 : > "$T/TestLauncher.exe"
 REA_EXE=$T/TestLauncher.exe REA_CFG=$T/launcher.cfg
-load_lib
+init_lib
 make_fake_run
 REA_RUN=$T/fake-run REA_GPU=
 C=$REA_CFG
@@ -156,5 +156,25 @@ REA_PLAY_ARGS="--no-window --linux"
 rea_start > /dev/null
 check "SRR's play flags" "$(tail -2 "$T/args" | tr '\n' ' ')" "<--no-window> <--linux> "
 REA_PLAY_ARGS=--no-window
+
+echo "# player values never glob"
+mkdir -p "$T/globdir"; : > "$T/globdir/AAA"; : > "$T/globdir/BBB"
+cd "$T/globdir"
+REA_PLAY_ARGS='--no-window *' REA_GAMESCOPE_EXTRA='--x *' REA_GPU='GLOB=*'
+SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS='*'
+run_with 'resolution = 1920x1080\n'
+lacks "no file names in the command" "$(ran)" "AAA"
+contains "REA_PLAY_ARGS keeps a literal *" "$(tail -1 "$T/args")" "<*>"
+contains "REA_GAMESCOPE_EXTRA keeps a literal *" "$(ran)" "--x * --"
+contains "REA_GPU keeps a literal *" "$(ran)" "GLOB=* "
+contains "a caller's SDL value keeps a literal *" "$(ran)" "SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=* "
+echo 0 > "$T/rc"; rea_settings > /dev/null
+lacks "the window's command never globs" "$(cat "$T/settings")" "AAA"
+case $- in *f*) fail "globbing left off after a start" ;; *) ok "globbing is back on after a start" ;; esac
+set -f; run_with ''; case $- in *f*) ok "a caller's own set -f is kept" ;; *) fail "set -f was dropped" ;; esac; set +f
+unset SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS
+REA_PLAY_ARGS=--no-window REA_GAMESCOPE_EXTRA= REA_GPU=
+cd "$T"
+
 trap 'rm -rf "$T"' EXIT
 finish

@@ -40,7 +40,8 @@ The SDK's `packaging/appimage/AppRun.in` exports `<PREFIX>_LAUNCHER`,
 ```sh
 #!/bin/sh
 set -u
-REA_APP=cmr4-launcher
+<library lookup above>                   # 1. source (drops inherited REA_*)
+REA_APP=cmr4-launcher                    # 2. configure
 REA_EXE_NAME=CMR4Launcher.exe
 REA_EXE_HINT=CMR4_LAUNCHER
 REA_EXE=${CMR4_LAUNCHER:-}
@@ -49,16 +50,35 @@ REA_RUN=${CMR4_RUN:-}
 REA_WAIT=${CMR4_WAIT:-}
 REA_CFG_APPDATA=CMR4Launcher
 # ...game choices (see the tables below)...
-<library lookup above>
-rea_hook_before_start() { ...; }        # only the hooks it needs
+rea_hook_before_start() { ...; }         # 3. only the hooks it needs
+rea_init || exit 1                       # 4. defaults, paths, state folder, prefix
 [ -n "${CMR4_PLAY_FUNCTIONS_ONLY:-}" ] && return 0
-rea_main "$@"
+rea_main "$@"                            # 5. (calls rea_init itself if needed)
 ```
 
-Set the configuration **before** sourcing. Sourcing runs `rea_init`, which
-resolves paths and creates the state folder and prefix. It never runs Wine,
-gamescope or the game. The library uses the `REA_` prefix for its state and
-`_rea_` for scratch variables, and it works under `set -u`.
+Source first, then configure. Sourcing only defines functions and **unsets
+every `REA_*` variable the library reads**, so a value inherited from the
+player's environment never configures a game: only what the game script
+assigns after sourcing counts. The player-facing interface stays each
+game's own variables, as today (`CMR3_PREFIX`, `SRR_RUN`, ...), mapped by
+the script. A game that wants to let players override something else opts
+in under its own name, for example:
+
+```sh
+[ -n "${CMR3_GPU+set}" ] && REA_GPU=$CMR3_GPU   # CMR3_GPU= means "no GPU choice"
+```
+
+(`REA_GPU` set, even empty, skips detection, so map it only when the
+player's variable is set; `REA_GPU=${CMR3_GPU-}` would always skip it.)
+
+`rea_init` applies the defaults, resolves paths and creates the state
+folder and prefix. Nothing runs Wine, gamescope or the game before
+`rea_main`. The library uses the `REA_` prefix for its state and `_rea_`
+for scratch variables, and it works under `set -u`. Player values that are
+word-split (`REA_RUN`, `REA_GPU`, `REA_PLAY_ARGS`, `REA_SETTINGS_ARGS`,
+`REA_GAMESCOPE_EXTRA`, `REA_EXE_SEARCH`, `REA_SDL_ENV` and the caller's SDL
+values) are split with globbing off, so a `*` never expands; a caller's
+own `set -f` is kept.
 
 ## Commands (`rea_main`)
 
@@ -69,7 +89,13 @@ gamescope or the game. The library uses the `REA_` prefix for its state and
 | `stop`, `--stop` | ends the session this helper started, then `wineserver -k` in the prefix (Wine mode). Prints `stopped` |
 | `status`, `--status` | `running` or `idle` |
 | `-h`, `--help`, `help` | usage, plus `rea_hook_usage` |
-| anything else | `rea_hook_command "$@"`. If the hook returns 127 (the default), usage goes to stderr and the exit code is 2 |
+| anything else | usage on stderr, exit code 2 |
+
+Every non-empty command line goes to `rea_hook_command "$@"` **first**. A
+return of 127 (the default) means "not mine" and the table above applies;
+anything else is the exit status. A game can therefore keep its own
+meaning for any word, the built-in aliases included (Screamer passes
+`--help`, `--settings`, `settings`, `play`, ... to its launcher, as today).
 
 Settings-window exit codes: `0` Play, then start. `4` no window could open,
 so it plays with the saved settings and says so. `3` closed without Play:
@@ -90,11 +116,12 @@ empty value (empty means "none").
 |---|---|---|
 | `REA_APP` | — (required) | state folder and prefix name, e.g. `cmr3-launcher` |
 | `REA_MODE` | `wine` | `wine` or `native` (no Wine: SCR) |
-| `REA_EXE` | found | the launcher program. When empty, the library looks for `$REA_HERE/$REA_EXE_NAME`, then `$REA_HERE/../$REA_EXE_NAME`, then each path in `REA_EXE_SEARCH`. Native mode needs it executable |
+| `REA_EXE` | found | the launcher program. When empty, the library looks for `$REA_HERE/$REA_EXE_NAME`, then `$REA_HERE/../$REA_EXE_NAME`, then each path in `REA_EXE_SEARCH`. Relative entries are taken from `REA_HERE` (the script's folder), never the current directory. Native mode needs it executable |
 | `REA_EXE_NAME`, `REA_EXE_HINT` | —, `REA_EXE` | the file name, and the variable named in the "not found" message (stderr, exit 1) |
 | `REA_HERE`, `REA_NAME` | dir and name of `$0` | the script's folder and name |
 | `REA_PREFIX` | `~/.local/share/$REA_APP/prefix` | the private Wine prefix |
-| `REA_STATE` | `${XDG_CONFIG_HOME:-~/.config}/$REA_APP` | holds `running.pid`, `play.log`, `settings.log`, `inner.sh`, `game.env` |
+| `REA_STATE_BASE` | `$HOME/.config` | where the state folder lives. The Wine launchers keep `~/.config` as today; Screamer sets `${XDG_CONFIG_HOME:-$HOME/.config}`, as its script and launcher do |
+| `REA_STATE` | `$REA_STATE_BASE/$REA_APP` | holds `running.pid`, `play.log`, `settings.log`, `inner.sh`, `game.env` |
 | `REA_RUN` | empty | wrapper for wine, gamescope and lookups, e.g. `distrobox enter gaming --` (word-split) |
 | `REA_CFG` | discovered | `launcher.cfg`. Discovery order: next to `REA_EXE` (a portable install wins, as in every launcher's own `settings_path`), then the last `drive_c/users/*/AppData/Local/$REA_CFG_APPDATA` that is not `Public` (falling back to `$USER`'s), or `$REA_STATE` in native mode or when `REA_CFG_APPDATA` is empty. `rea_start` discovers it again when the file does not exist yet |
 | `REA_CFG_NAME`, `REA_CFG_APPDATA` | `launcher.cfg`, empty | |
@@ -147,14 +174,17 @@ becomes the default, so gamescope never receives a filter it would refuse.
 | `REA_WINEDBG_OFF` | `0` | `1`: add `winedbg=d`, so a fault ends the game instead of freezing it in a hidden debugger (CMR3) |
 | `REA_WINEBUS_MARKER`, `REA_WINEBUS_VALUES` | `.rea-winebus`, `DisableHidraw\|DisableInput\|Enable SDL\|Map Controllers` | |
 
-### Test seams (never set in a shipped script)
+### Test seams (only with `REA_TEST=1`)
 
 `REA_SYSFS` (replaces `/sys`), `REA_ICD_DIRS` (replaces
 `/etc/vulkan/icd.d /usr/share/vulkan/icd.d`), `REA_NV_LIB_CHECK` (a command
 run instead of the `libGLX_nvidia` lookup), `REA_GAMESCOPE_CHECK`,
 `REA_LAUNCH_CMD` (replaces the whole supervised launch), `REA_PROC`
-(replaces `/proc` for `rea_game_alive`). `REA_SCREEN` doubles as a player
-setting.
+(replaces `/proc` for `rea_game_alive`). They are honoured only when a test
+sets `REA_TEST=1` after sourcing; like every `REA_*` variable they are
+dropped from the environment at source time, and the inner script receives
+the library's own `REA_TEST` (empty outside tests). `REA_SCREEN` is a
+normal setting (Screamer maps `SCREAMER_SCREEN` to it).
 
 ## Hooks (override after sourcing)
 
@@ -162,11 +192,15 @@ setting.
 |---|---|---|
 | `rea_hook_before_settings` | before the window | prefix bootstrap the window needs (SRR's winebus) |
 | `rea_hook_before_start` | in `rea_start`, before the inner script is written | prefix prep (`rea_wine_no_crash_dialog`, `rea_seed_winebus`, `rea_once`), game-only env (`rea_game_env`). `REA_GAME_ENV` is reset just before this hook, so call `rea_game_env` here |
-| `rea_hook_command "$@"` | for an unknown command | return 127 when the command is not handled. It may call `rea_cmd_default`, `rea_cmd_play` or `exec "$REA_EXE" "$@"` |
+| `rea_hook_command "$@"` | for every non-empty command line, before the built-ins | return 127 when the command is not handled. It may call `rea_cmd_default`, `rea_cmd_play` or `exec "$REA_EXE" "$@"`. Use `${1:-}` under `set -u` |
 | `rea_hook_usage` | after the usage lines | extra lines |
 
 ## Functions
 
+- Plumbing: `rea_defaults` (called by `rea_init`), `rea_seam NAME` (a
+  test seam's value under `REA_TEST=1`), `rea_run CMD...` (through
+  `REA_RUN`, split without globbing), `rea_noglob`/`rea_glob`,
+  `rea_save_traps`/`rea_restore_traps`.
 - Config: `rea_init`, `rea_find_exe`, `rea_require_exe`, `rea_find_cfg`,
   `rea_get_key KEY [FILE]`. In `rea_get_key`, the last active line wins,
   matching the launchers' parser, which applies lines in order and so
@@ -215,14 +249,21 @@ setting.
 - Steps and commands: `rea_settings`, `rea_start`, `rea_cmd_default`,
   `rea_cmd_play`, `rea_usage`, `rea_main`.
 
-`rea_launch` resets the calling shell's EXIT, HUP, INT and TERM traps when
-it returns, as the launchers' `launch` did.
+While `rea_launch` waits, its own EXIT/HUP/INT/TERM traps replace the
+caller's. The caller's traps are saved first and put back when the launch
+returns, and also before an interrupted launch exits 143, so the caller's
+EXIT trap still runs. Two limits: `trap` output is read through a file
+(dash prints nothing for `$(trap)`), and only a top-level shell gets its
+traps back. Inside a `( subshell )`, bash reports the parent's traps,
+which are not active there, so re-arming them would be wrong; a subshell
+gets the defaults back, as the launchers' `launch` did everywhere.
 
 ## Game differences kept as settings
 
 | Difference | CMR3 | CMR4 | SRR | OR | SCR |
 |---|---|---|---|---|---|
 | `REA_MODE` | wine | wine | wine | wine | **native** |
+| `REA_STATE_BASE` | `~/.config` | `~/.config` | `~/.config` | `~/.config` | **`${XDG_CONFIG_HOME:-~/.config}`** |
 | wait (`REA_ALWAYS_WAIT`) | **0** + `CMR3_WAIT` | 1 | **0** + `SRR_WAIT` | 1 | 1 |
 | gamescope (`REA_GAMESCOPE`) | auto | auto | **off** (DXVK lands on the iGPU inside gamescope on hybrid hosts) | auto | auto |
 | `REA_DEFAULT_SIZE` | 1920x1080 | **1024x768** | — | 1920x1080 | 1920x1080 |
@@ -250,10 +291,8 @@ only changes invalid input:
   it there. CMR4, SRR and OR never checked next to the exe, although their
   launchers prefer that file. SCR checked only the state folder, although
   its launcher checks next to the exe first.
-- **State folder** honours `XDG_CONFIG_HOME`, as SCR's launcher does. For
-  the Wine launchers this is the same path unless the player set
-  `XDG_CONFIG_HOME`. A game that must keep the old path sets
-  `REA_STATE=$HOME/.config/<app>`.
+- **Environment**: inherited `REA_*` values are ignored (they did not
+  exist before); test seams need `REA_TEST=1`.
 - **Sizes**: `0x0`, `0x1080`, more than 5 digits and leading zeros are now
   handled everywhere, not only in SCR. All launchers now lowercase the
   value, not only OR and SCR.
@@ -323,18 +362,37 @@ Hooks: winebus + winetricks before settings and before start.
 `REA_APP=or-launcher REA_EXE_NAME=OutRunLauncher.exe REA_CFG_APPDATA=OutRunLauncher REA_ORIGINAL_SIZE=640x480 REA_LEGACY_LOCK=keep`.
 No hooks. Never set `REA_WINDOWED_KEY` or `REA_GAME_PROCS`.
 
-**SCR** (`screamer-play`):
-`REA_MODE=native REA_APP=screamer-launcher REA_EXE_NAME=ScreamerLauncher REA_EXE_SEARCH="$HERE/../target/release/ScreamerLauncher $HERE/../target/debug/ScreamerLauncher" REA_GAMESCOPE_OUTPUT=0 REA_DEFAULT_SCALER=fsr REA_FULLSCREEN_SIZE=screen REA_SCREEN=${SCREAMER_SCREEN:-} REA_SDL_ENV=`.
-Hook:
+**SCR** (`screamer-play`), keeping today's CLI exactly (tested in
+`tests/dispatch.sh`):
 
 ```sh
+#!/bin/sh
+set -u
+_here=$(dirname "$(readlink -f "$0")")
+if [ -f "$_here/rea-play.sh" ]; then . "$_here/rea-play.sh"
+elif [ -f "$_here/../sdk/rea-play.sh" ]; then . "$_here/../sdk/rea-play.sh"
+else echo "rea-play.sh not found next to $0 or in ../sdk" >&2; exit 1; fi
+REA_MODE=native REA_APP=screamer-launcher REA_EXE_NAME=ScreamerLauncher
+REA_EXE_HINT=SCREAMER_LAUNCHER REA_EXE=${SCREAMER_LAUNCHER:-}
+REA_EXE_SEARCH="../target/release/ScreamerLauncher ../target/debug/ScreamerLauncher"
+REA_STATE_BASE=${XDG_CONFIG_HOME:-$HOME/.config}
+REA_GAMESCOPE_OUTPUT=0 REA_DEFAULT_SCALER=fsr REA_FULLSCREEN_SIZE=screen
+REA_SCREEN=${SCREAMER_SCREEN:-} REA_SDL_ENV= REA_WAIT=${SCREAMER_WAIT:-}
 rea_hook_command() {
-  case "$1" in
+  case "${1:-}" in
+    --play|start|status|stop) return 127 ;;   # the helper's own commands
     1|2|3|s1|s2|sr|screamer|screamer1|screamer2|rally|screamer-rally) rea_cmd_default "$@" ;;
-    *) rea_require_exe || exit 1; exec "$REA_EXE" "$@" ;;
+    *) rea_require_exe || exit 1; exec "$REA_EXE" "$@" ;;   # --help, --check, ...
   esac
 }
+rea_init || exit 1
+[ -n "${SCREAMER_PLAY_FUNCTIONS_ONLY:-}" ] && return 0
+rea_main "$@"
 ```
+
+The `REA_EXE_SEARCH` entries are relative, so they are taken from the
+script's folder. Test seams map as `SCREAMER_NV_LIB_CHECK` →
+`REA_NV_LIB_CHECK` and so on, under `REA_TEST=1`.
 
 `SCREAMER_DOSBOX` and `SCREAMER_GAME_DIR` stay plain environment for the
 launcher.
@@ -345,8 +403,8 @@ The library's tests cover the shared behaviour. A launcher keeps tests only
 for its own configuration (one `gamescope`/`--play` command assertion is
 enough to catch a wrong variable) and for its game hooks (CMR3 `postfx.sh`,
 SRR `winetricks`). Its tests source the game script with
-`<X>_PLAY_FUNCTIONS_ONLY=1` and call `rea_start`, `rea_settings` and
-`rea_stop`.
+`<X>_PLAY_FUNCTIONS_ONLY=1`, set `REA_TEST=1` and the seams they need, and
+call `rea_start`, `rea_settings` and `rea_stop`.
 
 ## Tests
 

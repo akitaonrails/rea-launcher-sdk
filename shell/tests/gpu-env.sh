@@ -3,7 +3,7 @@
 # (merged from the CMR3/CMR4/OR/SCR prime tests and SRR's ICD-pin test).
 . "$(dirname "$(readlink -f "$0")")/common.sh"
 REA_APP=test-launcher
-load_lib
+init_lib
 # NVIDIA's OpenGL library lookup, faked (SCR's test hook).
 fake_nv_lib() { [ -n "${NV_LIB:-}" ]; }
 REA_NV_LIB_CHECK=fake_nv_lib
@@ -79,8 +79,7 @@ echo '{}' > "$T/usr/nvidia_icd.i686.json"
 got=$(REA_ICD_DIRS="$T/etc $T/usr" REA_SYSFS=$T/nvpci rea_gpu_env)
 contains "every NVIDIA json is listed" "$got" "VK_DRIVER_FILES=$T/etc/nvidia_icd.json:$T/usr/nvidia_icd.i686.json "
 for preset in VK_ICD_FILENAMES VK_DRIVER_FILES DRI_PRIME __NV_PRIME_RENDER_OFFLOAD; do
-  got=$(env "$preset=already" REA_ICD_DIRS="$T/hybrid" REA_SYSFS="$T/nvpci" REA_APP=t \
-    REA_GPU_ICD_PIN=1 sh -c '. "$1"; rea_gpu_env' sh "$LIB")
+  got=$(export "$preset=already"; fresh "REA_APP=t REA_GPU_ICD_PIN=1 REA_ICD_DIRS=$T/hybrid REA_SYSFS=$T/nvpci" 'REA_TEST=1 REA_ICD_DIRS=$T/hybrid REA_SYSFS=$T/nvpci; rea_gpu_env')
   check "the caller's $preset wins" "$got" ""
 done
 mkdir -p "$T/single"; echo '{}' > "$T/single/intel_icd.json"

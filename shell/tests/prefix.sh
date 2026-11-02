@@ -4,7 +4,7 @@
 # (merged from CMR3 prefix.sh and SRR winebus.sh).
 . "$(dirname "$(readlink -f "$0")")/common.sh"
 REA_APP=test-launcher REA_PREFIX=$T/prefix REA_SYSFS=$T/nosys
-load_lib
+init_lib
 REA_GPU=
 # A stand-in wine that records its calls and writes what reg add would.
 mkdir -p "$T/bin"

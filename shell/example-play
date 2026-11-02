@@ -14,23 +14,8 @@
 #   EXR_RUN       a wrapper that runs wine and gamescope, e.g.
 #                 "distrobox enter gaming --" when they live in a container
 #   EXR_WAIT      set by the AppImage (every launch waits anyway)
+#   EXR_GPU       GPU environment to use instead of the detected one
 set -u
-
-# --- configuration (read by rea-play.sh when it is sourced) ---------------
-REA_APP=exr-launcher                  # ~/.config/exr-launcher, the prefix name
-REA_EXE_NAME=EXRLauncher.exe
-REA_EXE_HINT=EXR_LAUNCHER
-REA_EXE=${EXR_LAUNCHER:-}
-REA_PREFIX=${EXR_PREFIX:-}
-REA_RUN=${EXR_RUN:-}
-REA_WAIT=${EXR_WAIT:-}
-REA_CFG_APPDATA=EXRLauncher           # AppData\Local\EXRLauncher\launcher.cfg
-REA_ORIGINAL_SIZE=640x480             # resolution = original
-REA_WINDOWED_KEY=display_mode         # windowed/borderless skip gamescope
-REA_DLL_OVERRIDES='dinput8,d3d9=n,b'  # Xidi + DXVK from the game's folder
-REA_WINEDBG_OFF=1                     # a fault ends the game, no hidden debugger
-REA_GAME_PROCS='ExampleRally.exe'     # the launcher may return before the game
-REA_WINEBUS_MARKER=.exr-winebus
 
 # --- the library: next to this script in a package, else the vendored copy --
 _here=$(dirname "$(readlink -f "$0")")
@@ -42,6 +27,25 @@ else
   echo "rea-play.sh not found next to $0 or in ../sdk (run scripts/sdk-sync)" >&2
   exit 1
 fi
+
+# --- configuration (after sourcing: inherited REA_* values are dropped, so
+# only the player-facing EXR_* names below reach the library) -------------
+REA_APP=exr-launcher                  # ~/.config/exr-launcher, the prefix name
+REA_EXE_NAME=EXRLauncher.exe
+REA_EXE_HINT=EXR_LAUNCHER
+REA_EXE=${EXR_LAUNCHER:-}
+REA_PREFIX=${EXR_PREFIX:-}
+REA_RUN=${EXR_RUN:-}
+REA_WAIT=${EXR_WAIT:-}
+# Opt-in player overrides, under the game's own names:
+[ -n "${EXR_GPU+set}" ] && REA_GPU=$EXR_GPU   # e.g. EXR_GPU= for no GPU choice
+REA_CFG_APPDATA=EXRLauncher           # AppData\Local\EXRLauncher\launcher.cfg
+REA_ORIGINAL_SIZE=640x480             # resolution = original
+REA_WINDOWED_KEY=display_mode         # windowed/borderless skip gamescope
+REA_DLL_OVERRIDES='dinput8,d3d9=n,b'  # Xidi + DXVK from the game's folder
+REA_WINEDBG_OFF=1                     # a fault ends the game, no hidden debugger
+REA_GAME_PROCS='ExampleRally.exe'     # the launcher may return before the game
+REA_WINEBUS_MARKER=.exr-winebus
 
 # --- game hooks ----------------------------------------------------------------
 
@@ -57,7 +61,7 @@ rea_hook_before_start() {
 }
 
 rea_hook_command() {
-  case "$1" in
+  case "${1:-}" in
     --fix-pads)
       rm -f "$REA_PREFIX/$REA_WINEBUS_MARKER"
       rea_seed_winebus ;;
@@ -66,6 +70,7 @@ rea_hook_command() {
 }
 rea_hook_usage() { echo "  --fix-pads          re-seed Wine's controller bridge"; }
 
+rea_init || exit 1
 # Tests load the configuration and hooks without running anything.
 [ -n "${EXR_PLAY_FUNCTIONS_ONLY:-}" ] && return 0
 rea_main "$@"

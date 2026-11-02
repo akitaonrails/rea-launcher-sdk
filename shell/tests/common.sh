@@ -1,5 +1,6 @@
-# Sourced by every test: a scratch HOME, ok/fail counters, helpers.
-# Each test sets its REA_* configuration, then calls load_lib.
+# Sourced by every test: a scratch HOME, ok/fail counters, helpers, and the
+# library itself. Each test then sets its REA_* configuration (as a game
+# script does, after sourcing) and calls init_lib.
 set -u
 TESTS=$(dirname "$(readlink -f "$0")")
 LIB=$TESTS/../rea-play.sh
@@ -33,10 +34,16 @@ stop_helper() { # pid start
   if [ "${_st#* }" = "$2" ]; then kill "$1" 2>/dev/null || true; fi
   wait "$1" 2>/dev/null || true
 }
-load_lib() {
+init_lib() {
+  REA_TEST=1
   REA_HERE=${REA_HERE:-$T}
   REA_NAME=${REA_NAME:-x-play}
-  . "$LIB"
+  rea_init
+}
+# fresh 'ASSIGNMENTS' 'COMMANDS': a new shell that sources the library,
+# runs ASSIGNMENTS as the game script would, rea_init, then COMMANDS.
+fresh() {
+  sh -c '. "$1"; eval "$2"; REA_TEST=1; rea_init && eval "$3"' sh "$LIB" "$1" "$2"
 }
 # A recording wrapper (a program: setsid cannot run a shell function).
 # gamescope is "installed" unless $T/no-gamescope exists; a settings run
@@ -54,3 +61,4 @@ printf '<%s>\n' "$@" > "$T/args"
 FAKE
   chmod +x "$T/fake-run"
 }
+. "$LIB"

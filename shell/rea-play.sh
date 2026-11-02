@@ -1,69 +1,113 @@
 # rea-play.sh — shared POSIX sh library for the launchers' linux/<x>-play.
 #
-# A game script sets its configuration (REA_* variables, see README.md),
-# sources this file, overrides the rea_hook_* functions it needs, and calls
-# rea_main "$@". Sourcing only defines functions and resolves paths
-# (rea_init); nothing runs Wine, gamescope or the game until rea_main.
+# A game script sources this file, then sets its configuration (REA_*
+# variables, see README.md), overrides the rea_hook_* functions it needs,
+# calls rea_init, and finally rea_main "$@". Sourcing only defines functions
+# and drops any REA_* configuration inherited from the environment: the
+# player-facing interface is each game's own variables (CMR3_PREFIX, ...),
+# which the game script maps onto REA_* itself. Nothing runs Wine,
+# gamescope or the game until rea_main.
 #
 # Everything here is POSIX sh (dash-safe) and works under `set -u`. Library
-# state uses the REA_ prefix, scratch variables the _rea_ prefix.
+# state uses the REA_ prefix, scratch variables the _rea_ prefix. Player
+# values are word-split with globbing off, so a `*` never expands.
 #
-# Test seams (never set them in a shipped script):
+# Test seams, honoured only when REA_TEST=1 is set after sourcing (a stray
+# environment variable can never change a game):
 #   REA_SYSFS            replaces /sys            (GPU choice)
 #   REA_ICD_DIRS         replaces the Vulkan ICD dirs (space-separated)
 #   REA_NV_LIB_CHECK     command run instead of the libGLX_nvidia lookup
 #   REA_GAMESCOPE_CHECK  command run instead of `command -v gamescope`
 #   REA_LAUNCH_CMD       command run instead of the whole supervised launch
 #   REA_PROC             replaces /proc for the game-process check
-#   REA_SCREEN           WIDTHxHEIGHT instead of asking xrandr (also a
-#                        player setting)
 
-REA_SDK_VERSION=0.1.0
+REA_SDK_VERSION=0.2.0
 
-# --- configuration defaults ------------------------------------------------
-# Only unset variables get a default: the game script's values win.
+# --- configuration -------------------------------------------------------------
+# Every configuration variable the library reads. Sourcing unsets them, so
+# only what the game script assigns after sourcing counts.
+REA_CONFIG_VARS='REA_APP REA_MODE REA_EXE REA_EXE_NAME REA_EXE_HINT REA_EXE_SEARCH
+REA_HERE REA_NAME REA_PREFIX REA_STATE REA_STATE_BASE REA_RUN REA_WAIT
+REA_ALWAYS_WAIT REA_CFG REA_CFG_NAME REA_CFG_APPDATA REA_PLAY_ARGS
+REA_SETTINGS_ARGS REA_LEGACY_LOCK REA_INTERRUPT_WINESERVER REA_GAMESCOPE
+REA_GAMESCOPE_OUTPUT REA_GAMESCOPE_EXTRA REA_RES_KEY REA_DEFAULT_SIZE
+REA_ORIGINAL_SIZE REA_FULLSCREEN_SIZE REA_SCREEN REA_SCALER_KEY
+REA_DEFAULT_SCALER REA_WINDOWED_KEY REA_WINDOWED_VALUES REA_SDL_ENV
+REA_SDL_SETTINGS REA_GPU_ICD_PIN REA_GPU REA_DLL_OVERRIDES REA_WINEDBG_OFF
+REA_GAME_PROCS REA_GAME_SETTLE REA_WINEBUS_MARKER REA_WINEBUS_VALUES
+REA_DIRECT_NOTE REA_TEST REA_SYSFS REA_ICD_DIRS REA_NV_LIB_CHECK
+REA_GAMESCOPE_CHECK REA_LAUNCH_CMD REA_PROC REA_INITED'
+# shellcheck disable=SC2086
+unset $REA_CONFIG_VARS 2>/dev/null || true
 
-: "${REA_APP:=}"                  # state folder name, e.g. cmr3-launcher
-: "${REA_MODE:=wine}"             # wine | native
-: "${REA_EXE:=}"                  # the launcher program (found when empty)
-: "${REA_EXE_NAME:=}"             # its file name, e.g. CMR3Launcher.exe
-: "${REA_EXE_HINT:=REA_EXE}"      # the variable a player sets, for messages
-: "${REA_EXE_SEARCH:=}"           # extra candidate paths (space-separated)
-: "${REA_PREFIX:=}"               # Wine prefix (default set in rea_init)
-: "${REA_RUN:=}"                  # wrapper, e.g. "distrobox enter gaming --"
-: "${REA_WAIT:=}"                 # set by an AppImage: wait for the game
-: "${REA_ALWAYS_WAIT:=1}"         # 1: every launch waits; 0: only REA_WAIT
-: "${REA_CFG:=}"                  # launcher.cfg (discovered when empty)
-: "${REA_CFG_NAME:=launcher.cfg}"
-: "${REA_CFG_APPDATA:=}"          # AppData\Local\<this> inside the prefix
-: "${REA_PLAY_ARGS=--no-window}"          # launcher flags for a game run
-: "${REA_SETTINGS_ARGS=--settings --linux}"   # flags for the window
-: "${REA_LEGACY_LOCK:=signal}"    # signal | keep | off (pid-only locks)
-: "${REA_INTERRUPT_WINESERVER:=1}"  # interrupted: wineserver -k as well
-# Game size and gamescope.
-: "${REA_GAMESCOPE:=auto}"        # auto | off
-: "${REA_GAMESCOPE_OUTPUT:=1}"    # 1: -W/-H as well as -w/-h
-: "${REA_GAMESCOPE_EXTRA:=}"      # extra gamescope flags (word-split)
-: "${REA_RES_KEY:=resolution}"
-: "${REA_DEFAULT_SIZE:=1920x1080}"
-: "${REA_ORIGINAL_SIZE:=}"        # "original" means this (empty: default)
-: "${REA_FULLSCREEN_SIZE:=}"      # "screen": fullscreen = the screen size
-: "${REA_SCALER_KEY:=scaler}"     # empty: always REA_DEFAULT_SCALER
-: "${REA_DEFAULT_SCALER:=linear}"
-: "${REA_WINDOWED_KEY:=}"         # e.g. display_mode (empty: never skip)
-: "${REA_WINDOWED_VALUES:=windowed borderless}"
-# Environment.
-: "${REA_SDL_ENV=SDL_GAMECONTROLLER_ALLOW_BACKGROUND_EVENTS=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1}"
-: "${REA_SDL_SETTINGS:=1}"        # the SDL defaults for the window too
-: "${REA_GPU_ICD_PIN:=0}"         # 1: pin NVIDIA's Vulkan ICD (SRR rule)
-: "${REA_DLL_OVERRIDES:=}"        # the game's WINEDLLOVERRIDES, before the caller's
-: "${REA_WINEDBG_OFF:=0}"         # 1: add winedbg=d (a fault ends the game)
-# The game's own processes, '|'-separated (Windows names cannot hold '|'):
-# when set, the inner script waits for them after the launcher returns.
-: "${REA_GAME_PROCS:=}"
-: "${REA_GAME_SETTLE:=3}"
-: "${REA_WINEBUS_MARKER:=.rea-winebus}"
-: "${REA_WINEBUS_VALUES:=DisableHidraw|DisableInput|Enable SDL|Map Controllers}"
+# Defaults for what the game script left unset (rea_init calls this).
+rea_defaults() {
+  : "${REA_APP:=}"                  # state folder name, e.g. cmr3-launcher
+  : "${REA_MODE:=wine}"             # wine | native
+  : "${REA_EXE:=}"                  # the launcher program (found when empty)
+  : "${REA_EXE_NAME:=}"             # its file name, e.g. CMR3Launcher.exe
+  : "${REA_EXE_HINT:=REA_EXE}"      # the variable a player sets, for messages
+  : "${REA_EXE_SEARCH:=}"           # extra candidates; relative = from REA_HERE
+  : "${REA_PREFIX:=}"               # Wine prefix (default set in rea_init)
+  : "${REA_STATE_BASE:=$HOME/.config}"  # SCR: ${XDG_CONFIG_HOME:-$HOME/.config}
+  : "${REA_RUN:=}"                  # wrapper, e.g. "distrobox enter gaming --"
+  : "${REA_WAIT:=}"                 # set by an AppImage: wait for the game
+  : "${REA_ALWAYS_WAIT:=1}"         # 1: every launch waits; 0: only REA_WAIT
+  : "${REA_CFG:=}"                  # launcher.cfg (discovered when empty)
+  : "${REA_CFG_NAME:=launcher.cfg}"
+  : "${REA_CFG_APPDATA:=}"          # AppData\Local\<this> inside the prefix
+  : "${REA_PLAY_ARGS=--no-window}"            # launcher flags for a game run
+  : "${REA_SETTINGS_ARGS=--settings --linux}" # flags for the window
+  : "${REA_LEGACY_LOCK:=signal}"    # signal | keep | off (pid-only locks)
+  : "${REA_INTERRUPT_WINESERVER:=1}"  # interrupted: wineserver -k as well
+  # Game size and gamescope.
+  : "${REA_GAMESCOPE:=auto}"        # auto | off
+  : "${REA_GAMESCOPE_OUTPUT:=1}"    # 1: -W/-H as well as -w/-h
+  : "${REA_GAMESCOPE_EXTRA:=}"      # extra gamescope flags (word-split)
+  : "${REA_RES_KEY:=resolution}"
+  : "${REA_DEFAULT_SIZE:=1920x1080}"
+  : "${REA_ORIGINAL_SIZE:=}"        # "original" means this (empty: default)
+  : "${REA_FULLSCREEN_SIZE:=}"      # "screen": fullscreen = the screen size
+  : "${REA_SCREEN:=}"               # WIDTHxHEIGHT instead of asking xrandr
+  : "${REA_SCALER_KEY=scaler}"      # empty: always REA_DEFAULT_SCALER
+  : "${REA_DEFAULT_SCALER:=linear}"
+  : "${REA_WINDOWED_KEY:=}"         # e.g. display_mode (empty: never skip)
+  : "${REA_WINDOWED_VALUES:=windowed borderless}"
+  # Environment.
+  : "${REA_SDL_ENV=SDL_GAMECONTROLLER_ALLOW_BACKGROUND_EVENTS=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1}"
+  : "${REA_SDL_SETTINGS:=1}"        # the SDL defaults for the window too
+  : "${REA_GPU_ICD_PIN:=0}"         # 1: pin NVIDIA's Vulkan ICD (SRR rule)
+  : "${REA_DLL_OVERRIDES:=}"        # the game's WINEDLLOVERRIDES, before the caller's
+  : "${REA_WINEDBG_OFF:=0}"         # 1: add winedbg=d (a fault ends the game)
+  # The game's own processes, '|'-separated (Windows names cannot hold '|'):
+  # when set, the inner script waits for them after the launcher returns.
+  : "${REA_GAME_PROCS:=}"
+  : "${REA_GAME_SETTLE:=3}"
+  : "${REA_WINEBUS_MARKER:=.rea-winebus}"
+  : "${REA_WINEBUS_VALUES:=DisableHidraw|DisableInput|Enable SDL|Map Controllers}"
+  : "${REA_DIRECT_NOTE:=starting without a gamescope of our own}"
+}
+
+# A test seam's value, only under REA_TEST=1.
+rea_seam() {
+  [ "${REA_TEST:-}" = 1 ] || return 0
+  eval "printf '%s' \"\${$1:-}\""
+}
+
+# Word splitting of player values never globs: these bracket each split,
+# keeping a caller's own `set -f`.
+rea_noglob() { case $- in *f*) _rea_glob_off=1 ;; *) _rea_glob_off= ; set -f ;; esac; }
+rea_glob() { [ -n "${_rea_glob_off:-}" ] || set +f; }
+
+# rea_run COMMAND...: through REA_RUN (word-split without globbing).
+rea_run() {
+  rea_noglob
+  # shellcheck disable=SC2086
+  set -- $REA_RUN "$@"
+  rea_glob
+  "$@"
+}
+
 REA_WINEBUS_KEY='HKLM\System\CurrentControlSet\Services\winebus'
 
 # --- hooks the game script may override ------------------------------------
@@ -76,10 +120,11 @@ rea_hook_usage() { :; }             # extra usage lines
 # --- paths -------------------------------------------------------------------
 
 rea_init() {
+  rea_defaults
   REA_HERE=${REA_HERE:-$(dirname "$(readlink -f "$0")")}
   REA_NAME=${REA_NAME:-$(basename "$0")}
   [ -n "$REA_APP" ] || { echo "rea-play: REA_APP is not set" >&2; return 1; }
-  REA_STATE=${REA_STATE:-${XDG_CONFIG_HOME:-$HOME/.config}/$REA_APP}
+  REA_STATE=${REA_STATE:-$REA_STATE_BASE/$REA_APP}
   REA_LOCK=$REA_STATE/running.pid
   REA_INNER=$REA_STATE/inner.sh
   REA_GAME_ENV_FILE=$REA_STATE/game.env
@@ -91,13 +136,20 @@ rea_init() {
   [ -n "$REA_EXE" ] || rea_find_exe
   [ -n "$REA_CFG" ] || rea_find_cfg
   REA_GAME_ENV=
+  REA_INITED=1
   return 0
 }
 
-# The launcher next to the script, one folder up, or REA_EXE_SEARCH.
+# The launcher next to the script, one folder up, or REA_EXE_SEARCH (each
+# relative entry taken from REA_HERE, the script's folder).
 rea_find_exe() {
-  [ -n "$REA_EXE_NAME" ] || return 0
-  for _rea_p in "$REA_HERE/$REA_EXE_NAME" "$REA_HERE/../$REA_EXE_NAME" $REA_EXE_SEARCH; do
+  rea_noglob
+  # shellcheck disable=SC2086
+  set -- $REA_EXE_SEARCH
+  rea_glob
+  [ -n "$REA_EXE_NAME" ] && set -- "$REA_EXE_NAME" "../$REA_EXE_NAME" "$@"
+  for _rea_p in "$@"; do
+    case $_rea_p in /*) ;; *) _rea_p=$REA_HERE/$_rea_p ;; esac
     if rea_exe_ok "$_rea_p"; then
       REA_EXE=$(readlink -f "$_rea_p")
       return 0
@@ -182,7 +234,7 @@ rea_parse_size() {
 
 # The screen's size: REA_SCREEN, else the current mode xrandr reports.
 rea_screen_size() {
-  if [ -n "${REA_SCREEN:-}" ]; then
+  if [ -n "$REA_SCREEN" ]; then
     rea_parse_size "$REA_SCREEN"
   else
     rea_parse_size "$(xrandr --current 2>/dev/null | awk '/\*/ { print $1; exit }')"
@@ -221,10 +273,11 @@ rea_scaler() {
 # --- GPU -------------------------------------------------------------------------
 
 rea_has_nv_lib() {
-  if [ -n "${REA_NV_LIB_CHECK:-}" ]; then
-    $REA_NV_LIB_CHECK
+  _rea_seam=$(rea_seam REA_NV_LIB_CHECK)
+  if [ -n "$_rea_seam" ]; then
+    $_rea_seam
   else
-    $REA_RUN sh -c 'ldconfig -p 2>/dev/null | grep -q libGLX_nvidia.so.0'
+    rea_run sh -c 'ldconfig -p 2>/dev/null | grep -q libGLX_nvidia.so.0'
   fi
 }
 
@@ -246,11 +299,16 @@ rea_nvidia_present() {
 # - Several Mesa GPUs, the screen's one integrated (Intel, or less video
 #   memory than another): DRI_PRIME=1.
 rea_gpu_env() {
-  _rea_sys=${REA_SYSFS:-/sys}
+  _rea_sys=$(rea_seam REA_SYSFS); _rea_sys=${_rea_sys:-/sys}
   if [ "$REA_GPU_ICD_PIN" = 1 ]; then
     [ -n "${VK_DRIVER_FILES:-}${VK_ICD_FILENAMES:-}${DRI_PRIME:-}${__NV_PRIME_RENDER_OFFLOAD:-}" ] && return 0
     _rea_nv= _rea_others=
-    for _rea_dir in ${REA_ICD_DIRS:-/etc/vulkan/icd.d /usr/share/vulkan/icd.d}; do
+    _rea_dirs=$(rea_seam REA_ICD_DIRS)
+    rea_noglob
+    # shellcheck disable=SC2086
+    set -- ${_rea_dirs:-/etc/vulkan/icd.d /usr/share/vulkan/icd.d}
+    rea_glob
+    for _rea_dir in "$@"; do
       for _rea_j in "$_rea_dir"/*.json; do
         [ -e "$_rea_j" ] || continue
         case "${_rea_j##*/}" in
@@ -302,7 +360,11 @@ rea_gpu_init() {
 # caller's own non-empty value. SDL_JOYSTICK_DEVICE is never set: SDL finds
 # every pad itself and naming one adds it a second time.
 rea_sdl_env() {
-  for _rea_kv in $REA_SDL_ENV; do
+  rea_noglob
+  # shellcheck disable=SC2086
+  set -- $REA_SDL_ENV
+  rea_glob
+  for _rea_kv in "$@"; do
     _rea_k=${_rea_kv%%=*}
     case $_rea_k in
       ''|[0-9]*|*[!A-Za-z0-9_]*|SDL_JOYSTICK_DEVICE) continue ;;
@@ -333,8 +395,14 @@ rea_game_env() {
 
 # --- Wine prefix -----------------------------------------------------------------
 
-rea_wine() { $REA_RUN env WINEPREFIX="$REA_PREFIX" ${REA_GPU:-} wine "$@"; }
-rea_wineserver() { $REA_RUN env WINEPREFIX="$REA_PREFIX" wineserver "$@"; }
+rea_wine() {
+  rea_noglob
+  # shellcheck disable=SC2086
+  set -- WINEPREFIX="$REA_PREFIX" ${REA_GPU:-} wine "$@"
+  rea_glob
+  rea_run env "$@"
+}
+rea_wineserver() { rea_run env WINEPREFIX="$REA_PREFIX" wineserver "$@"; }
 # A prefix's wineserver lingers a few seconds, tied to the display it
 # started on; a game started meanwhile would join it outside gamescope.
 rea_wineserver_wait() { rea_wineserver -w 2>/dev/null; return 0; }
@@ -353,7 +421,7 @@ rea_once() {
 # runs once; the prefix shuts down afterwards (see rea_wineserver_wait).
 rea_wine_no_crash_dialog() {
   grep -qs '"ShowCrashDialog"=dword:00000000' "$REA_PREFIX/user.reg" && return 0
-  $REA_RUN env WINEPREFIX="$REA_PREFIX" wine reg add 'HKCU\Software\Wine\WineDbg' \
+  rea_run env WINEPREFIX="$REA_PREFIX" wine reg add 'HKCU\Software\Wine\WineDbg' \
     /v ShowCrashDialog /t REG_DWORD /d 0 /f >/dev/null 2>&1
   rea_wineserver_wait
 }
@@ -368,9 +436,10 @@ rea_seed_winebus() {
 rea_seed_winebus_now() {
   echo "configuring Wine's controller bridge (once)"
   _rea_ifs=$IFS; IFS='|'
-  set -f
+  rea_noglob
+  # shellcheck disable=SC2086
   set -- $REA_WINEBUS_VALUES
-  set +f
+  rea_glob
   IFS=$_rea_ifs
   for _rea_name in "$@"; do
     rea_wine reg query "$REA_WINEBUS_KEY" /v "$_rea_name" >/dev/null 2>&1 ||
@@ -391,7 +460,9 @@ REA_GAME_ALIVE_FN='rea_game_alive() {
   set +f; IFS=$_ga_ifs
   for _ga_name in "$@"; do
     for _ga_pid in $(pgrep -x "$_ga_name"); do
-      _ga_state=$(sed "s/.*) //" "${REA_PROC:-/proc}/$_ga_pid/stat" 2>/dev/null | cut -d" " -f1)
+      _ga_proc=/proc
+      [ "${REA_TEST:-}" = 1 ] && _ga_proc=${REA_PROC:-/proc}
+      _ga_state=$(sed "s/.*) //" "$_ga_proc/$_ga_pid/stat" 2>/dev/null | cut -d" " -f1)
       [ -n "$_ga_state" ] && [ "$_ga_state" != Z ] && return 0
     done
   done
@@ -409,6 +480,7 @@ eval "$REA_GAME_ALIVE_FN"
 #   REA_GAME_ENV_FILE   NAME=VALUE lines for the game only (data, not sourced)
 #   REA_GAME_PROCS      the game's process names to wait for (Wine)
 #   REA_GAME_SETTLE     seconds before that wait starts
+#   REA_TEST            the library's own REA_TEST (empty outside tests)
 rea_write_inner() {
   {
     echo '#!/bin/sh'
@@ -446,10 +518,10 @@ rea_proc_stat() {
   [ -r "/proc/$1/stat" ] || return 1
   _rea_stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
   _rea_rest=${_rea_stat##*) }
-  set -f
+  rea_noglob
   # shellcheck disable=SC2086
   set -- $_rea_rest
-  set +f
+  rea_glob
   [ "$#" -ge 20 ] || return 1
   printf '%s %s\n' "$4" "${20}"
 }
@@ -491,7 +563,7 @@ rea_waits() { [ "$REA_ALWAYS_WAIT" = 1 ] || [ -n "$REA_WAIT" ]; }
 # and wait for it, so the AppImage stays mounted until its Wine is gone and
 # a restart never finds the old game.
 rea_launch_interrupted() {
-  trap - EXIT HUP INT TERM
+  rea_restore_traps
   if rea_session_valid; then
     kill -TERM "-$REA_LOCK_PID" 2>/dev/null || true
   fi
@@ -501,7 +573,28 @@ rea_launch_interrupted() {
   fi
   wait "$REA_PID" 2>/dev/null
   rm -f "$REA_LOCK"
-  exit 143
+  exit 143   # the caller's own EXIT trap, restored above, runs now
+}
+
+# While a launch waits, its EXIT/HUP/INT/TERM traps replace the caller's;
+# the caller's are saved first and put back afterwards (also before an
+# interrupted launch exits, so the caller's EXIT trap still runs). `trap`
+# goes through a file: dash reports nothing for $(trap). Only the top-level
+# shell restores: inside a ( subshell ) bash reports the parent's traps,
+# which are not active there, and re-arming them (a cleanup `rm -rf`, say)
+# would be wrong; a subshell gets the defaults back, as before.
+rea_save_traps() {
+  _rea_saved_traps=
+  sh -c 'echo "$PPID"' > "$REA_STATE/traps.saved" 2>/dev/null
+  if [ "$(cat "$REA_STATE/traps.saved" 2>/dev/null)" = "$$" ]; then
+    trap > "$REA_STATE/traps.saved"
+    _rea_saved_traps=$(cat "$REA_STATE/traps.saved")
+  fi
+  rm -f "$REA_STATE/traps.saved"
+}
+rea_restore_traps() {
+  trap - EXIT HUP INT TERM
+  eval "${_rea_saved_traps:-}"
 }
 
 # rea_launch [NAME=VALUE...] COMMAND...: runs the command in its own
@@ -511,16 +604,20 @@ rea_launch_interrupted() {
 # then removes the lock; otherwise it returns at once, and a stale lock is
 # recognised by its start time.
 rea_launch() {
-  if [ -n "${REA_LAUNCH_CMD:-}" ]; then
-    $REA_LAUNCH_CMD "$@"
+  _rea_seam=$(rea_seam REA_LAUNCH_CMD)
+  if [ -n "$_rea_seam" ]; then
+    $_rea_seam "$@"
     return
   fi
+  rea_noglob
+  # shellcheck disable=SC2086
   if [ "$REA_MODE" = wine ]; then
-    set -- WINEPREFIX="$REA_PREFIX" ${REA_GPU:-} "$@"
+    set -- $REA_RUN env WINEPREFIX="$REA_PREFIX" ${REA_GPU:-} "$@"
   else
-    set -- ${REA_GPU:-} "$@"
+    set -- $REA_RUN env ${REA_GPU:-} "$@"
   fi
-  setsid $REA_RUN env "$@" > "$REA_STATE/play.log" 2>&1 < /dev/null &
+  rea_glob
+  setsid "$@" > "$REA_STATE/play.log" 2>&1 < /dev/null &
   REA_PID=$!
   # No record possible (it already ended, or no /proc): still a started
   # game, not a failure.
@@ -530,12 +627,13 @@ rea_launch() {
   }
   printf '%s %s\n' "$REA_PID" "${_rea_st#* }" > "$REA_LOCK"
   rea_waits || return 0
+  rea_save_traps
   trap 'rm -f "$REA_LOCK"' EXIT
   trap 'rea_launch_interrupted' HUP INT TERM
   wait "$REA_PID"
   _rea_rc=$?
   rm -f "$REA_LOCK"
-  trap - EXIT HUP INT TERM
+  rea_restore_traps
   return "$_rea_rc"
 }
 
@@ -559,10 +657,11 @@ rea_status() { if rea_running; then echo running; else echo idle; fi; }
 # --- gamescope -------------------------------------------------------------------
 
 rea_has_gamescope() {
-  if [ -n "${REA_GAMESCOPE_CHECK:-}" ]; then
-    $REA_GAMESCOPE_CHECK
+  _rea_seam=$(rea_seam REA_GAMESCOPE_CHECK)
+  if [ -n "$_rea_seam" ]; then
+    $_rea_seam
   else
-    $REA_RUN sh -c 'command -v gamescope' >/dev/null 2>&1
+    rea_run sh -c 'command -v gamescope' >/dev/null 2>&1
   fi
 }
 
@@ -572,7 +671,11 @@ rea_windowed() {
   [ -n "$REA_WINDOWED_KEY" ] || return 1
   _rea_mode=$(rea_get_key "$REA_WINDOWED_KEY" | tr 'A-Z' 'a-z')
   [ -n "$_rea_mode" ] || return 1
-  for _rea_v in $REA_WINDOWED_VALUES; do
+  rea_noglob
+  # shellcheck disable=SC2086
+  set -- $REA_WINDOWED_VALUES
+  rea_glob
+  for _rea_v in "$@"; do
     [ "$_rea_mode" = "$_rea_v" ] && return 0
   done
   return 1
@@ -596,19 +699,22 @@ rea_use_gamescope() {
 rea_settings() {
   rea_gpu_init
   rea_hook_before_settings
+  _rea_sdl=
+  [ "$REA_SDL_SETTINGS" = 1 ] && _rea_sdl=$(rea_sdl_env)
+  rea_noglob
+  # shellcheck disable=SC2086
   if [ "$REA_MODE" = wine ]; then
     set -- WINEPREFIX="$REA_PREFIX" ${REA_GPU:-} wine "$REA_EXE" $REA_SETTINGS_ARGS "$@"
   else
     set -- ${REA_GPU:-} "$REA_EXE" $REA_SETTINGS_ARGS "$@"
   fi
-  if [ "$REA_SDL_SETTINGS" = 1 ]; then
-    _rea_sdl=$(rea_sdl_env)
-    _rea_ifs=$IFS; IFS='
+  _rea_ifs=$IFS; IFS='
 '
-    set -- $_rea_sdl "$@"
-    IFS=$_rea_ifs
-  fi
-  $REA_RUN env "$@" 2>"$REA_STATE/settings.log"
+  # shellcheck disable=SC2086
+  set -- $_rea_sdl "$@"
+  IFS=$_rea_ifs
+  rea_glob
+  rea_run env "$@" 2>"$REA_STATE/settings.log"
   _rea_rc=$?
   [ "$REA_MODE" = wine ] && rea_wineserver_wait
   case $_rea_rc in
@@ -631,21 +737,28 @@ rea_start() {
   rea_hook_before_start
   rea_write_inner
   printf '%s' "$REA_GAME_ENV" > "$REA_GAME_ENV_FILE"
+  rea_noglob
+  # shellcheck disable=SC2086
   set -- sh "$REA_INNER" "$REA_EXE" $REA_PLAY_ARGS "$@"
+  rea_glob
   if rea_use_gamescope; then
     rea_game_size
     rea_scaler
+    rea_noglob
+    # shellcheck disable=SC2086
     if [ "$REA_GAMESCOPE_OUTPUT" = 1 ]; then
       set -- gamescope -W "$REA_W" -H "$REA_H" -w "$REA_W" -h "$REA_H" -f -S fit -F "$REA_F" $REA_GAMESCOPE_EXTRA -- "$@"
     else
       set -- gamescope -w "$REA_W" -h "$REA_H" -f -S fit -F "$REA_F" $REA_GAMESCOPE_EXTRA -- "$@"
     fi
+    rea_glob
     echo "starting at ${REA_W}x${REA_H}, scaler $REA_F"
   else
-    echo "${REA_DIRECT_NOTE:-starting without a gamescope of our own}"
+    echo "$REA_DIRECT_NOTE"
   fi
   set -- REA_INNER_MODE="$REA_MODE" REA_GAME_ENV_FILE="$REA_GAME_ENV_FILE" \
-    REA_GAME_PROCS="$REA_GAME_PROCS" REA_GAME_SETTLE="$REA_GAME_SETTLE" "$@"
+    REA_GAME_PROCS="$REA_GAME_PROCS" REA_GAME_SETTLE="$REA_GAME_SETTLE" \
+    REA_TEST="${REA_TEST:-}" "$@"
   if [ "$REA_MODE" = wine ]; then
     _rea_o=$(rea_dll_overrides)
     [ -n "$_rea_o" ] && set -- WINEDLLOVERRIDES="$_rea_o" "$@"
@@ -653,7 +766,10 @@ rea_start() {
   _rea_sdl=$(rea_sdl_env)
   _rea_ifs=$IFS; IFS='
 '
+  rea_noglob
+  # shellcheck disable=SC2086
   set -- $_rea_sdl "$@"
+  rea_glob
   IFS=$_rea_ifs
   rea_launch "$@"
 }
@@ -682,7 +798,16 @@ rea_cmd_play() {
   rea_start "$@"
 }
 
+# The game script's rea_hook_command sees every non-empty command line first
+# (127 = not its own), so a game can keep its own meaning for any word, the
+# built-in aliases included.
 rea_main() {
+  [ -n "${REA_INITED:-}" ] || rea_init || exit 1
+  if [ "$#" -gt 0 ]; then
+    rea_hook_command "$@"
+    _rea_rc=$?
+    [ "$_rea_rc" = 127 ] || return "$_rea_rc"
+  fi
   case "${1:-}" in
     ""|--settings|settings)
       [ "$#" -gt 0 ] && shift
@@ -695,12 +820,6 @@ rea_main() {
       rea_stop
       echo stopped ;;
     -h|--help|help) rea_usage ;;
-    *)
-      rea_hook_command "$@"
-      _rea_rc=$?
-      if [ "$_rea_rc" = 127 ]; then rea_usage >&2; exit 2; fi
-      return "$_rea_rc" ;;
+    *) rea_usage >&2; exit 2 ;;
   esac
 }
-
-rea_init

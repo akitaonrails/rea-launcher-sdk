@@ -7,7 +7,7 @@
 REA_APP=test-launcher REA_PREFIX=$T/prefix REA_SYSFS=$T/nosys
 : > "$T/TestLauncher.exe"
 REA_EXE=$T/TestLauncher.exe REA_CFG=$T/launcher.cfg
-load_lib
+init_lib
 make_fake_run
 REA_RUN=$T/fake-run REA_GPU=
 STALE_PID= STALE_START= OTHER_PID= OTHER_START=
@@ -180,7 +180,7 @@ n=$(cat "$T/polls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$T/polls"
 exit 0
 FAKE
 chmod +x "$T/bin/pgrep"
-PATH=$T/bin:$PATH REA_PROC=$T/proc REA_GAME_PROCS='SEGA Rally.exe|SEGA Rally_SSE1' sh "$REA_INNER" "$REA_EXE"
+PATH=$T/bin:$PATH REA_TEST=1 REA_PROC=$T/proc REA_GAME_PROCS='SEGA Rally.exe|SEGA Rally_SSE1' sh "$REA_INNER" "$REA_EXE"
 contains "it waits for each named process" "$(sort -u "$T/pgrep-names" | tr '\n' '|')" "SEGA Rally.exe|SEGA Rally_SSE1|"
 [ "$(cat "$T/polls")" -gt 4 ] && ok "it polls until the game is gone" || fail "polls: $(cat "$T/polls")"
 rm -f "$T/polls" "$T/pgrep-names"
@@ -191,6 +191,41 @@ printf '#!/bin/sh\necho "native $*" > "$T/native"\n' > "$T/native-game"; chmod +
 PATH=$T/bin:$PATH REA_INNER_MODE=native REA_GAME_ENV_FILE=$T/game.env sh "$REA_INNER" "$T/native-game" --no-window 2
 check "native mode runs the launcher itself" "$(cat "$T/native")" "native --no-window 2"
 check "native mode never calls wineserver" "$(cat "$T/inner-ws")" ""
+
+rm -f "$T/polls"
+PATH=$T/bin:$PATH REA_PROC=$T/proc REA_GAME_PROCS='SEGA Rally_SSE1' sh "$REA_INNER" "$REA_EXE"
+check "the inner script ignores REA_PROC without REA_TEST=1" "$(cat "$T/polls")" 1
+rm -f "$T/polls"
+
+echo "# the caller's traps"
+# A top-level script (as a game's -play is): its traps come back after a
+# launch, and its EXIT trap still runs when the launch is interrupted.
+cat > "$T/caller.sh" <<'CALLER'
+. "$1"
+REA_APP=trap-test REA_PREFIX=$T/prefix2 REA_EXE=$T/TestLauncher.exe REA_GPU= REA_RUN=$2
+REA_TEST=1 REA_SYSFS=$T/nosys REA_GAMESCOPE=off
+rea_init
+trap 'echo caller-exit >> "$T/caller-exit"' EXIT
+trap 'echo caller-usr1' USR1
+trap 'echo caller-int' INT
+rea_start > /dev/null
+trap > "$T/caller-traps"
+CALLER
+sh "$T/caller.sh" "$LIB" "$T/fake-run"
+traps=$(cat "$T/caller-traps")
+contains "the caller's EXIT trap is back after a launch" "$traps" "caller-exit"
+contains "the caller's INT trap is back" "$traps" "caller-int"
+contains "an untouched trap is kept" "$traps" "caller-usr1"
+lacks "the launch's own traps are gone" "$traps" "rea_launch_interrupted"
+check "the caller's EXIT trap ran once at its exit" "$(cat "$T/caller-exit")" caller-exit
+rm -f "$T/caller-exit" "$T/ended"
+sh "$T/caller.sh" "$LIB" "$T/slow-run" & CALLER=$!
+i=0; while [ ! -s "$T/.config/trap-test/running.pid" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=$((i + 1)); done
+sleep 0.2
+kill -TERM "$CALLER"; wait "$CALLER"; rc=$?
+check "interrupted top-level caller exits 143" "$rc" 143
+[ -f "$T/ended" ] && ok "it waited for the session" || fail "did not wait"
+check "the caller's EXIT trap runs after an interrupted launch" "$(cat "$T/caller-exit" 2>/dev/null)" caller-exit
 
 echo "# the settings window"
 REA_EXE=$T/TestLauncher.exe

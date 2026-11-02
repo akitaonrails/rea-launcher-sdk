@@ -3,7 +3,7 @@
 # sh shell/tests/game-alive.sh (from SRR game-alive.sh).
 . "$(dirname "$(readlink -f "$0")")/common.sh"
 REA_APP=test-launcher REA_PREFIX=$T/prefix
-load_lib
+init_lib
 mkdir -p "$T/bin" "$T/proc/4242"
 cat > "$T/bin/pgrep" <<'FAKE'
 #!/bin/sh

@@ -2,12 +2,12 @@
 # launcher.cfg discovery, rea_get_key, rea_parse_size, the screen probe and
 # the game size: sh shell/tests/config.sh
 . "$(dirname "$(readlink -f "$0")")/common.sh"
-export REA_APP=test-launcher REA_EXE_NAME=TestLauncher.exe REA_CFG_APPDATA=TestLauncher
+REA_APP=test-launcher REA_EXE_NAME=TestLauncher.exe REA_CFG_APPDATA=TestLauncher
 mkdir -p "$T/kit/linux" "$T/prefix/drive_c/users/me/AppData/Local/TestLauncher" \
   "$T/prefix/drive_c/users/Public/AppData/Local/TestLauncher"
 : > "$T/kit/TestLauncher.exe"
 REA_HERE=$T/kit/linux REA_PREFIX=$T/prefix
-load_lib
+init_lib
 
 echo "# paths"
 check "exe found one folder up from the script" "$REA_EXE" "$T/kit/TestLauncher.exe"
@@ -18,23 +18,49 @@ check "cfg in the prefix user's AppData (Public skipped)" "$REA_CFG" \
 rea_find_cfg
 check "a launcher.cfg next to the exe wins (portable install)" "$REA_CFG" "$T/kit/launcher.cfg"
 rm "$T/kit/launcher.cfg"
-got=$(XDG_CONFIG_HOME=$T/xdg REA_STATE= REA_PREFIX=$T/prefix sh -c '. "$1"; echo "$REA_STATE|$REA_LOCK"' sh "$LIB")
-check "XDG_CONFIG_HOME is honoured" "$got" "$T/xdg/test-launcher|$T/xdg/test-launcher/running.pid"
-got=$(REA_PREFIX= sh -c '. "$1"; echo "$REA_PREFIX"' sh "$LIB")
+base='REA_APP=test-launcher REA_EXE_NAME=TestLauncher.exe REA_CFG_APPDATA=TestLauncher'
+got=$(XDG_CONFIG_HOME=$T/xdg fresh "$base REA_PREFIX=$T/prefix" 'echo "$REA_STATE|$REA_LOCK"')
+check "Wine games keep ~/.config/<app> whatever XDG_CONFIG_HOME says" "$got" \
+  "$T/.config/test-launcher|$T/.config/test-launcher/running.pid"
+got=$(XDG_CONFIG_HOME=$T/xdg fresh "$base"' REA_STATE_BASE=${XDG_CONFIG_HOME:-$HOME/.config}' 'echo "$REA_STATE"')
+check "REA_STATE_BASE opts into XDG_CONFIG_HOME (SCR)" "$got" "$T/xdg/test-launcher"
+got=$(fresh "$base" 'echo "$REA_PREFIX"')
 check "default prefix" "$got" "$T/.local/share/test-launcher/prefix"
-got=$(REA_MODE=native REA_PREFIX= REA_EXE_NAME= sh -c '. "$1"; echo "$REA_CFG|$REA_PREFIX"' sh "$LIB")
+got=$(fresh 'REA_APP=test-launcher REA_MODE=native' 'echo "$REA_CFG|$REA_PREFIX"')
 check "native mode: cfg in the state folder, no prefix" "$got" "$T/.config/test-launcher/launcher.cfg|"
-got=$(REA_APP= sh -c '. "$1"' sh "$LIB" 2>&1)
+got=$(fresh 'REA_APP=' ':' 2>&1)
 contains "REA_APP is required" "$got" "REA_APP is not set"
 mkdir -p "$T/native"; : > "$T/native/Game"
-got=$(REA_MODE=native REA_HERE=$T/native REA_EXE_NAME=Game sh -c '. "$1"; echo "[$REA_EXE]"' sh "$LIB")
+got=$(fresh "REA_APP=t REA_MODE=native REA_HERE=$T/native REA_EXE_NAME=Game" 'echo "[$REA_EXE]"')
 check "native mode needs an executable launcher" "$got" "[]"
 chmod +x "$T/native/Game"
-got=$(REA_MODE=native REA_HERE=$T/native REA_EXE_NAME=Game sh -c '. "$1"; echo "[$REA_EXE]"' sh "$LIB")
+got=$(fresh "REA_APP=t REA_MODE=native REA_HERE=$T/native REA_EXE_NAME=Game" 'echo "[$REA_EXE]"')
 check "native executable found" "$got" "[$T/native/Game]"
-mkdir -p "$T/native/target/release"; printf '#!/bin/sh\n' > "$T/native/target/release/Other"; chmod +x "$T/native/target/release/Other"
-got=$(REA_MODE=native REA_HERE=$T/native REA_EXE_NAME=Other REA_EXE_SEARCH="$T/native/target/release/Other" sh -c '. "$1"; echo "[$REA_EXE]"' sh "$LIB")
-check "REA_EXE_SEARCH candidates" "$got" "[$T/native/target/release/Other]"
+mkdir -p "$T/native/target/release" "$T/abs"
+printf '#!/bin/sh\n' > "$T/native/target/release/Other"; chmod +x "$T/native/target/release/Other"
+cp "$T/native/target/release/Other" "$T/abs/Abs"
+got=$(fresh "REA_APP=t REA_MODE=native REA_HERE=$T/native REA_EXE_NAME=Other REA_EXE_SEARCH='$T/abs/Abs'" 'echo "[$REA_EXE]"')
+check "REA_EXE_SEARCH: an absolute candidate" "$got" "[$T/abs/Abs]"
+got=$(cd / && fresh "REA_APP=t REA_MODE=native REA_HERE=$T/native REA_EXE_NAME=Other REA_EXE_SEARCH='target/debug/Other target/release/Other'" 'echo "[$REA_EXE]"')
+check "REA_EXE_SEARCH: relative candidates from the script's folder, not the cwd" "$got" "[$T/native/target/release/Other]"
+got=$(cd "$T" && fresh "REA_APP=t REA_MODE=native REA_HERE=$T/native REA_EXE_SEARCH='*/release/Other'" 'echo "[$REA_EXE]"')
+check "REA_EXE_SEARCH never globs" "$got" "[]"
+
+echo "# environment values never configure a game"
+got=$(env REA_STATE=$T/evil REA_PREFIX=$T/evil REA_GPU=EVIL=1 REA_PLAY_ARGS=--evil REA_RUN=evil \
+  REA_EXE=$T/evil.exe REA_HERE=$T/evil REA_SCREEN=1x1 REA_INITED=1 \
+  sh -c '. "$1"; REA_APP=test-launcher; rea_init; echo "$REA_STATE|$REA_PREFIX|${REA_GPU-unset}|$REA_PLAY_ARGS|$REA_RUN|$REA_EXE|$REA_SCREEN"' sh "$LIB")
+check "inherited REA_* values are dropped at source time" "$got" \
+  "$T/.config/test-launcher|$T/.local/share/test-launcher/prefix|unset|--no-window|||"
+mkdir -p "$T/fakesys/class/drm/card0/device" "$T/fakesys/class/drm/card1/device"
+echo 0x8086 > "$T/fakesys/class/drm/card0/device/vendor"; echo 1 > "$T/fakesys/class/drm/card0/device/boot_vga"
+echo 0x1002 > "$T/fakesys/class/drm/card1/device/vendor"; echo 8 > "$T/fakesys/class/drm/card1/device/mem_info_vram_total"
+got=$(env REA_TEST=1 REA_SYSFS=$T/fakesys sh -c '. "$1"; REA_APP=t; rea_init; rea_gpu_env' sh "$LIB")
+check "seams from the environment are ignored, REA_TEST included" "$got" "$(sh -c '. "$1"; REA_APP=t; rea_init; rea_gpu_env' sh "$LIB")"
+got=$(sh -c '. "$1"; REA_APP=t; rea_init; REA_SYSFS=$2; rea_gpu_env' sh "$LIB" "$T/fakesys")
+check "seams are ignored without REA_TEST=1" "$got" "$(sh -c '. "$1"; REA_APP=t; rea_init; rea_gpu_env' sh "$LIB")"
+got=$(sh -c '. "$1"; REA_APP=t; rea_init; REA_TEST=1 REA_SYSFS=$2; rea_gpu_env' sh "$LIB" "$T/fakesys")
+check "seams work with REA_TEST=1 set by the script" "$got" "DRI_PRIME=1"
 REA_EXE=$T/missing.exe
 contains "a missing launcher is reported with its variable" "$(rea_require_exe 2>&1)" "TestLauncher.exe not found next to x-play (or set REA_EXE)"
 REA_EXE=$T/kit/TestLauncher.exe
