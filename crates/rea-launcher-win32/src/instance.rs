@@ -17,6 +17,38 @@
 //! # #[cfg(not(windows))] fn main() {}
 //! ```
 //!
+//! **Action flags** (`--download-hd-pack`, `--check`, anything that does
+//! work instead of opening the window) must not silently exit 0 when
+//! another launcher is open: that reads as success to a script and does
+//! nothing. Report it and exit non-zero:
+//!
+//! ```no_run
+//! # #[cfg(windows)] fn main() {
+//! use rea_launcher_win32::instance::{self, Window};
+//! use rea_launcher_win32::report::{self, Mode};
+//! # let action = true;
+//! let _instance = match instance::single("rea-outrun-2006") {
+//!     Ok(guard) => guard,
+//!     Err(running) if action => {
+//!         report::fatal(
+//!             "OutRun 2006",
+//!             "The launcher is already open; close it first, or use its window.",
+//!             Mode::Command { interactive: false },
+//!         );
+//!         std::process::exit(3);
+//!     }
+//!     Err(running) => {
+//!         if !running.bring_to_front(Window::Title("OutRun 2006")) {
+//!             // No launcher window: it is the game that is running.
+//!             report::fatal("OutRun 2006", "The game is already running.", Mode::Play { interactive: true });
+//!         }
+//!         std::process::exit(0);
+//!     }
+//! };
+//! # }
+//! # #[cfg(not(windows))] fn main() {}
+//! ```
+//!
 //! The mutex lives in the `Local\` namespace: one instance per user
 //! session. Under Wine that is per prefix (wineserver). On Linux the play
 //! helper's session lock does the same job.
@@ -47,7 +79,9 @@ pub use windows::*;
 mod windows {
     use std::ptr::null;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND,
+    };
     use windows_sys::Win32::System::Threading::CreateMutexW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         FindWindowW, IsIconic, SW_RESTORE, SetForegroundWindow, ShowWindow,
@@ -85,20 +119,19 @@ mod windows {
     impl std::error::Error for AlreadyRunning {}
 
     impl AlreadyRunning {
+        /// Whether the running launcher's window exists (without focusing
+        /// it); false when it is the game, or a window-less action, that
+        /// holds the instance.
+        pub fn is_window_found(&self, window: Window<'_>) -> bool {
+            !find(window).is_null()
+        }
+
         /// Restores and focuses the running launcher's window; false when
         /// no such window was found (it may be the game that is running).
         pub fn bring_to_front(&self, window: Window<'_>) -> bool {
-            let (class, title) = match window {
-                Window::Title(title) => (None, Some(wide(title))),
-                Window::Class(class) => (Some(wide(class)), None),
-            };
-            // SAFETY: NUL-terminated strings (or null) for FindWindowW; the
-            // other calls take the window handle it returned.
+            let hwnd = find(window);
+            // SAFETY: window calls on the handle FindWindowW returned.
             unsafe {
-                let hwnd = FindWindowW(
-                    class.as_ref().map_or(null(), |c| c.as_ptr()),
-                    title.as_ref().map_or(null(), |t| t.as_ptr()),
-                );
                 if hwnd.is_null() {
                     return false;
                 }
@@ -108,6 +141,20 @@ mod windows {
                 SetForegroundWindow(hwnd);
             }
             true
+        }
+    }
+
+    fn find(window: Window<'_>) -> HWND {
+        let (class, title) = match window {
+            Window::Title(title) => (None, Some(wide(title))),
+            Window::Class(class) => (Some(wide(class)), None),
+        };
+        // SAFETY: NUL-terminated strings (or null) that outlive the call.
+        unsafe {
+            FindWindowW(
+                class.as_ref().map_or(null(), |c| c.as_ptr()),
+                title.as_ref().map_or(null(), |t| t.as_ptr()),
+            )
         }
     }
 
@@ -171,5 +218,6 @@ mod tests {
         let again = single(&name).expect("free after the first exits");
         drop(again);
         assert!(!AlreadyRunning.bring_to_front(Window::Title("no such window rea-test")));
+        assert!(!AlreadyRunning.is_window_found(Window::Class("no_such_class_rea_test")));
     }
 }

@@ -14,6 +14,7 @@ pub mod console;
 pub mod http;
 mod latest;
 pub mod reg;
+pub mod report;
 
 #[cfg(windows)]
 pub mod dialog;
