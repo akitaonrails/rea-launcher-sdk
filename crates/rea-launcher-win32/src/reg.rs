@@ -77,6 +77,19 @@ pub fn virtual_store_path(machine_path: &str, wow64: bool) -> String {
     }
 }
 
+/// Whether an `HKLM\<path>` key is opened in the 32-bit registry view
+/// (`KEY_WOW64_32KEY`): only under `SOFTWARE`, the redirected subtree the
+/// 32-bit games read. Elsewhere (e.g. Wine's winebus key under `System`)
+/// no view flag is passed, as CMR4/SRR/OR open it.
+pub fn uses_32_bit_view(machine: bool, path: &str) -> bool {
+    let path = path.trim_start_matches('\\');
+    machine
+        && path
+            .get(..8)
+            .is_some_and(|head| head.eq_ignore_ascii_case("SOFTWARE"))
+        && matches!(path.as_bytes().get(8), None | Some(b'\\'))
+}
+
 #[cfg(windows)]
 pub use windows::*;
 
@@ -87,8 +100,9 @@ mod windows {
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_CONFIG, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE,
-        KEY_SET_VALUE, KEY_WOW64_32KEY, REG_DWORD, REG_EXPAND_SZ, REG_OPTION_NON_VOLATILE, REG_SZ,
-        RegCloseKey, RegCreateKeyExW, RegQueryValueExW, RegSetValueExW,
+        KEY_READ, KEY_SET_VALUE, KEY_WOW64_32KEY, REG_DWORD, REG_EXPAND_SZ,
+        REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW, RegOpenKeyExW,
+        RegQueryValueExW, RegSetValueExW,
     };
 
     use super::Error;
@@ -98,8 +112,10 @@ mod windows {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Hive {
         CurrentUser,
-        /// Always opened in its 32-bit view (`KEY_WOW64_32KEY`), where the
-        /// 32-bit games read, whatever the launcher's own bitness.
+        /// `SOFTWARE\…` opens in its 32-bit view (`KEY_WOW64_32KEY`), where
+        /// the 32-bit games read, whatever the launcher's own bitness;
+        /// other paths open without a view flag
+        /// ([`uses_32_bit_view`](super::uses_32_bit_view)).
         LocalMachine,
         CurrentConfig,
     }
@@ -107,7 +123,7 @@ mod windows {
     /// Where [`Key::machine_or_virtual_store`] opened the key.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Place {
-        /// `HKLM`, 32-bit view.
+        /// `HKLM` (32-bit view under `SOFTWARE`).
         Machine,
         /// `HKCU\Software\Classes\VirtualStore\MACHINE\…` (no elevation on
         /// Windows; the 32-bit game reads it transparently).
@@ -117,7 +133,7 @@ mod windows {
     impl Place {
         pub fn describe(self) -> &'static str {
             match self {
-                Place::Machine => "HKLM 32-bit view",
+                Place::Machine => "HKLM",
                 Place::VirtualStore => "HKCU VirtualStore",
             }
         }
@@ -138,13 +154,10 @@ mod windows {
 
     impl Key {
         /// Opens `path` under `hive` for reading and writing, creating it
-        /// when absent.
+        /// when absent. To only read, use [`Key::open_read`] or
+        /// [`Key::read_machine`], which never create a key.
         pub fn create(hive: Hive, path: &str) -> Result<Key, Error> {
-            let (root, view) = match hive {
-                Hive::CurrentUser => (HKEY_CURRENT_USER, 0),
-                Hive::LocalMachine => (HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY),
-                Hive::CurrentConfig => (HKEY_CURRENT_CONFIG, 0),
-            };
+            let (root, view) = root(hive, path);
             let mut key: HKEY = null_mut();
             // SAFETY: the output points to local storage and the path is
             // NUL-terminated.
@@ -183,6 +196,37 @@ mod windows {
                 }
                 Err(error) => Err(error),
             }
+        }
+
+        /// Opens an existing key read-only (`KEY_READ`); `None` when it does
+        /// not exist. Creates nothing: reading through [`Key::create`] on
+        /// non-admin Windows would leave empty keys in the VirtualStore.
+        pub fn open_read(hive: Hive, path: &str) -> Result<Option<Key>, Error> {
+            let (root, view) = root(hive, path);
+            let mut key: HKEY = null_mut();
+            // SAFETY: the output points to local storage and the path is
+            // NUL-terminated.
+            let code =
+                unsafe { RegOpenKeyExW(root, wide(path).as_ptr(), 0, KEY_READ | view, &mut key) };
+            match code {
+                ERROR_SUCCESS => Ok(Some(Key(key))),
+                ERROR_FILE_NOT_FOUND => Ok(None),
+                code => Err(Error {
+                    what: format!("cannot read {hive:?}\\{path}"),
+                    code,
+                }),
+            }
+        }
+
+        /// What a 32-bit game reads at `HKLM\<path>`: each value from the
+        /// HKCU VirtualStore when it is there, else from HKLM. Both are
+        /// opened read-only; nothing is created.
+        pub fn read_machine(path: &str) -> Result<MachineValues, Error> {
+            let store = super::virtual_store_path(path, windows_is_64_bit());
+            Ok(MachineValues {
+                store: Key::open_read(Hive::CurrentUser, &store)?,
+                machine: Key::open_read(Hive::LocalMachine, path)?,
+            })
         }
 
         /// Size and type of a value; `None` when it is absent.
@@ -336,6 +380,52 @@ mod windows {
         }
     }
 
+    /// The values a 32-bit game reads under one HKLM key; from
+    /// [`Key::read_machine`].
+    #[derive(Debug)]
+    pub struct MachineValues {
+        store: Option<Key>,
+        machine: Option<Key>,
+    }
+
+    impl MachineValues {
+        /// Whether the key exists in either place.
+        pub fn exists(&self) -> bool {
+            self.store.is_some() || self.machine.is_some()
+        }
+
+        pub fn dword(&self, name: &str) -> Result<Option<u32>, Error> {
+            self.first(|key| key.dword(name))
+        }
+
+        pub fn string(&self, name: &str) -> Result<Option<String>, Error> {
+            self.first(|key| key.string(name))
+        }
+
+        fn first<T>(
+            &self,
+            read: impl Fn(&Key) -> Result<Option<T>, Error>,
+        ) -> Result<Option<T>, Error> {
+            for key in [&self.store, &self.machine].into_iter().flatten() {
+                if let Some(value) = read(key)? {
+                    return Ok(Some(value));
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    fn root(hive: Hive, path: &str) -> (HKEY, u32) {
+        match hive {
+            Hive::CurrentUser => (HKEY_CURRENT_USER, 0),
+            Hive::LocalMachine if super::uses_32_bit_view(true, path) => {
+                (HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY)
+            }
+            Hive::LocalMachine => (HKEY_LOCAL_MACHINE, 0),
+            Hive::CurrentConfig => (HKEY_CURRENT_CONFIG, 0),
+        }
+    }
+
     fn check(code: u32, name: &str) -> Result<(), Error> {
         if code == ERROR_SUCCESS {
             Ok(())
@@ -409,6 +499,23 @@ mod tests {
             virtual_store_path(r"\System\X\", true),
             r"Software\Classes\VirtualStore\MACHINE\System\X"
         );
+    }
+
+    #[test]
+    fn only_hklm_software_uses_the_32_bit_view() {
+        assert!(uses_32_bit_view(
+            true,
+            r"SOFTWARE\Codemasters\Colin McRae Rally 04"
+        ));
+        assert!(uses_32_bit_view(true, r"\software\Sega"));
+        assert!(uses_32_bit_view(true, "Software"));
+        // Wine's bus key: no view flag, as CMR4/SRR/OR open it.
+        assert!(!uses_32_bit_view(
+            true,
+            r"System\CurrentControlSet\Services\winebus"
+        ));
+        assert!(!uses_32_bit_view(true, r"SOFTWAREX\a"));
+        assert!(!uses_32_bit_view(false, r"Software\Wine\X11 Driver"));
     }
 
     #[test]

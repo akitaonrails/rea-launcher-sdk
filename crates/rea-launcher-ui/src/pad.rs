@@ -16,19 +16,33 @@
 //! | Start, LB/RB, B | returned to the launcher: Play, tabs, back |
 //!
 //! ```no_run
-//! # use rea_launcher_ui::pad::{Nav, PadNav};
+//! # use eframe::egui;
+//! # use rea_launcher_ui::pad::{self, Nav, PadNav};
 //! # struct App { pad: PadNav, pending: Vec<Nav> }
 //! # fn buttons() -> u16 { 0 }
-//! # impl App {
-//! fn raw_input_hook(&mut self, ctx: &eframe::egui::Context, raw: &mut eframe::egui::RawInput) {
-//!     self.pending = self.pad.update(buttons());
-//!     rea_launcher_ui::pad::inject(ctx, raw, &self.pending);
+//! # impl App { fn play(&mut self) {} fn step_tab(&mut self, _: isize) {}
+//! fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+//!     let navs = self.pad.update(buttons());
+//!     pad::inject(ctx, raw, &navs);
+//!     self.pending.extend(navs);
+//! }
+//!
+//! fn ui(&mut self, ui: &mut egui::Ui) {
+//!     // Taken, not read: should egui run a second pass this frame, Play
+//!     // must not fire twice.
+//!     for nav in std::mem::take(&mut self.pending) {
+//!         match nav {
+//!             Nav::Play => self.play(),
+//!             Nav::NextTab => self.step_tab(1),
+//!             Nav::PreviousTab => self.step_tab(-1),
+//!             _ => {}
+//!         }
+//!     }
+//!     // A pad sends no window events: look again soon.
+//!     ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
 //! }
 //! # }
 //! ```
-//! Then in `ui`, act on `Nav::Play`, `Nav::NextTab`, `Nav::PreviousTab`
-//! and `Nav::Back`, and `request_repaint_after(50 ms)`: a pad sends no
-//! window events.
 
 use eframe::egui::{self, Key, Modifiers};
 

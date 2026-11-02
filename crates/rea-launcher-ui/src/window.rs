@@ -71,6 +71,8 @@ pub struct WindowFit {
     screen: Option<(u32, u32)>,
     zoom: f32,
     fitted: bool,
+    /// Off Wine: the resize waits until egui's zoom has taken effect.
+    resize_pending: bool,
 }
 
 impl WindowFit {
@@ -85,6 +87,7 @@ impl WindowFit {
             screen,
             zoom: creation_zoom(design, wine, screen, wine_scale),
             fitted: false,
+            resize_pending: false,
         }
     }
 
@@ -116,41 +119,65 @@ impl WindowFit {
         }
     }
 
-    /// Sets egui's zoom on the first frame; off Wine also resizes for the
-    /// DPI-aware scale and recentres. Does nothing on later frames.
+    /// Call at the top of every frame. The first frame sets egui's zoom;
+    /// off Wine it also picks the DPI-aware zoom, and once that zoom is in
+    /// effect (egui applies it from the next pass) resizes the window and
+    /// recentres it. Then it does nothing.
+    ///
+    /// The resize is sent in *points at the active zoom*: egui-winit turns
+    /// `InnerSize(s)` into `s × native × zoom` pixels, so sending
+    /// `design × zoom` while the zoom is active would zoom twice. Waiting
+    /// for the zoom and sending `design` gives `design × zoom × native`
+    /// pixels, whatever pass egui-winit processes the command in.
     pub fn first_frame(&mut self, ctx: &egui::Context) {
-        if self.fitted {
+        if !self.fitted {
+            self.fitted = true;
+            if !self.wine {
+                let native = ctx.native_pixels_per_point().unwrap_or(1.0);
+                let screen = self.screen.or_else(|| {
+                    ctx.input(|input| input.viewport().monitor_size)
+                        .map(|size| physical(size, native))
+                });
+                self.zoom = window_zoom(self.design, screen, native);
+                self.resize_pending = self.zoom != ctx.zoom_factor();
+            }
+            if self.zoom != ctx.zoom_factor() {
+                ctx.set_zoom_factor(self.zoom);
+            }
+        }
+        if !self.resize_pending {
             return;
         }
-        self.fitted = true;
-        if !self.wine {
-            let native = ctx.native_pixels_per_point().unwrap_or(1.0);
-            let screen = self.screen.or_else(|| {
-                ctx.input(|input| input.viewport().monitor_size)
-                    .map(|size| physical(size, native))
-            });
-            self.zoom = window_zoom(self.design, screen, native);
-        }
-        if self.zoom == 1.0 {
-            return;
-        }
-        ctx.set_zoom_factor(self.zoom);
-        if self.wine {
-            return;
-        }
-        let size = self.design * self.zoom;
-        for command in [
-            egui::ViewportCommand::MinInnerSize(size),
-            egui::ViewportCommand::MaxInnerSize(size),
-            egui::ViewportCommand::InnerSize(size),
-        ] {
-            ctx.send_viewport_cmd(command);
-        }
-        if let Some(monitor) = ctx.input(|input| input.viewport().monitor_size) {
-            let at = ((monitor - size) / 2.0).max(Vec2::ZERO);
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at.to_pos2()));
+        let monitor = ctx.input(|input| input.viewport().monitor_size);
+        if let Some((size, at)) = resize_to(self.design, self.zoom, ctx.zoom_factor(), monitor) {
+            self.resize_pending = false;
+            for command in [
+                egui::ViewportCommand::MinInnerSize(size),
+                egui::ViewportCommand::MaxInnerSize(size),
+                egui::ViewportCommand::InnerSize(size),
+            ] {
+                ctx.send_viewport_cmd(command);
+            }
+            if let Some(at) = at {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
+            }
         }
     }
+}
+
+/// The window size and centred position to send, in points at the active
+/// zoom; `None` until egui's `active` zoom is the `target` one. `monitor`
+/// is egui's monitor size, also in points at the active zoom.
+fn resize_to(
+    design: Vec2,
+    target: f32,
+    active: f32,
+    monitor: Option<Vec2>,
+) -> Option<(Vec2, Option<egui::Pos2>)> {
+    ((active - target).abs() < f32::EPSILON).then(|| {
+        let at = monitor.map(|monitor| ((monitor - design) / 2.0).max(Vec2::ZERO).to_pos2());
+        (design, at)
+    })
 }
 
 /// egui's monitor size (points) in pixels.
@@ -259,21 +286,70 @@ mod tests {
     }
 
     #[test]
-    fn first_frame_fits_once() {
+    fn the_resize_is_sent_at_the_active_zoom() {
+        // Not before egui's zoom is in effect...
+        assert_eq!(resize_to(SIZE, 1.5, 1.0, None), None);
+        // ...then the design size in (zoomed) points, centred.
+        let monitor = vec2(3840.0, 2160.0) / 1.5;
+        let (size, at) = resize_to(SIZE, 1.5, 1.5, Some(monitor)).unwrap();
+        assert_eq!(size, SIZE);
+        // egui-winit multiplies by native × zoom: design × 1.5 pixels at a
+        // native scale of 1, not design × 1.5².
+        assert_eq!(size * 1.0 * 1.5, vec2(1320.0, 960.0));
+        assert_eq!(at, Some(pos2(840.0, 400.0)));
+        // Centred in pixels: equal margins either side.
+        assert_eq!(
+            at.unwrap().to_vec2() * 1.5 * 2.0 + SIZE * 1.5,
+            vec2(3840.0, 2160.0)
+        );
+    }
+
+    fn run(ctx: &egui::Context, fit: &mut WindowFit) -> Vec<egui::ViewportCommand> {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| fit.first_frame(ui.ctx()));
+        output.textures_delta.clear();
+        output
+            .viewport_output
+            .remove(&egui::ViewportId::ROOT)
+            .map(|viewport| viewport.commands)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn first_frame_zooms_then_resizes_once() {
         let ctx = egui::Context::default();
         let mut fit = WindowFit::new(SIZE, false, Some((3840, 2160)), 1.0);
-        ctx.run_ui(egui::RawInput::default(), |ui| fit.first_frame(ui.ctx()))
-            .textures_delta
-            .clear();
+        let first = run(&ctx, &mut fit);
         assert_eq!(fit.zoom(), 1.5);
-        // egui applies the zoom from the next frame.
-        ctx.run_ui(egui::RawInput::default(), |_| {})
-            .textures_delta
-            .clear();
+        assert!(
+            !first
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::InnerSize(_))),
+            "no resize before the zoom is active: {first:?}"
+        );
+        let second = run(&ctx, &mut fit);
         assert_eq!(ctx.zoom_factor(), 1.5);
-        fit.zoom = 7.0;
-        fit.first_frame(&ctx);
-        assert_eq!(fit.zoom(), 7.0, "later frames change nothing");
+        assert!(
+            second.contains(&egui::ViewportCommand::InnerSize(SIZE)),
+            "{second:?}"
+        );
+        let third = run(&ctx, &mut fit);
+        assert!(
+            !third
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::InnerSize(_)))
+        );
+        // Under Wine: only the zoom, never a resize (XWayland).
+        let ctx = egui::Context::default();
+        let mut wine = WindowFit::new(SIZE, true, Some((3840, 2160)), 1.0);
+        for _ in 0..3 {
+            let commands = run(&ctx, &mut wine);
+            assert!(
+                !commands
+                    .iter()
+                    .any(|c| matches!(c, egui::ViewportCommand::InnerSize(_)))
+            );
+        }
+        assert_eq!(ctx.zoom_factor(), 1.5);
     }
 
     #[test]

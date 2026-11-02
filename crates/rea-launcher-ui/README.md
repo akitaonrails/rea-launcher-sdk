@@ -34,12 +34,17 @@ struct App { fit: WindowFit, pad: pad::PadNav, pending: Vec<pad::Nav>, fps: u32,
 
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.pending = self.pad.update(xinput_buttons());
-        pad::inject(ctx, raw, &self.pending);
+        let navs = self.pad.update(xinput_buttons());
+        pad::inject(ctx, raw, &navs);
+        self.pending.extend(navs);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         self.fit.first_frame(ui.ctx());
+        // Taken, so a second egui pass in one frame can't play twice.
+        for nav in std::mem::take(&mut self.pending) {
+            if nav == pad::Nav::Play { /* save, then close */ }
+        }
         let layout = Layout::new(ui.max_rect(), 300.0);
         ui.scope_builder(egui::UiBuilder::new().max_rect(layout.body), |ui| {
             widgets::chips(ui, &[(60, "60"), (0, "Unlimited")], &mut self.fps, None);

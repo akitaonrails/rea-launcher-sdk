@@ -11,10 +11,10 @@ state parsing and button bits (`rea_launcher::pad`) — live in the portable
 | Module | What | From |
 |---|---|---|
 | `wine` | `is_wine` (export + env fallback), `seed_winebus` | CMR4 / OR |
-| `reg` | pure: `Error`, `seed_missing`, `virtual_store_path`; RAII `Key`: `dword`/`string`/`has`/`set_*`/`*_if_missing`/`seed_dwords`; `Key::machine_or_virtual_store` (HKLM 32-bit view, HKCU VirtualStore on access denied) | CMR4 |
-| `process` | `Launch` builder (args, cwd, env, hidden) → `Running` (`wait`, `message_hook` for a close-hook DLL) | CMR4 + CMR3 |
-| `xinput` | cached lookup; `pads` (as `rea_launcher::pad::Pad`), `buttons`, `connected`, `set_rumble`/`test_rumble`/`stop_rumble`, `ids` (USB vid/pid) | CMR4 + SRR/OR |
-| `display` | `monitors` (physical modes, as `rea_launcher::display::Monitor`), `screen_size`, `mode_supported`, `wine_dpi_scale` | CMR4 + SRR + OR |
+| `reg` | pure: `Error`, `seed_missing`, `virtual_store_path`, `uses_32_bit_view`; RAII `Key`: `open_read` and `Key::read_machine` (read-only, never create; VirtualStore value first, as the game sees it); `dword`/`string`/`has`/`set_*`/`*_if_missing`/`seed_dwords`; `Key::machine_or_virtual_store` (HKLM — 32-bit view under `SOFTWARE` only — or HKCU VirtualStore on access denied) | CMR4 |
+| `process` | `Launch` builder (args, cwd, env, hidden) → `Running` (`wait`, `message_hook` for a close-hook DLL; `#[must_use]` hook) | CMR4 + CMR3 |
+| `xinput` | cached lookup; `pads` (as `rea_launcher::pad::Pad`), `buttons`, `connected`, `set_rumble`/`test_rumble`/`stop_rumble` (latest call wins), `ids` (USB vid/pid) | CMR4 + SRR/OR |
+| `display` | `monitors` (physical modes, as `rea_launcher::display::Monitor`), `screen_size`, `mode_supported`, `wine_dpi_scale` (Wine only; 1.0 and untouched DPI awareness on Windows) | CMR4 + SRR + OR |
 | `gpu` | `prefer_fast_gpu` (`GpuPreference=2;`), `prefer_glx` (Wine `UseEGL=N`) | all four |
 | `dialog` | `message`, `pick_folder`, `open_url` | all four |
 | `disk` | `free_space` | OR |

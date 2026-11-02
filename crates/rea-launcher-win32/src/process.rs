@@ -184,6 +184,13 @@ impl Running {
     /// on the child's main thread (Windows then loads the DLL into the
     /// child). CMR4 uses it to end a game that ignores `WM_CLOSE`. Keep the
     /// returned hook alive until [`Running::wait`] returns.
+    ///
+    /// The child is already running when the hook goes in, so messages it
+    /// handles before that are not seen — as in CMR4, where the hook only
+    /// has to catch a later close request. Starting the child suspended
+    /// would close that gap, but hooking a thread that has not yet made a
+    /// window call is not reliable (and untested under Wine), so it isn't
+    /// done.
     pub fn message_hook(&self, dll: &Path, export: &CStr) -> Result<MessageHook, String> {
         use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
         use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_GETMESSAGE};
@@ -232,8 +239,10 @@ impl Running {
     }
 }
 
-/// An installed hook, removed on drop.
+/// An installed hook, removed on drop: bind it (`let _hook = …`), since
+/// `let _ = …` would remove it at once.
 #[derive(Debug)]
+#[must_use = "the hook is removed when this is dropped"]
 pub struct MessageHook(windows_sys::Win32::UI::WindowsAndMessaging::HHOOK);
 
 impl Drop for MessageHook {

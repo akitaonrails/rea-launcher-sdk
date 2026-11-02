@@ -104,13 +104,18 @@ pub fn mode_supported(width: u32, height: u32) -> bool {
     }
 }
 
-/// **Under Wine only, before any window exists:** makes the process
-/// DPI-aware and returns Wine's DPI setting as a scale (1.0 at 96 DPI,
-/// 1.5 at 144). Pass it to the settings window's creation zoom as the
-/// native scale. Wine has one DPI for every monitor, so system
-/// awareness loses nothing there; on Windows don't call this — winit's
-/// per-monitor awareness must stay.
+/// Wine's DPI setting as a scale (1.0 at 96 DPI, 1.5 at 144), to pass to
+/// the settings window's creation zoom as the native scale. Call it before
+/// any window exists.
+///
+/// Under Wine it first makes the process system-DPI-aware (Wine has one DPI
+/// for every monitor, so nothing is lost). On native Windows it does
+/// nothing and returns 1.0: changing the awareness there would override
+/// winit's per-monitor awareness, and Windows sizes the window itself.
 pub fn wine_dpi_scale() -> f32 {
+    if !crate::wine::is_wine() {
+        return 1.0;
+    }
     // SAFETY: awareness is a process flag; the screen DC is released
     // after the one query.
     let dpi = unsafe {

@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
+use crate::latest::Latest;
 use crate::wide::wide;
 use rea_launcher::pad::{Pad, ids_from_capabilities_ex, motor_speed};
 
@@ -88,9 +89,18 @@ pub fn buttons() -> u16 {
     pads().iter().fold(0, |all, pad| all | pad.buttons)
 }
 
+/// Rumble requests; a pending [`test_rumble`] timer only stops the motors
+/// when no later request came in.
+static RUMBLE: Latest = Latest::new();
+
 /// Sets both motors of every pad to `speed`; the number of pads that
-/// accepted it.
+/// accepted it. Cancels a pending [`test_rumble`] stop.
 pub fn set_rumble(speed: u16) -> usize {
+    RUMBLE.next();
+    motors(speed)
+}
+
+fn motors(speed: u16) -> usize {
     let Some(set) = procs().set_state else {
         return 0;
     };
@@ -106,13 +116,18 @@ pub fn stop_rumble() {
 }
 
 /// Rumbles every pad at `percent` for `length`, then stops (on a
-/// background thread); the number of pads that rumbled.
+/// background thread); the number of pads that rumbled. The latest call
+/// wins: a second test while the first runs is not cut short by the
+/// first one's timer.
 pub fn test_rumble(percent: u32, length: Duration) -> usize {
-    let pads = set_rumble(motor_speed(percent));
+    let ticket = RUMBLE.next();
+    let pads = motors(motor_speed(percent));
     if pads > 0 {
         std::thread::spawn(move || {
             std::thread::sleep(length);
-            stop_rumble();
+            if RUMBLE.is_current(ticket) {
+                motors(0);
+            }
         });
     }
     pads
