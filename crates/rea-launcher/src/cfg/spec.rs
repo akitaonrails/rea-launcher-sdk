@@ -59,6 +59,22 @@ pub struct OptionSpec {
     /// and a key; the helper must honour the one-run flag passed to it as
     /// well as `launcher.cfg`.
     pub helper: bool,
+    /// For `Toggle` and `Choice`: the window also offers leaving the value
+    /// unset, under this label (e.g. "As the game"); unset means the key
+    /// is cleared from `launcher.cfg` and the game keeps its own value.
+    pub unset: Option<&'static str>,
+    /// Replaces the generated [`OptionSpec::needs`] text
+    /// ("10–240 or unlimited").
+    pub needs_text: Option<&'static str>,
+    /// Replaces the generated [`OptionSpec::placeholder`] (`<10-240|unlimited>`).
+    pub placeholder_text: Option<&'static str>,
+    /// `(word, canonical value)`: other spellings read as a value, silently
+    /// (an old `true` for `on`, `unlimited` for `0`). A canonical value
+    /// named here is accepted even outside a `Range` (a special value).
+    pub value_aliases: &'static [(&'static str, &'static str)],
+    /// A key the launcher no longer has (see [`OptionSpec::removed`]), with
+    /// a note on why.
+    pub removed: Option<&'static str>,
 }
 
 impl OptionSpec {
@@ -78,7 +94,51 @@ impl OptionSpec {
             launcher_only: false,
             aliases: &[],
             helper: false,
+            unset: None,
+            needs_text: None,
+            placeholder_text: None,
+            value_aliases: &[],
+            removed: None,
         }
+    }
+
+    /// A key the launcher removed (CMR4's `widescreen`): still accepted in
+    /// `launcher.cfg` and as a flag with any value and ignored, never
+    /// listed by [`usage`]/[`template`] or asked of the window, and
+    /// commented out by [`retire_removed`] when the file is saved. `why` is
+    /// for the launcher's log or docs.
+    pub const fn removed(key: &'static str, why: &'static str) -> OptionSpec {
+        let mut spec = OptionSpec::new(key, Kind::Text, "", why);
+        spec.launcher_only = true;
+        spec.removed = Some(why);
+        spec
+    }
+
+    /// Uses `text` for what the option takes, in messages and the template.
+    pub const fn with_needs(mut self, text: &'static str) -> OptionSpec {
+        self.needs_text = Some(text);
+        self
+    }
+
+    /// Uses `text` as the `--help` value placeholder.
+    pub const fn with_placeholder(mut self, text: &'static str) -> OptionSpec {
+        self.placeholder_text = Some(text);
+        self
+    }
+
+    /// Reads other spellings as values (see the field).
+    pub const fn with_value_aliases(
+        mut self,
+        aliases: &'static [(&'static str, &'static str)],
+    ) -> OptionSpec {
+        self.value_aliases = aliases;
+        self
+    }
+
+    /// Offers "unset" in the window under `label` (see the field).
+    pub const fn unset_label(mut self, label: &'static str) -> OptionSpec {
+        self.unset = Some(label);
+        self
     }
 
     /// Uses `flag` instead of the derived one.
@@ -131,6 +191,9 @@ impl OptionSpec {
     /// What the option takes, for messages: `on or off`, `a, b or c`,
     /// `WIDTHxHEIGHT or original`, `30 to 150`, `a folder`, `text`.
     pub fn needs(&self) -> String {
+        if let Some(text) = self.needs_text {
+            return text.to_owned();
+        }
         match self.kind {
             Kind::Toggle => ON_OFF.to_owned(),
             Kind::Choice(table) => super::one_of(table),
@@ -143,7 +206,11 @@ impl OptionSpec {
                 }
                 join_or(&words)
             }
-            Kind::Range { min, max } => format!("{min} to {max}"),
+            Kind::Range { min, max } => {
+                let mut words = vec![format!("{min} to {max}")];
+                words.extend(self.special_words().map(str::to_owned));
+                join_or(&words.iter().map(String::as_str).collect::<Vec<_>>())
+            }
             Kind::Path => "a folder or file".to_owned(),
             Kind::Text => "text".to_owned(),
         }
@@ -152,18 +219,49 @@ impl OptionSpec {
     /// The value part of the `--help` line: `on|off`, `a|b|c`, `<WxH>`,
     /// `<30-150>`, `<folder>`, `<text>`.
     pub fn placeholder(&self) -> String {
+        if let Some(text) = self.placeholder_text {
+            return text.to_owned();
+        }
         match self.kind {
             Kind::Toggle => "on|off".to_owned(),
             Kind::Choice(table) => table.iter().map(|(v, _)| *v).collect::<Vec<_>>().join("|"),
             Kind::Size { .. } => "<WxH>".to_owned(),
-            Kind::Range { min, max } => format!("<{min}-{max}>"),
+            Kind::Range { min, max } => {
+                let mut parts = vec![format!("{min}-{max}")];
+                parts.extend(self.special_words().map(str::to_owned));
+                format!("<{}>", parts.join("|"))
+            }
             Kind::Path => "<folder>".to_owned(),
             Kind::Text => "<text>".to_owned(),
         }
     }
 
+    /// Value-alias words naming a number outside a `Range` (`off` for 0).
+    fn special_words(&self) -> impl Iterator<Item = &'static str> + '_ {
+        let range = match self.kind {
+            Kind::Range { min, max } => Some(min..=max),
+            _ => None,
+        };
+        self.value_aliases
+            .iter()
+            .filter_map(move |(word, canonical)| {
+                let n: u32 = canonical.trim().parse().ok()?;
+                range.as_ref().filter(|r| !r.contains(&n)).map(|_| *word)
+            })
+    }
+
     /// `value` checked against the row and parsed.
     pub fn parse<'a>(&self, value: &'a str) -> Result<Value<'a>, Rejected> {
+        let value = self
+            .value_aliases
+            .iter()
+            .find(|(word, _)| word.eq_ignore_ascii_case(value.trim()))
+            .map_or(value, |(_, canonical)| *canonical);
+        let special = |n: &u32| {
+            self.value_aliases
+                .iter()
+                .any(|(_, canonical)| canonical.trim().parse() == Ok(*n))
+        };
         let parsed = match self.kind {
             Kind::Toggle => parse_bool(value).map(Value::Toggle),
             Kind::Choice(table) => table
@@ -173,7 +271,12 @@ impl OptionSpec {
             Kind::Size { min, max, aliases } => {
                 parse_resolution(value, min, max, aliases).map(Value::Size)
             }
-            Kind::Range { min, max } => super::parse_range(value, min..=max).map(Value::Number),
+            Kind::Range { min, max } => value
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| (min..=max).contains(n) || special(n))
+                .map(Value::Number),
             Kind::Path | Kind::Text => Some(Value::Text(value.trim())),
         };
         parsed.ok_or_else(|| Rejected::needs(self.needs()))
@@ -224,7 +327,27 @@ pub fn dispatch(
     apply: &mut dyn FnMut(&str, Value) -> Result<(), Rejected>,
 ) -> Result<(), Rejected> {
     let spec = find(specs, key).ok_or(Rejected::Unknown)?;
+    if spec.removed.is_some() {
+        return Ok(());
+    }
     apply(spec.key, spec.parse(value)?)
+}
+
+/// Comments out the lines of removed keys ([`OptionSpec::removed`]), for
+/// the launcher to call when it saves `launcher.cfg`.
+pub fn retire_removed(text: &str, specs: &[OptionSpec]) -> String {
+    specs
+        .iter()
+        .filter(|s| s.removed.is_some())
+        .fold(text.to_owned(), |text, s| {
+            let text = super::clear_key(&text, s.key);
+            s.aliases.iter().fold(text, |t, a| super::clear_key(&t, a))
+        })
+}
+
+/// The rows a window or listing shows: all but removed keys.
+pub fn active(specs: &[OptionSpec]) -> impl Iterator<Item = &OptionSpec> {
+    specs.iter().filter(|s| s.removed.is_none())
 }
 
 /// [`super::parse`] with every value checked against `specs` first.
@@ -275,20 +398,38 @@ pub fn parse_args<I: IntoIterator<Item = String>>(
 }
 
 /// The option lines of `--help`: `  --flag <value>  label`, aligned;
-/// helper-owned options end in `(Linux helper)`.
-/// The launcher adds its own heading and switch lines around them.
+/// helper-owned options end in `(Linux helper)`; removed keys are left
+/// out. The launcher adds its own heading around them; see
+/// [`usage_with`] for its value-less switches.
 pub fn usage(specs: &[OptionSpec], style: KeyStyle) -> String {
-    let left: Vec<String> = specs
-        .iter()
-        .map(|s| format!("{} {}", s.flag_name(style), s.placeholder()))
-        .collect();
-    let width = left.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    left.iter()
-        .zip(specs)
-        .map(|(l, s)| {
+    usage_with(specs, style, &[])
+}
+
+/// [`usage`] followed by the launcher's value-less switches, given as
+/// `(flag, description)` (`("--no-window", "play with the saved
+/// settings")`), all in one aligned column.
+pub fn usage_with(specs: &[OptionSpec], style: KeyStyle, switches: &[(&str, &str)]) -> String {
+    let mut rows: Vec<(String, String)> = active(specs)
+        .map(|s| {
             let helper = if s.helper { " (Linux helper)" } else { "" };
-            format!("  {l:width$}  {}{helper}\n", s.label)
+            (
+                format!("{} {}", s.flag_name(style), s.placeholder()),
+                format!("{}{helper}", s.label),
+            )
         })
+        .collect();
+    rows.extend(
+        switches
+            .iter()
+            .map(|(f, d)| ((*f).to_owned(), (*d).to_owned())),
+    );
+    let width = rows
+        .iter()
+        .map(|(l, _)| l.chars().count())
+        .max()
+        .unwrap_or(0);
+    rows.iter()
+        .map(|(l, d)| format!("  {l:width$}  {d}\n"))
         .collect()
 }
 
@@ -322,7 +463,7 @@ pub fn template(heading: &str, specs: &[OptionSpec]) -> String {
             comment(line, &mut out);
         }
     }
-    for spec in specs {
+    for spec in active(specs) {
         out.push('\n');
         comment(spec.description, &mut out);
         comment(&format!("Values: {}.", spec.needs()), &mut out);
@@ -378,7 +519,7 @@ pub fn parity_problems(specs: &[OptionSpec], style: KeyStyle, window_keys: &[&st
         }
     }
     for key in window_keys {
-        if !specs.iter().any(|s| s.key == *key) {
+        if !active(specs).any(|s| s.key == *key) {
             problems.push(format!(
                 "window control {key} has no option row (no flag, no launcher.cfg key)"
             ));
@@ -648,6 +789,120 @@ mod tests {
     }
 
     #[test]
+    fn custom_texts_and_value_aliases() {
+        const FPS: OptionSpec = OptionSpec::new(
+            "fps_limit",
+            Kind::Range { min: 10, max: 240 },
+            "Frame limit",
+            "Frames per second.",
+        )
+        .with_needs("10–240 or unlimited")
+        .with_placeholder("<10-240|unlimited>")
+        .with_value_aliases(&[("unlimited", "0"), ("off", "0")])
+        .with_example("unlimited");
+        assert_eq!(FPS.parse("Unlimited"), Ok(Value::Number(0)));
+        assert_eq!(FPS.parse("0"), Ok(Value::Number(0)), "a special value");
+        assert_eq!(FPS.parse("60"), Ok(Value::Number(60)));
+        assert_eq!(FPS.parse("5"), Err(Rejected::needs("10–240 or unlimited")));
+        assert!(usage(&[FPS], KeyStyle::Underscore).contains("--fps-limit <10-240|unlimited>"));
+        let text = template("x", &[FPS]);
+        assert!(text.contains("# Values: 10–240 or unlimited.\n#fps_limit = unlimited\n"));
+        assert_eq!(
+            parity_problems(&[FPS], KeyStyle::Underscore, &["fps_limit"]),
+            Vec::<String>::new()
+        );
+        // Old spellings of a toggle and a choice.
+        const VSYNC: OptionSpec = OptionSpec::new(
+            "vsync",
+            Kind::Choice(&[("on", "On"), ("off", "Off"), ("adaptive", "Adaptive")]),
+            "VSync",
+            "",
+        )
+        .with_value_aliases(&[("true", "on"), ("half", "adaptive")]);
+        assert_eq!(VSYNC.parse("TRUE"), Ok(Value::Choice("on")));
+        assert_eq!(VSYNC.parse("half"), Ok(Value::Choice("adaptive")));
+        assert_eq!(VSYNC.needs(), "on, off or adaptive", "aliases stay silent");
+    }
+
+    #[test]
+    fn an_off_word_on_a_range_is_listed() {
+        const FPS: OptionSpec = OptionSpec::new(
+            "fps_limit",
+            Kind::Range { min: 1, max: 1000 },
+            "FPS limit",
+            "",
+        )
+        .with_value_aliases(&[("off", "0"), ("max", "1000")]);
+        assert_eq!(FPS.parse("off"), Ok(Value::Number(0)));
+        assert_eq!(FPS.parse("max"), Ok(Value::Number(1000)));
+        assert_eq!(
+            FPS.needs(),
+            "1 to 1000 or off",
+            "an alias inside the range stays silent"
+        );
+        assert_eq!(FPS.placeholder(), "<1-1000|off>");
+    }
+
+    #[test]
+    fn removed_keys_are_read_and_ignored_then_retired() {
+        const TABLE: &[OptionSpec] = &[
+            OptionSpec::new("vsync", Kind::Toggle, "VSync", "Wait for the refresh."),
+            OptionSpec::removed("widescreen", "the 16:9 patch is gone; dgVoodoo scales"),
+        ];
+        let mut seen = Vec::new();
+        let warnings = parse_file(
+            "widescreen = on\nvsync = on\n",
+            "launcher.cfg",
+            TABLE,
+            |k, _| {
+                seen.push(k.to_owned());
+                Ok(())
+            },
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(seen, ["vsync"]);
+        let switches = parse_args(
+            ["--widescreen", "anything", "--vsync", "off"].map(String::from),
+            KeyStyle::Underscore,
+            TABLE,
+            &[],
+            |k, _| {
+                seen.push(k.to_owned());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(switches.is_empty());
+        assert_eq!(seen, ["vsync", "vsync"]);
+        assert_eq!(
+            retire_removed("widescreen = on\nvsync = on\n", TABLE),
+            "#widescreen =\nvsync = on\n"
+        );
+        assert!(!usage(TABLE, KeyStyle::Underscore).contains("widescreen"));
+        assert!(!template("x", TABLE).contains("widescreen"));
+        assert_eq!(
+            check_parity(TABLE, KeyStyle::Underscore, &["vsync"]),
+            Ok(())
+        );
+        assert!(check_parity(TABLE, KeyStyle::Underscore, &["vsync", "widescreen"]).is_err());
+        assert_eq!(active(TABLE).count(), 1);
+    }
+
+    #[test]
+    fn usage_lists_switches_in_the_same_column() {
+        const ONE: &[OptionSpec] = &[OptionSpec::new("vsync", Kind::Toggle, "VSync", "")];
+        let text = usage_with(
+            ONE,
+            KeyStyle::Underscore,
+            &[("--no-window", "play with the saved settings")],
+        );
+        assert_eq!(
+            text,
+            "  --vsync on|off  VSync\n  --no-window     play with the saved settings\n"
+        );
+    }
+
+    #[test]
     fn helper_options_are_marked_and_still_need_a_control() {
         const SCALERS: &[(&str, &str)] = &[("fsr", "FSR"), ("linear", "Smooth")];
         const LINUX: &[OptionSpec] = &[OptionSpec::new(
@@ -769,5 +1024,11 @@ mod tests {
             "<folder>"
         );
         assert_eq!(OptionSpec::new("t", Kind::Text, "", "").needs(), "text");
+        let program = OptionSpec::new("dosbox", Kind::Path, "", "").with_placeholder("<program>");
+        assert_eq!(program.placeholder(), "<program>");
+        assert_eq!(
+            program.parse(" /usr/bin/dosbox "),
+            Ok(Value::Text("/usr/bin/dosbox"))
+        );
     }
 }

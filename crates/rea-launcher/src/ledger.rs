@@ -159,6 +159,27 @@ impl Ledger {
         self.take_out_with(rel, known, &runtime::CopyAll)
     }
 
+    /// Takes the runtime's `rel` out when it is ours, WITHOUT bringing the
+    /// game folder's own copy back (OR: repacks ship SpecialK's `d3d9.dll`,
+    /// which must not load before the real Direct3D). `Restored` here means
+    /// ours was removed. Someone else's file stays; the record goes.
+    pub fn take_out_keep_game(&mut self, rel: &str, known: &[&[u8]]) -> io::Result<Outcome> {
+        plain(rel)?;
+        let path = self.runtime_path(rel);
+        let outcome = if self.owns(rel, known)? {
+            fsx::remove(&path)?;
+            Outcome::Restored
+        } else if fs::symlink_metadata(&path).is_ok() {
+            Outcome::NotOurs
+        } else {
+            Outcome::Absent
+        };
+        if self.owned.remove(rel).is_some() {
+            self.save()?;
+        }
+        Ok(outcome)
+    }
+
     /// [`Ledger::take_out`], bringing the game's file back the way a sync
     /// would: hard-linked where `policy` links it (and the original is
     /// writable), else copied with its time.
@@ -399,6 +420,46 @@ mod tests {
         ledger.take_out("d3d9.dll", &[]).unwrap();
         assert_ne!(ino(&rt.join("d3d9.dll")), ino(&game.join("D3D9.DLL")));
         assert_eq!(fs::read(rt.join("d3d9.dll")).unwrap(), b"game's own");
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn taking_out_can_leave_the_games_copy_out() {
+        let (game, rt) = setup("ledger-keep-game");
+        // A repack's SpecialK d3d9.dll in the game folder.
+        fs::write(game.join("d3d9.dll"), b"specialk").unwrap();
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        assert_eq!(
+            ledger.install("d3d9.dll", b"dxvk", &[]).unwrap(),
+            Outcome::Installed
+        );
+        assert_eq!(
+            ledger.take_out_keep_game("d3d9.dll", &[]).unwrap(),
+            Outcome::Restored
+        );
+        assert!(!rt.join("d3d9.dll").exists(), "SpecialK does not come back");
+        assert!(ledger.names().next().is_none());
+        // A player's own file stays.
+        fs::write(rt.join("d3d9.dll"), b"player's").unwrap();
+        assert_eq!(
+            ledger.take_out_keep_game("d3d9.dll", &[]).unwrap(),
+            Outcome::NotOurs
+        );
+        assert_eq!(fs::read(rt.join("d3d9.dll")).unwrap(), b"player's");
+        // Pre-ledger runtimes: known bundle bytes count as ours.
+        fs::write(rt.join("d3d9.dll"), b"dxvk 1.0").unwrap();
+        assert_eq!(
+            ledger
+                .take_out_keep_game("d3d9.dll", &[b"dxvk 1.0"])
+                .unwrap(),
+            Outcome::Restored
+        );
+        assert_eq!(
+            ledger.take_out_keep_game("d3d9.dll", &[]).unwrap(),
+            Outcome::Absent
+        );
         for d in [game, rt] {
             fs::remove_dir_all(d).unwrap();
         }

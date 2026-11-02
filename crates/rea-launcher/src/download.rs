@@ -64,10 +64,22 @@ impl Pin {
         path.rsplit('/').next().unwrap_or(path)
     }
 
-    /// The version's name: the file name without `.zip`.
+    /// The version's name: the file name without its extension (`.zip`,
+    /// `.cab`, `.exe`; an all-digit ending like `v1.2` is kept), so the
+    /// folder it unpacks to never is the downloaded file itself.
     pub fn name(&self) -> &str {
         let file = self.file_name();
-        file.strip_suffix(".zip").unwrap_or(file)
+        match file.rsplit_once('.') {
+            Some((stem, ext))
+                if !stem.is_empty()
+                    && (1..=4).contains(&ext.len())
+                    && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+                    && ext.bytes().any(|b| b.is_ascii_alphabetic()) =>
+            {
+                stem
+            }
+            _ => file,
+        }
     }
 
     /// Where this version is unpacked below `root`.
@@ -193,6 +205,12 @@ impl Job {
 
     fn set(&self, phase: Phase) {
         *self.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase;
+    }
+
+    /// Reports a step the launcher runs itself (its own extractor in
+    /// [`install_with`]: `Phase::Unpacking { done, total }`).
+    pub fn set_phase(&self, phase: Phase) {
+        self.set(phase);
     }
 }
 
@@ -392,12 +410,25 @@ fn stream(
     Ok(())
 }
 
-/// Downloads and unpacks `pin` below `root`, reporting through `job`;
-/// a version already complete is returned at once. `free` tells the free
-/// space under `root`. Returns (and leaves in `job`) the final phase;
-/// `Done` holds the unpacked folder.
-#[cfg(feature = "zip")]
-pub fn install(pin: &Pin, root: &Path, free: FreeSpace, fetch: &dyn Fetch, job: &Job) -> Phase {
+/// Unpacks a downloaded archive into an empty folder, reporting through
+/// the job (`Job::set_phase(Phase::Unpacking { .. })`) and stopping when
+/// `Job::cancelled`. Arguments: the archive, the folder, the job.
+pub type Extract<'a> = &'a dyn Fn(&Path, &Path, &Job) -> Result<(), String>;
+
+/// Downloads `pin` below `root` (or reuses a verified download) and runs
+/// `extract` into a temporary folder, which is marked complete with the
+/// hash and renamed to [`Pin::dir`] only when `extract` succeeded; then
+/// the download and older versions go. A complete version is returned at
+/// once. For archives the SDK cannot open (a `.cab`, an installer `.exe`):
+/// the launcher's `extract` does the unpacking.
+pub fn install_with(
+    pin: &Pin,
+    root: &Path,
+    free: FreeSpace,
+    fetch: &dyn Fetch,
+    job: &Job,
+    extract: Extract,
+) -> Phase {
     let result = (|| {
         if let Some(dir) = installed(pin, root) {
             return Ok(dir);
@@ -407,7 +438,22 @@ pub fn install(pin: &Pin, root: &Path, free: FreeSpace, fetch: &dyn Fetch, job: 
         if !verified(pin, &archive, job) {
             fetch_to(pin, root, free, fetch, job)?;
         }
-        let dir = unpack(pin, &archive, root, job)?;
+        let dir = pin.dir(root);
+        let tmp = root.join(format!("{}.unpacking", pin.name()));
+        for stale in [&tmp, &dir] {
+            if stale.exists() {
+                fs::remove_dir_all(stale)
+                    .map_err(|e| format!("cannot clear {}: {e}", stale.display()))?;
+            }
+        }
+        fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+        job.set(Phase::Unpacking { done: 0, total: 0 });
+        extract(&archive, &tmp, job)?;
+        if job.cancelled() {
+            return Err("cancelled".into());
+        }
+        fs::write(tmp.join(MARKER), hex(&pin.sha256)).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &dir).map_err(|e| format!("cannot finish {}: {e}", dir.display()))?;
         let _ = fs::remove_file(&archive);
         remove_other_versions(root, pin);
         Ok(dir)
@@ -415,18 +461,16 @@ pub fn install(pin: &Pin, root: &Path, free: FreeSpace, fetch: &dyn Fetch, job: 
     finish(job, result)
 }
 
-/// Unpacks into a temporary folder and renames it into place only when
-/// every file is out, so a half-unpacked version is never used.
+/// [`install_with`] for a zip archive (`zip` feature). Names that would
+/// land outside the folder are skipped.
 #[cfg(feature = "zip")]
-fn unpack(pin: &Pin, archive: &Path, root: &Path, job: &Job) -> Result<PathBuf, String> {
-    let dir = pin.dir(root);
-    let tmp = root.join(format!("{}.unpacking", pin.name()));
-    for stale in [&tmp, &dir] {
-        if stale.exists() {
-            fs::remove_dir_all(stale)
-                .map_err(|e| format!("cannot clear {}: {e}", stale.display()))?;
-        }
-    }
+pub fn install(pin: &Pin, root: &Path, free: FreeSpace, fetch: &dyn Fetch, job: &Job) -> Phase {
+    install_with(pin, root, free, fetch, job, &unzip)
+}
+
+/// Unpacks a zip into `into`, reporting progress through `job`.
+#[cfg(feature = "zip")]
+pub fn unzip(archive: &Path, into: &Path, job: &Job) -> Result<(), String> {
     let file = File::open(archive).map_err(|e| e.to_string())?;
     let mut zip =
         zip::ZipArchive::new(file).map_err(|e| format!("the archive can't be read: {e}"))?;
@@ -448,7 +492,7 @@ fn unpack(pin: &Pin, archive: &Path, root: &Path, job: &Job) -> Result<PathBuf, 
         let Some(name) = entry.enclosed_name() else {
             continue;
         };
-        let out = tmp.join(name);
+        let out = into.join(name);
         if entry.is_dir() {
             fs::create_dir_all(&out).map_err(|e| e.to_string())?;
             continue;
@@ -472,10 +516,7 @@ fn unpack(pin: &Pin, archive: &Path, root: &Path, job: &Job) -> Result<PathBuf, 
             job.set(Phase::Unpacking { done, total });
         }
     }
-    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    fs::write(tmp.join(MARKER), hex(&pin.sha256)).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &dir).map_err(|e| format!("cannot finish {}: {e}", dir.display()))?;
-    Ok(dir)
+    Ok(())
 }
 
 /// Older versions (folders with the marker) and leftovers of their
@@ -679,6 +720,72 @@ mod tests {
             "{phase:?}"
         );
         assert_eq!(fake.asked_from.get(), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn names_drop_the_extension_but_not_a_version() {
+        let pin = |file: &str| Pin {
+            url: format!("https://x.org/r/{file}"),
+            sha256: [0; 32],
+            size: 1,
+            unpacked_size: 0,
+        };
+        assert_eq!(pin("Pack-v1.2.zip").name(), "Pack-v1.2");
+        assert_eq!(pin("dgVoodoo2_86.cab").name(), "dgVoodoo2_86");
+        assert_eq!(pin("setup.exe").name(), "setup");
+        assert_eq!(pin("tool-v1.2").name(), "tool-v1.2");
+        assert_eq!(pin(".hidden").name(), ".hidden");
+    }
+
+    #[test]
+    fn a_launcher_can_run_its_own_extractor() {
+        let root = test_dir("dl-own-extract");
+        let body = noise(3000);
+        let pin = pin_for(&body, "components.cab", 3000);
+        let seen = std::sync::Mutex::new(Vec::new());
+        let extract = |archive: &Path, into: &Path, job: &Job| -> Result<(), String> {
+            job.set_phase(Phase::Unpacking { done: 1, total: 2 });
+            seen.lock().unwrap().push(job.phase());
+            fs::copy(archive, into.join("payload.bin")).map_err(|e| e.to_string())?;
+            Ok(())
+        };
+        let job = Job::default();
+        let phase = install_with(
+            &pin,
+            &root,
+            &no_space_check,
+            &Fake::new(&body),
+            &job,
+            &extract,
+        );
+        let dir = root.join("components");
+        assert_eq!(phase, Phase::Done(dir.clone()));
+        assert_eq!(
+            seen.lock().unwrap()[0],
+            Phase::Unpacking { done: 1, total: 2 }
+        );
+        assert_eq!(fs::read(dir.join("payload.bin")).unwrap(), body);
+        assert_eq!(installed(&pin, &root), Some(dir.clone()));
+        assert!(!root.join("components.cab").exists(), "the download goes");
+        // A failing extractor leaves nothing marked, and the download stays.
+        let pin2 = pin_for(&noise(10), "other.cab", 10);
+        let fail = |_: &Path, _: &Path, _: &Job| -> Result<(), String> { Err("bad cab".into()) };
+        let phase = install_with(
+            &pin2,
+            &root,
+            &no_space_check,
+            &Fake::new(&noise(10)),
+            &Job::default(),
+            &fail,
+        );
+        assert_eq!(phase, Phase::Failed("bad cab".into()));
+        assert_eq!(installed(&pin2, &root), None);
+        assert!(root.join("other.cab").exists());
+        assert!(
+            dir.exists(),
+            "a failed newer version does not remove the old one"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

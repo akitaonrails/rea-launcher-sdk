@@ -337,7 +337,14 @@ the old lines. `.helper_owned()` marks an option the Linux play
 helper reads rather than the game (gamescope scaler, vkBasalt): it still
 has a key and a window control, `usage` marks it "(Linux helper)", and the
 helper must honour the one-run flag passed to it as well as
-`launcher.cfg`.
+`launcher.cfg`. `.with_needs("10–240 or unlimited")` and
+`.with_placeholder("<program>")` replace the generated texts;
+`.with_value_aliases(&[("off", "0")])` reads other spellings (a number
+outside a `Range` named this way is a special value, listed in `needs`).
+`OptionSpec::removed("widescreen", "why")` keeps an old key harmless:
+ignored when read, left out of help and the window, and commented out by
+`spec::retire_removed` on save. `spec::usage_with` adds the launcher's
+value-less switches to the help column.
 
 ## Binary patches as one table
 
@@ -422,7 +429,9 @@ assert_eq!(job.phase(), phase);
 
 With `features = ["zip"]`, `download::install(&pin, &root, &free, &fetch,
 &job)` also unpacks and returns `Phase::Done(folder)`;
-`download::installed(&pin, &root)` finds a complete version later. Give
+`download::installed(&pin, &root)` finds a complete version later. For an archive the SDK can't open (`.cab`, an installer), pass
+the launcher's own extractor to `download::install_with`; it reports
+progress with `job.set_phase(Phase::Unpacking { done, total })`. Give
 each component its own `root`: older versions there are removed.
 
 ## Migration
@@ -497,6 +506,9 @@ Behaviour not listed here is the same.
   pattern-found aspect slots stay a launcher function (no fixed address);
   CMR4's widescreen toggle stays `signature_toggle`.
   `identify::validate_pe32` now reads the headers through `pe`.
+- **`Ledger::take_out_keep_game(rel, known)`** removes our file and does
+  not bring the game folder's copy back (OR's DXVK `d3d9.dll`, where the
+  repack's SpecialK must stay out); OR's DXVK marker file can go.
 - **`Ledger::take_out_with(rel, known, &policy)`** brings the game's file
   back the way a sync would (hard-linked where the policy links);
   `take_out` copies.

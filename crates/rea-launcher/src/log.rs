@@ -4,7 +4,9 @@
 //! the launcher plays with saved settings, and warnings must still reach
 //! the player somewhere. The file starts afresh once it passes the cap
 //! ([`DEFAULT_LIMIT`]; [`Log::with_limit`] changes it, [`Log::without_limit`]
-//! removes it), and logging never fails a launch.
+//! removes it), and logging never fails a launch. Levels: [`Log::info`]
+//! (log only), [`Log::warn`] and [`Log::error`] (log and stderr), or a
+//! plain [`Log::line`].
 
 use std::fs;
 use std::io::Write;
@@ -66,6 +68,12 @@ impl Log {
         }
     }
 
+    /// `info: …` to the log only: what the launcher did (copied,
+    /// patched, chose), for a bug report, without cluttering the console.
+    pub fn info(&self, message: &str) {
+        self.line(&format!("info: {message}"));
+    }
+
     /// `warning: …` to the log and stderr.
     pub fn warn(&self, message: &str) {
         eprintln!("warning: {message}");
@@ -94,12 +102,18 @@ mod tests {
         fs::write(log.path(), vec![b'x'; 17]).unwrap();
         log.warn("three");
         assert_eq!(fs::read_to_string(log.path()).unwrap(), "warning: three\n");
+        log.info("synced 3 files");
+        assert!(
+            fs::read_to_string(log.path())
+                .unwrap()
+                .ends_with("warning: three\ninfo: synced 3 files\n")
+        );
         // Without a cap it only grows.
         let uncapped = Log::new(log.path()).with_limit(1).without_limit();
         uncapped.line("four");
         assert_eq!(
             fs::read_to_string(log.path()).unwrap(),
-            "warning: three\nfour\n"
+            "warning: three\ninfo: synced 3 files\nfour\n"
         );
         // A log that cannot be written is silently skipped.
         Log::new(dir.join("sub")).line("into a folder");
