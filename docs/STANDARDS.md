@@ -215,6 +215,16 @@ that: if a step could be done by the launcher, the launcher does it.
   4 no window possible; a plain window close is 0), `--check` reporting to
   `launcher.log` and its exit code (a dialog only when interactive), look names (Original, recommended, Steam Deck), underscore
   config keys — so players and agents can move between launchers.
+- **Messages reach the player.** Script-facing commands (`--help`,
+  `--check`) print to the terminal and show a dialog only when nobody sees
+  the terminal and a person started them. Play-time errors (unknown
+  edition, game folder missing, already running, a failed install) always
+  show a dialog when a person may be watching, and are printed to the log
+  too. Under Wine stdout always goes to a log nobody reads, so it never
+  counts as a terminal. `rea_launcher_win32::report` implements this rule.
+- **Action flags and one instance.** An action flag (`--download-*`,
+  `--check`) while another launcher instance is open is reported and exits
+  non-zero, never a silent exit 0.
 - **Owner checkpoints.** Stop and ask rather than guess on licence-less
   assets, official art, DRM, and anything public (push, release, posts).
 - **Screenshots and video** of the game in the README are fine (they show

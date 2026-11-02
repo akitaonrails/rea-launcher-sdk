@@ -7,6 +7,71 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.3.2] - 2026-11-02
+
+Fixes from the regression reviews of the five launchers on v0.3.x.
+
+### Migration
+
+- **Errors reach the player under Wine** (CMR3, CMR4, every launcher that
+  reports errors): replace `console::output` + `dialog::message` for
+  player-facing errors with `report::fatal(title, text, Mode::Play {
+  interactive: !no_window })`; keep `Mode::Command` for `--help`/`--check`
+  output. Verify under `<id>-play` with a wrong game folder: a dialog
+  appears and `launcher.log` has the line.
+- **Helper value comparisons** (CMR3, and any game hook that compares a
+  `launcher.cfg` value): replace `$(rea_get_key postfx)` comparisons with
+  `$(rea_get_value postfx)` and `[ "$(rea_get_key dxvk)" = off ]` with
+  `rea_is_off dxvk`. Verify with `cmr3-play --play --postfx Color`
+  (play.log shows the vkBasalt layer) and `--play --dxvk False --postfx
+  color` (the "needs DXVK" note).
+- **Action flags while another instance is open** (`--download-*`): report
+  and exit non-zero instead of exiting 0 silently
+  (`AlreadyRunning::is_window_found`). Verify by running the flag with the
+  settings window open.
+
+### Fixed
+
+- `cfg::parse_args`, `cfg::parse_args_with` and `cfg::spec::parse_args`
+  accept `--key=value` as well as `--key value`, and read an underscore
+  spelling of a hyphenated flag (`--display_mode`) as a fallback — both
+  as SDK v0.1 did, and launchers' scripts relied on them. A value-less
+  switch given `=value` is refused.
+- `fsx::install`, `fsx::write_atomic` and `fsx::install_copy` leave a file
+  that already holds exactly those bytes alone: no temp file, no rename
+  (which can fail over a DLL the game has loaded), no flush. `install_copy`
+  still replaces a hard link to its source, or a read-only copy, with a
+  writable copy. SRR rewrote about 70 MB of DLLs every launch.
+- Play-time errors under Wine never reached the player since v0.3.0's
+  console pattern: `<id>-play`, the AppImage and Proton redirect stdout to
+  a log, so `console::output` chose the terminal. New
+  `rea_launcher_win32::report::{fatal, note}(title, text, Mode)`:
+  `Mode::Command` (`--help`, `--check`) prints and shows a dialog only when
+  nobody sees the terminal (under Wine a redirected stdout counts as
+  unseen); `Mode::Play` always shows a dialog when interactive and prints
+  too. `report::route` is the tested decision table.
+
+### Changed
+
+- `rea-play.sh` compares values the way the launchers parse them: the
+  resolution, `REA_ORIGINAL_WORDS`, the scaler and `REA_WINDOWED_KEY`
+  against `REA_WINDOWED_VALUES` match in any case, so
+  `--display-mode Windowed` (or `display_mode = Borderless`) now skips
+  gamescope. A `--flag=value` argument reaches the launcher as
+  `--flag value`, which every launcher's parser reads.
+
+### Added
+
+- `ledger::Ledger::batch(|ledger| …)`: installs and take-outs inside save
+  the ledger once at the end (also when the work fails part way), instead
+  of once per file.
+- `instance::AlreadyRunning::is_window_found(window)`, and the documented
+  pattern for action flags (`--download-*`, `--check`) while another
+  instance is open.
+- `rea-play.sh`: `rea_get_value KEY [FILE]` (the value lowercased, for
+  comparisons), `rea_is_on`/`rea_is_off KEY [FILE]` (`on|true|yes|1` /
+  `off|false|no|0`, any case; unset is neither).
+
 ## [0.3.1] - 2026-11-02
 
 ### Added
@@ -301,6 +366,7 @@ and OutRun 2006, each piece the reviewed best version across them
   shell and packaging files; `templates/deny.toml`.
 
 [Unreleased]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.0...HEAD
+[0.3.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.1.0...v0.2.0
