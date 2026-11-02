@@ -24,21 +24,32 @@ pub fn native(root: &Path, rel: &str) -> PathBuf {
 
 /// The file or folder at `/`-separated `rel` below `root`, matching each
 /// part without regard to ASCII case (a Windows game's `DINPUT8.DLL` for
-/// `dinput8.dll` on a case-sensitive Linux disk). An exact match wins.
+/// `dinput8.dll` on a case-sensitive Linux disk), spelled as it is on
+/// disk. An exact match wins. On a case-insensitive volume (Windows) the
+/// file opens under any spelling, but the folder listing still gives its
+/// own, which is what callers report and write back.
 pub fn find_ignoring_case(root: &Path, rel: &str) -> Option<PathBuf> {
     let mut path = root.to_path_buf();
     for part in rel.split('/').filter(|p| !p.is_empty()) {
-        let exact = path.join(part);
-        if std::fs::symlink_metadata(&exact).is_ok() {
-            path = exact;
-            continue;
-        }
-        let found = std::fs::read_dir(&path)
+        let names: Vec<OsString> = std::fs::read_dir(&path)
             .ok()?
             .flatten()
             .map(|e| e.file_name())
-            .find(|name| name.to_str().is_some_and(|n| n.eq_ignore_ascii_case(part)))?;
-        path.push(found);
+            .collect();
+        let found = names
+            .iter()
+            .find(|name| name.as_os_str() == part)
+            .or_else(|| {
+                names
+                    .iter()
+                    .find(|name| name.to_str().is_some_and(|n| n.eq_ignore_ascii_case(part)))
+            });
+        match found {
+            Some(name) => path.push(name),
+            // Not listed under any spelling, yet there (a Windows 8.3 name).
+            None if std::fs::symlink_metadata(path.join(part)).is_ok() => path.push(part),
+            None => return None,
+        }
     }
     Some(path)
 }
@@ -124,7 +135,7 @@ fn check_separate_with(
     cwd: &Path,
     canonicalize: Canonicalize,
 ) -> Result<(), String> {
-    let overlap = |a: &Path, b: &Path| a.starts_with(b) || b.starts_with(a);
+    let overlap = |a: &Path, b: &Path| contains(a, b) || contains(b, a);
     let g = resolve_with(game, cwd, canonicalize)?;
     let r = resolve_with(runtime, cwd, canonicalize)?;
     let lexical = |p: &Path| normalize(&absolute(p, cwd));
@@ -136,6 +147,21 @@ fn check_separate_with(
         ));
     }
     Ok(())
+}
+
+/// True when `inner` is `outer` or below it. Windows volumes ignore case,
+/// so there the parts compare without it (`C:\Games\CMR3` holds
+/// `c:\games\cmr3\rt`); elsewhere they compare exactly.
+fn contains(inner: &Path, outer: &Path) -> bool {
+    if !cfg!(windows) {
+        return inner.starts_with(outer);
+    }
+    let parts = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    parts(inner).starts_with(&parts(outer))
 }
 
 #[cfg(windows)]
@@ -200,6 +226,11 @@ mod tests {
             Some(root.join("DATA/DInput8.DLL"))
         );
         assert_eq!(find_ignoring_case(&root, "data/missing.dll"), None);
+        // The disk's spelling, even where any spelling opens the file.
+        let found = find_ignoring_case(&root, "data/dinput8.dll").unwrap();
+        let names: Vec<_> = found.components().rev().take(2).collect();
+        assert_eq!(names[0].as_os_str(), "DInput8.DLL");
+        assert_eq!(names[1].as_os_str(), "DATA");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -217,11 +248,11 @@ mod tests {
         let canon = |p: &Path| std::fs::canonicalize(p);
         let game = test_dir("paths-relative");
         let outside = resolve(Path::new("../outside-runtime"), &game).unwrap();
+        // Windows canonicalises to `\\?\C:\…`, which resolve simplifies.
+        let parent = std::fs::canonicalize(game.parent().unwrap()).unwrap();
         assert_eq!(
             outside,
-            std::fs::canonicalize(game.parent().unwrap())
-                .unwrap()
-                .join("outside-runtime")
+            simplify_extended_length(&parent).join("outside-runtime")
         );
         assert!(check_separate_with(&game, Path::new("child"), &game, &canon).is_err());
         assert!(check_separate_with(&game, Path::new("missing/../child"), &game, &canon).is_err());
@@ -251,6 +282,21 @@ mod tests {
             }
         };
         assert!(check_separate_with(game, Path::new("/r/games/cmr3/rt"), cwd, &game_only).is_err());
+    }
+
+    #[test]
+    fn overlap_ignores_case_only_on_windows() {
+        let unsupported =
+            |_: &Path| -> io::Result<PathBuf> { Err(io::Error::other("Incorrect function")) };
+        let cwd = Path::new("/r");
+        let refused = check_separate_with(
+            Path::new("/r/Games/CMR3"),
+            Path::new("/r/games/cmr3/rt"),
+            cwd,
+            &unsupported,
+        )
+        .is_err();
+        assert_eq!(refused, cfg!(windows));
     }
 
     #[cfg(unix)]

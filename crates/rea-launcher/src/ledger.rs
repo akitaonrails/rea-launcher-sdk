@@ -320,12 +320,24 @@ mod tests {
             Outcome::Installed
         );
         assert_eq!(fs::read(rt.join("DInput8.dll")).unwrap(), b"xidi");
-        assert!(!rt.join("dinput8.dll").exists(), "no second spelling");
+        // One file, in the runtime's own spelling (`exists` would ignore
+        // case on Windows, so the listing is what counts).
+        let dlls = |dir: &Path| -> Vec<String> {
+            let mut names: Vec<String> = fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n.to_ascii_lowercase().ends_with(".dll"))
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(dlls(&rt), ["DInput8.dll"], "no second spelling");
         assert_eq!(
             ledger.take_out("dinput8.dll", &[]).unwrap(),
             Outcome::Restored
         );
         assert_eq!(fs::read(rt.join("DInput8.dll")).unwrap(), b"game's own");
+        assert_eq!(dlls(&rt), ["DInput8.dll"]);
         for d in [game, rt] {
             fs::remove_dir_all(d).unwrap();
         }
