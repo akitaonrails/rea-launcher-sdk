@@ -3,7 +3,7 @@ members = ["crates/rea-launcher", "crates/rea-launcher-win32", "crates/rea-launc
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -14,4 +14,5 @@ sha2 = "0.11.1"
 eframe = { version = "0.37", default-features = false, features = ["glow"] }
 windows-sys = "0.61"
 jpeg-decoder = { version = "0.3", default-features = false }
-rea-launcher = { path = "crates/rea-launcher", version = "0.1.0" }
+egui_kittest = { version = "0.37", default-features = false }
+rea-launcher = { path = "crates/rea-launcher", version = "0.2.0" }

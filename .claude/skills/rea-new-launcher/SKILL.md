@@ -1,0 +1,24 @@
+---
+name: rea-new-launcher
+description: Build a new rea launcher that makes an old PC game plug-and-play on modern Windows and Linux with rea-launcher-sdk — community-fix research first, REA reverse engineering of the game folder, scaffold, implement, headless verification, release. Use when asked to create, start, or scaffold a launcher, compatibility package, or "rea-<game>" project for a game, or to make an abandoned/old PC game run on modern systems.
+---
+
+# New rea launcher
+
+Follow the SDK's playbook exactly; it is the source of truth:
+
+1. Locate the SDK checkout (ask if unknown; default `~/Projects/rea-launcher-sdk`
+   or clone `https://github.com/akitaonrails/rea-launcher-sdk`).
+2. Read `<sdk>/docs/STANDARDS.md` (binding) and
+   `<sdk>/docs/playbooks/new-launcher.md`, then work through its phases in order.
+3. Make sure the REA MCP tools are available (`npx rea-agents setup` registers
+   them); use them for Phase 2 on the game folder, read in place.
+
+Non-negotiable, even if the user doesn't repeat it:
+- Research existing community fixes online before writing any fix; record them
+  in `docs/RESEARCH.md` and build on them.
+- Never commit or copy game files; the game folder is read-only.
+- Tests and probes run headless; no windows on the user's desktop unless needed.
+- Settings-window work goes through a design skill; accessibility first; every
+  option and CLI flag gets an end-to-end test; no confusing options.
+- Push, tag, or post anything public only with the user's go-ahead.

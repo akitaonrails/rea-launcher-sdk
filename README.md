@@ -14,6 +14,56 @@ they have in common.
 | [rea-sega-rally-revo](https://github.com/akitaonrails/rea-sega-rally-revo) | Sega Rally Revo |
 | [rea-outrun-2006](https://github.com/akitaonrails/rea-outrun-2006) | OutRun 2006: Coast 2 Coast |
 
+## AI coding-first: make a launcher with your agent
+
+This SDK is written to be driven by a coding agent (Claude Code, Codex,
+opencode, Cursor, …). The agent does the research, the reverse engineering
+and the code; you supply the game and the decisions.
+
+**1. Get the tools**
+
+```sh
+git clone https://github.com/akitaonrails/rea-launcher-sdk ~/Projects/rea-launcher-sdk
+npx rea-agents setup                # REA: reverse-engineering MCP for your agent
+                                    # (source: https://github.com/morluto/rea, https://rea.tools)
+~/Projects/rea-launcher-sdk/scripts/install-skills   # Claude Code only: skills available everywhere
+```
+
+Install the development tools from [Development machine](#development-machine)
+(MinGW, Wine, gamescope…), or use a container that has them.
+
+**2. Have the game ready**: your own installed copy, in a folder the agent
+may read (it is never modified or copied into the repository). Keep any
+other editions or patches you own nearby; the launcher identifies each exact
+build.
+
+**3. Ask your agent.** Start it in an empty folder for the new launcher and
+paste a prompt like this:
+
+> Build a new rea launcher for *Need for Speed: Porsche Unleashed* (PC, 2000)
+> using the SDK at `~/Projects/rea-launcher-sdk`. Read its `AGENTS.md`,
+> `docs/STANDARDS.md` and `docs/playbooks/new-launcher.md` and follow the
+> playbook phase by phase. The game is installed at `/mnt/games/NFSPU`
+> (read-only, never copy it into the repo). Use the REA MCP tools to analyse
+> it. Research existing community fixes first and show me what you found and
+> what the launcher will solve before writing code. Launcher id `nfspu`, env
+> prefix `NFSPU_`, repository `~/Projects/rea-nfs-porsche`. Keep tests
+> headless. Don't push or publish anything without asking me.
+
+With Claude Code and the skills installed, "make a rea launcher for
+*game* at */path*" is enough: the `rea-new-launcher` skill loads the
+playbook.
+
+**4. Review at the checkpoints** the playbook defines: the research
+findings, the list of problems to solve, the options the window will offer,
+and what was verified in the real game (`docs/RUNTIME_NOTES.md`). Then tell
+the agent to push and release.
+
+The same works for maintenance: "bump this launcher to SDK v0.2.0"
+(`docs/playbooks/sdk-change.md`) or "share the widescreen fix we found with
+PCGamingWiki" (`docs/playbooks/contribute-back.md`, drafts only until you
+approve).
+
 ## What's in it
 
 | Path | What | Used as |
@@ -25,7 +75,9 @@ they have in common.
 | `packaging/` | Pin files, AppImage builder (portable Wine or native), package allowlist check, release notes | vendored under `sdk/packaging/` |
 | `.github/workflows/launcher-*.yml` | Reusable CI and release workflows | `uses:` by tag |
 | `scripts/sdk-sync` | Vendors `shell/` and `packaging/` into a launcher, `--check` fails on drift | run from a launcher |
-| `.claude/skills/` | How to build and maintain a launcher with this SDK | Claude Code skills |
+| `AGENTS.md`, `docs/playbooks/` | How an agent builds and maintains a launcher with this SDK | read by any coding agent |
+| `.claude/skills/` | The playbooks as Claude Code skills | `scripts/install-skills` |
+| `docs/STANDARDS.md` | The rules every launcher follows | binding |
 
 ## Using it from a launcher
 
@@ -76,8 +128,24 @@ Arch / Debian-Ubuntu):
 rustup target add i686-pc-windows-gnu x86_64-pc-windows-gnu
 ```
 
-A container (e.g. a distrobox) with these tools works just as well; run the
-commands inside it.
+**Recommended: keep it in a container.** Gaming tools (Wine, gamescope,
+MinGW, game installs) are large and move fast; keeping them out of the host
+keeps host upgrades quick and the setup reproducible.
+[distrobox-gaming](https://github.com/akitaonrails/distrobox-gaming) builds
+an Arch-based distrobox named `gaming` with Wine and gamescope; add the
+development tools inside it:
+
+```sh
+distrobox enter gaming -- sudo pacman -S --needed mingw-w64-gcc lld wine gamescope dash mawk shellcheck
+distrobox enter gaming -- sh -c 'cd /path/to/rea-launcher-sdk && scripts/dev-check'
+```
+
+Inside the box, `$HOME` may not be the host's home, so `cd` to absolute
+paths. Rust and the repositories can stay on the host (the box shares
+them).
+
+**Or install everything on the host** with the package names above, if you
+prefer not to use a container. Every script works the same either way.
 
 ## Checks
 
