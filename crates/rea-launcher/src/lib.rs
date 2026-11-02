@@ -10,6 +10,7 @@
 pub mod args;
 pub mod cfg;
 pub mod display;
+pub mod download;
 pub mod env;
 pub mod fsx;
 pub mod identify;
@@ -19,6 +20,7 @@ pub mod log;
 pub mod pad;
 pub mod patch;
 pub mod paths;
+pub mod pe;
 pub mod runtime;
 pub mod saves;
 pub mod wine;

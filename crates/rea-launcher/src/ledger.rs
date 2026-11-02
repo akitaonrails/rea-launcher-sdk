@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::fsx;
 use crate::identify::{hex, sha256};
 use crate::paths::{find_ignoring_case, native};
+use crate::runtime;
 
 /// What [`Ledger::install`] and [`Ledger::take_out`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,14 +153,37 @@ impl Ledger {
     }
 
     /// Takes the runtime's `rel` out when it is ours: the game's own file
-    /// (found whatever its case) comes back as a copy, or the file goes. Someone else's file stays.
-    /// The record goes either way.
+    /// (found whatever its case) comes back as a copy, or the file goes.
+    /// Someone else's file stays. The record goes either way.
     pub fn take_out(&mut self, rel: &str, known: &[&[u8]]) -> io::Result<Outcome> {
+        self.take_out_with(rel, known, &runtime::CopyAll)
+    }
+
+    /// [`Ledger::take_out`], bringing the game's file back the way a sync
+    /// would: hard-linked where `policy` links it (and the original is
+    /// writable), else copied with its time.
+    pub fn take_out_with(
+        &mut self,
+        rel: &str,
+        known: &[&[u8]],
+        policy: &dyn runtime::Policy,
+    ) -> io::Result<Outcome> {
         plain(rel)?;
         let path = self.runtime_path(rel);
         let outcome = if self.owns(rel, known)? {
             match self.game_file(rel) {
-                Some(game) => fsx::install_copy(&game, &path)?,
+                Some(game) => {
+                    let game_rel = game
+                        .strip_prefix(&self.game)
+                        .map(|p| {
+                            p.components()
+                                .map(|c| c.as_os_str().to_string_lossy())
+                                .collect::<Vec<_>>()
+                                .join("/")
+                        })
+                        .unwrap_or_else(|_| rel.to_owned());
+                    runtime::bring_over(&game, &path, policy.link(&game_rel))?;
+                }
                 None => fsx::remove(&path)?,
             }
             Outcome::Restored
@@ -338,6 +362,43 @@ mod tests {
         );
         assert_eq!(fs::read(rt.join("DInput8.dll")).unwrap(), b"game's own");
         assert_eq!(dlls(&rt), ["DInput8.dll"]);
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn taking_out_can_link_the_games_file_back() {
+        use std::os::unix::fs::MetadataExt;
+        struct LinkDlls;
+        impl runtime::Policy for LinkDlls {
+            fn link(&self, rel: &str) -> bool {
+                rel.to_ascii_lowercase().ends_with(".dll")
+            }
+        }
+        let (game, rt) = setup("ledger-link-back");
+        fs::write(game.join("D3D9.DLL"), b"game's own").unwrap();
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        assert_eq!(
+            ledger.install("d3d9.dll", b"dxvk", &[]).unwrap(),
+            Outcome::Installed
+        );
+        assert_eq!(
+            ledger.take_out_with("d3d9.dll", &[], &LinkDlls).unwrap(),
+            Outcome::Restored
+        );
+        let ino = |p: &Path| fs::metadata(p).unwrap().ino();
+        assert_eq!(
+            ino(&rt.join("d3d9.dll")),
+            ino(&game.join("D3D9.DLL")),
+            "linked"
+        );
+        // The default still copies.
+        ledger.install("d3d9.dll", b"dxvk", &[]).unwrap();
+        ledger.take_out("d3d9.dll", &[]).unwrap();
+        assert_ne!(ino(&rt.join("d3d9.dll")), ino(&game.join("D3D9.DLL")));
+        assert_eq!(fs::read(rt.join("d3d9.dll")).unwrap(), b"game's own");
         for d in [game, rt] {
             fs::remove_dir_all(d).unwrap();
         }

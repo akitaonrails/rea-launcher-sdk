@@ -264,7 +264,7 @@ impl Walk<'_> {
 /// when `link` and the original is writable (a read-only original is
 /// copied: the link would share its attribute), else a writable copy with
 /// the source's modification time. Returns true when linked.
-fn bring_over(from: &Path, to: &Path, link: bool) -> io::Result<bool> {
+pub(crate) fn bring_over(from: &Path, to: &Path, link: bool) -> io::Result<bool> {
     if link
         && fs::metadata(from).is_ok_and(|m| !m.permissions().readonly())
         && let Ok(real) = fs::canonicalize(from)

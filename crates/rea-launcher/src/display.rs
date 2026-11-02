@@ -59,9 +59,15 @@ pub const STEAM_DECK_SCREEN: (u32, u32) = (1280, 800);
 /// A screen size as a landscape resolution worth offering (even sizes,
 /// larger than 640×480, up to 7680×4320), or `None`. CMR3/CMR4/OR's rule;
 /// SRR also took exactly 640×480.
-pub fn landscape((a, b): (u32, u32)) -> Option<(u32, u32)> {
+pub fn landscape(screen: (u32, u32)) -> Option<(u32, u32)> {
+    landscape_from(screen, (642, 482))
+}
+
+/// [`landscape`] with its own smallest size, inclusive (SRR takes
+/// exactly 640×480: `landscape_from(screen, (640, 480))`).
+pub fn landscape_from((a, b): (u32, u32), min: (u32, u32)) -> Option<(u32, u32)> {
     let (w, h) = (a.max(b) & !1, a.min(b) & !1);
-    (w > 640 && h > 480 && w <= 7680 && h <= 4320).then_some((w, h))
+    (w >= min.0 && h >= min.1 && w <= 7680 && h <= 4320).then_some((w, h))
 }
 
 /// True for a Steam Deck's screen, in either orientation.
@@ -147,6 +153,9 @@ mod tests {
         assert_eq!(landscape((800, 1280)), Some((1280, 800)));
         assert_eq!(landscape((1365, 767)), Some((1364, 766)));
         assert_eq!(landscape((640, 480)), None);
+        assert_eq!(landscape((641, 481)), None, "even sizes: 640×480");
+        assert_eq!(landscape_from((480, 640), (640, 480)), Some((640, 480)));
+        assert_eq!(landscape_from((639, 480), (640, 480)), None);
         assert_eq!(landscape((642, 482)), Some((642, 482)));
         assert_eq!(landscape((320, 240)), None);
         assert!(is_steam_deck(Some((800, 1280))));

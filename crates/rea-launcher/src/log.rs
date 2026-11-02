@@ -2,8 +2,9 @@
 //!
 //! From SCR edb692f: when no window can be made (no display, no OpenGL)
 //! the launcher plays with saved settings, and warnings must still reach
-//! the player somewhere. The file starts afresh once it passes the cap, and
-//! logging never fails a launch.
+//! the player somewhere. The file starts afresh once it passes the cap
+//! ([`DEFAULT_LIMIT`]; [`Log::with_limit`] changes it, [`Log::without_limit`]
+//! removes it), and logging never fails a launch.
 
 use std::fs;
 use std::io::Write;
@@ -16,7 +17,8 @@ pub const DEFAULT_LIMIT: u64 = 1 << 20;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Log {
     path: PathBuf,
-    limit: u64,
+    /// `None`: never started afresh.
+    limit: Option<u64>,
 }
 
 impl Log {
@@ -24,12 +26,19 @@ impl Log {
     pub fn new(path: impl Into<PathBuf>) -> Log {
         Log {
             path: path.into(),
-            limit: DEFAULT_LIMIT,
+            limit: Some(DEFAULT_LIMIT),
         }
     }
 
+    /// Starts the file afresh once it is larger than `bytes`.
     pub fn with_limit(mut self, bytes: u64) -> Log {
-        self.limit = bytes;
+        self.limit = Some(bytes);
+        self
+    }
+
+    /// Never starts the file afresh: it grows without a cap.
+    pub fn without_limit(mut self) -> Log {
+        self.limit = None;
         self
     }
 
@@ -43,7 +52,9 @@ impl Log {
         if let Some(dir) = self.path.parent() {
             let _ = fs::create_dir_all(dir);
         }
-        let fresh = fs::metadata(&self.path).is_ok_and(|m| m.len() > self.limit);
+        let fresh = self
+            .limit
+            .is_some_and(|limit| fs::metadata(&self.path).is_ok_and(|m| m.len() > limit));
         if let Ok(mut f) = fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -83,6 +94,13 @@ mod tests {
         fs::write(log.path(), vec![b'x'; 17]).unwrap();
         log.warn("three");
         assert_eq!(fs::read_to_string(log.path()).unwrap(), "warning: three\n");
+        // Without a cap it only grows.
+        let uncapped = Log::new(log.path()).with_limit(1).without_limit();
+        uncapped.line("four");
+        assert_eq!(
+            fs::read_to_string(log.path()).unwrap(),
+            "warning: three\nfour\n"
+        );
         // A log that cannot be written is silently skipped.
         Log::new(dir.join("sub")).line("into a folder");
         fs::remove_dir_all(dir).unwrap();

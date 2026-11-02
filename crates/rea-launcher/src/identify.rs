@@ -3,7 +3,8 @@
 //! The table lookup is SCR's and SRR's `edition.rs`: an unknown executable
 //! reports its digest instead of a bare "unknown", so a player's bug report
 //! names the build. `validate_pe32` is CMR4's `pe.rs`, which rejects a
-//! wrong file before any patching is attempted.
+//! wrong file before any patching is attempted; the headers are now read
+//! by [`crate::pe`].
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -117,30 +118,17 @@ impl std::fmt::Display for PeError {
 
 impl std::error::Error for PeError {}
 
-fn u16_at(bytes: &[u8], at: usize) -> Result<u16, PeError> {
-    let raw = bytes.get(at..at + 2).ok_or(PeError::Truncated)?;
-    Ok(u16::from_le_bytes([raw[0], raw[1]]))
-}
-
-fn u32_at(bytes: &[u8], at: usize) -> Result<u32, PeError> {
-    let raw = bytes.get(at..at + 4).ok_or(PeError::Truncated)?;
-    Ok(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
-}
-
 /// Checks the MZ and PE signatures and the PE32 (not PE32+) optional
-/// header magic.
+/// header magic. A thin wrapper over [`crate::pe::format`]; use
+/// [`crate::pe::Pe::parse`] for sections and addresses.
 pub fn validate_pe32(bytes: &[u8]) -> Result<(), PeError> {
-    if bytes.get(0..2) != Some(b"MZ") {
-        return Err(PeError::NotPe);
+    use crate::pe::{Error, Format};
+    match crate::pe::format(bytes) {
+        Ok((_, Format::Pe32)) => Ok(()),
+        Ok((_, Format::Pe32Plus)) | Err(Error::UnknownMagic { .. }) => Err(PeError::Not32Bit),
+        Err(Error::Truncated { .. }) => Err(PeError::Truncated),
+        Err(Error::NotMz | Error::NoPeSignature { .. }) => Err(PeError::NotPe),
     }
-    let pe = u32_at(bytes, 0x3c)? as usize;
-    if bytes.get(pe..pe.saturating_add(4)) != Some(b"PE\0\0") {
-        return Err(PeError::NotPe);
-    }
-    if u16_at(bytes, pe + 24)? != 0x10b {
-        return Err(PeError::Not32Bit);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -119,12 +119,36 @@ fn swap_in(
 /// original, which unlinking leaves alone. Symbolic links to folders are
 /// not followed. Returns what was removed.
 pub fn remove_stale_temps(dir: &Path, suffixes: &[&str]) -> io::Result<Vec<PathBuf>> {
+    stale_temps(dir, suffixes, true)
+}
+
+/// [`remove_stale_temps`] for the files directly in `dir` only.
+pub fn remove_stale_temps_here(dir: &Path, suffixes: &[&str]) -> io::Result<Vec<PathBuf>> {
+    stale_temps(dir, suffixes, false)
+}
+
+/// Unlinks each of `paths` that exists (OR's `.or-manifest.tmp`); a
+/// folder is left alone. Returns what was removed.
+pub fn remove_files(paths: &[&Path]) -> io::Result<Vec<PathBuf>> {
+    let mut removed = Vec::new();
+    for path in paths {
+        if fs::symlink_metadata(path).is_ok_and(|m| !m.is_dir()) {
+            fs::remove_file(path).map_err(at(path))?;
+            removed.push(path.to_path_buf());
+        }
+    }
+    Ok(removed)
+}
+
+fn stale_temps(dir: &Path, suffixes: &[&str], deep: bool) -> io::Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
     for entry in fs::read_dir(dir).map_err(at(dir))? {
         let path = entry.map_err(at(dir))?.path();
         let meta = fs::symlink_metadata(&path).map_err(at(&path))?;
         if meta.is_dir() {
-            removed.extend(remove_stale_temps(&path, suffixes)?);
+            if deep {
+                removed.extend(stale_temps(&path, suffixes, true)?);
+            }
             continue;
         }
         let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -319,6 +343,29 @@ mod tests {
             [dir.join(".CMR3.cmr3-new"), dir.join("Data/.a.dat.rea-new")]
         );
         assert!(dir.join("keep.dat").exists() && dir.join(".cmr3-new").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_temps_by_exact_name_or_in_one_folder() {
+        let dir = test_dir("fsx-stale-exact");
+        fs::create_dir_all(dir.join("SaveGame")).unwrap();
+        fs::write(dir.join(".or-manifest.tmp"), b"x").unwrap();
+        fs::write(dir.join("a.tmp"), b"x").unwrap();
+        fs::write(dir.join("SaveGame/b.tmp"), b"game's own").unwrap();
+        let removed = remove_files(&[
+            &dir.join(".or-manifest.tmp"),
+            &dir.join("missing.tmp"),
+            &dir.join("SaveGame"),
+        ])
+        .unwrap();
+        assert_eq!(removed, [dir.join(".or-manifest.tmp")]);
+        assert!(dir.join("SaveGame").is_dir(), "folders stay");
+        assert_eq!(
+            remove_stale_temps_here(&dir, &[".tmp"]).unwrap(),
+            [dir.join("a.tmp")]
+        );
+        assert!(dir.join("SaveGame/b.tmp").exists(), "not below");
         fs::remove_dir_all(dir).unwrap();
     }
 

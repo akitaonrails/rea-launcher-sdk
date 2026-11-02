@@ -121,6 +121,32 @@ fn resolve_with(path: &Path, cwd: &Path, canonicalize: Canonicalize) -> Result<P
     }
 }
 
+/// The real form of a folder that must exist (the game folder): relative
+/// paths start at `cwd`; canonicalised, `\\?\` dropped; on a volume that
+/// cannot canonicalise, normalised as text if it exists. A missing path is
+/// a NotFound error (CMR4's `canonical_existing`).
+pub fn canonical_existing(path: &Path, cwd: &Path) -> io::Result<PathBuf> {
+    canonical_existing_with(path, cwd, &|p| std::fs::canonicalize(p))
+}
+
+fn canonical_existing_with(
+    path: &Path,
+    cwd: &Path,
+    canonicalize: Canonicalize,
+) -> io::Result<PathBuf> {
+    let absolute = absolute(path, cwd);
+    match canonicalize(&absolute) {
+        Ok(real) => Ok(simplify_extended_length(&real)),
+        Err(e) if e.kind() != io::ErrorKind::NotFound && absolute.exists() => {
+            Ok(normalize(&absolute))
+        }
+        Err(e) => Err(io::Error::new(
+            e.kind(),
+            format!("{}: {e}", absolute.display()),
+        )),
+    }
+}
+
 /// Refuses a folder the launcher writes (`runtime`, or a saves folder)
 /// that overlaps the game folder, including one that does not exist yet
 /// or reaches it through `..` or a symlink. Nothing is created.
@@ -232,6 +258,37 @@ mod tests {
         assert_eq!(names[0].as_os_str(), "DInput8.DLL");
         assert_eq!(names[1].as_os_str(), "DATA");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn existing_folders_are_canonicalised_and_missing_ones_refused() {
+        let game = test_dir("paths-existing");
+        let real = canonical_existing(Path::new("."), &game).unwrap();
+        assert_eq!(
+            real,
+            simplify_extended_length(&std::fs::canonicalize(&game).unwrap())
+        );
+        let err = canonical_existing(Path::new("missing"), &game).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("missing"), "{err}");
+        // A volume that cannot canonicalise: the existing path, as text.
+        let unsupported =
+            |_: &Path| -> io::Result<PathBuf> { Err(io::Error::other("Incorrect function")) };
+        std::fs::create_dir_all(game.join("sub")).unwrap();
+        let lexical = canonical_existing_with(Path::new("./sub/.."), &game, &unsupported).unwrap();
+        assert_eq!(lexical, normalize(&game));
+        assert!(canonical_existing_with(Path::new("gone"), &game, &unsupported).is_err());
+        std::fs::remove_dir_all(&game).unwrap();
+    }
+
+    #[test]
+    fn a_save_folder_is_found_in_any_spelling() {
+        // OR: the game writes `SaveGame`, a Linux copy may hold `SAVEGAME`.
+        let rt = test_dir("paths-savegame");
+        std::fs::create_dir_all(rt.join("SAVEGAME")).unwrap();
+        let found = find_ignoring_case(&rt, "SaveGame").unwrap();
+        assert_eq!(found.file_name().unwrap(), "SAVEGAME");
+        std::fs::remove_dir_all(&rt).unwrap();
     }
 
     #[test]

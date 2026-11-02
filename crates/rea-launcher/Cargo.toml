@@ -9,3 +9,8 @@ repository.workspace = true
 
 [dependencies]
 sha2.workspace = true
+# Unpacking downloaded archives (`download::install`): deflate only, pure Rust.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
+
+[features]
+zip = ["dep:zip"]

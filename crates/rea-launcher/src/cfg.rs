@@ -9,6 +9,15 @@
 //! [`read_file`] (CMR4 16edc74: a Notepad ANSI file stopped every launch;
 //! only NotFound is a first run, so an unreadable file is never replaced).
 //! A toolkit, not a derive: the launcher keeps its own `Settings`.
+//!
+//! [`spec`]: [`OptionSpec`] tables describe each option once, so the `--help` text,
+//! the commented template, validation and the window/flag parity test all
+//! come from the same rows (the rule: every window option has a flag and a
+//! `launcher.cfg` key, and every game-affecting flag has a window control).
+
+pub mod spec;
+
+pub use spec::{Kind, OptionSpec, Value};
 
 use std::io;
 use std::ops::RangeInclusive;
@@ -25,16 +34,25 @@ pub fn read_file(path: &Path) -> io::Result<Option<String>> {
     }
 }
 
-/// Text from a settings file's bytes: UTF-8 (a leading BOM dropped), else
-/// Latin-1, which keeps the accented letters of Western code pages
-/// instead of turning a folder name into U+FFFD. Saved back as UTF-8.
+/// Text from a settings file's bytes: UTF-8, else Latin-1, which keeps the
+/// accented letters of Western code pages instead of turning a folder name
+/// into U+FFFD (saved back as UTF-8). A UTF-8 BOM stays at the start of
+/// the text: [`entries`], [`set_key`] and [`clear_key`] look past it and
+/// keep it, so the file is saved with it (CMR4 found it dropped).
 pub fn decode(bytes: Vec<u8>) -> String {
     match String::from_utf8(bytes) {
-        Ok(text) => match text.strip_prefix('\u{feff}') {
-            Some(rest) => rest.to_owned(),
-            None => text,
-        },
+        Ok(text) => text,
         Err(e) => e.into_bytes().iter().map(|&b| char::from(b)).collect(),
+    }
+}
+
+const BOM: char = '\u{feff}';
+
+/// `text` without a leading BOM, and the BOM to put back.
+fn split_bom(text: &str) -> (&'static str, &str) {
+    match text.strip_prefix(BOM) {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", text),
     }
 }
 
@@ -60,14 +78,18 @@ fn split_line(line: &str) -> Option<(&str, &str)> {
 /// The active settings in `text`, in order. Blank values (`game =`) mean
 /// "unset" and are skipped.
 pub fn entries(text: &str) -> impl Iterator<Item = Entry<'_>> {
-    text.lines().enumerate().filter_map(|(n, line)| {
-        let (key, value) = split_line(line)?;
-        (!value.is_empty() && !key.is_empty()).then_some(Entry {
-            key,
-            value,
-            line: n + 1,
+    split_bom(text)
+        .1
+        .lines()
+        .enumerate()
+        .filter_map(|(n, line)| {
+            let (key, value) = split_line(line)?;
+            (!value.is_empty() && !key.is_empty()).then_some(Entry {
+                key,
+                value,
+                line: n + 1,
+            })
         })
-    })
 }
 
 /// Why `apply` did not take a value.
@@ -137,6 +159,7 @@ fn is_placeholder(line: &str, key: &str) -> bool {
 /// replaces each active `key =` line; else the first `#key =` placeholder
 /// becomes the active line (so it stays under its comment); else appends.
 pub fn set_key(text: &str, key: &str, value: &str) -> String {
+    let (bom, text) = split_bom(text);
     let nl = newline(text);
     let entry = format!("{key} = {value}");
     let mut lines: Vec<&str> = text.lines().collect();
@@ -144,7 +167,8 @@ pub fn set_key(text: &str, key: &str, value: &str) -> String {
     let placeholder = (!active)
         .then(|| lines.iter().position(|l| is_placeholder(l, key)))
         .flatten();
-    let mut out = String::with_capacity(text.len() + entry.len() + 2);
+    let mut out = String::with_capacity(text.len() + entry.len() + 5);
+    out.push_str(bom);
     if !active && placeholder.is_none() {
         lines.push("");
     }
@@ -162,8 +186,10 @@ pub fn set_key(text: &str, key: &str, value: &str) -> String {
 /// Unsets `key`: each active line becomes `#key =`, so the default
 /// applies; other lines are kept.
 pub fn clear_key(text: &str, key: &str) -> String {
+    let (bom, text) = split_bom(text);
     let nl = newline(text);
-    let mut out = String::with_capacity(text.len() + 2);
+    let mut out = String::with_capacity(text.len() + 5);
+    out.push_str(bom);
     for line in text.lines() {
         if is_key_line(line, key) {
             out.push_str(&format!("#{key} ="));
@@ -175,23 +201,51 @@ pub fn clear_key(text: &str, key: &str) -> String {
     out
 }
 
-/// The file key of a `--flag-name`: `flag_name`; `None` for anything that
-/// is not a long flag.
-pub fn flag_key(flag: &str) -> Option<String> {
-    let name = flag.strip_prefix("--").filter(|n| !n.is_empty())?;
-    Some(name.replace('-', "_"))
+/// How command-line flags spell file keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyStyle {
+    /// `--frame-limit` is `frame_limit` (CMR3, CMR4, SCR, OR).
+    #[default]
+    Underscore,
+    /// `--frame-limit` is `frame-limit` (SRR's hyphenated keys).
+    Hyphen,
 }
 
-/// The `--flag-name` of a file key.
+impl KeyStyle {
+    /// The file key of a `--flag`; `None` for anything that is not a
+    /// long flag.
+    pub fn key(self, flag: &str) -> Option<String> {
+        let name = flag.strip_prefix("--").filter(|n| !n.is_empty())?;
+        Some(match self {
+            KeyStyle::Underscore => name.replace('-', "_"),
+            KeyStyle::Hyphen => name.to_owned(),
+        })
+    }
+
+    /// The `--flag` of a file key.
+    pub fn flag(self, key: &str) -> String {
+        match self {
+            KeyStyle::Underscore => format!("--{}", key.replace('_', "-")),
+            KeyStyle::Hyphen => format!("--{key}"),
+        }
+    }
+}
+
+/// [`KeyStyle::Underscore`]'s file key of a `--flag-name`: `flag_name`.
+pub fn flag_key(flag: &str) -> Option<String> {
+    KeyStyle::Underscore.key(flag)
+}
+
+/// [`KeyStyle::Underscore`]'s `--flag-name` of a file key.
 pub fn key_flag(key: &str) -> String {
-    format!("--{}", key.replace('_', "-"))
+    KeyStyle::Underscore.flag(key)
 }
 
 /// Why the command line was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgError {
-    /// `--help`, `-h` or `/?`: print the usage.
-    Help,
+    /// `--help`, `-h` or `/?` (which one): print the usage.
+    Help(String),
     Unknown(String),
     MissingValue(String),
     Bad {
@@ -204,7 +258,7 @@ pub enum ArgError {
 impl std::fmt::Display for ArgError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ArgError::Help => f.write_str("usage requested"),
+            ArgError::Help(flag) => write!(f, "usage requested ({flag})"),
             ArgError::Unknown(flag) => write!(f, "unknown argument {flag}"),
             ArgError::MissingValue(flag) => write!(f, "{flag} needs a value"),
             ArgError::Bad { flag, value, needs } => {
@@ -217,12 +271,25 @@ impl std::fmt::Display for ArgError {
 impl std::error::Error for ArgError {}
 
 /// Applies `--flag value` pairs through the same `apply` as the file, in
-/// one pass. `keys` lists the settings keys, so a known flag without its
-/// value is told apart from an unknown one; `switches` lists the
-/// launcher's own flags that take no value (`--no-window`, `--check`),
-/// returned in order, so a value is never mistaken for a switch.
+/// one pass, with [`KeyStyle::Underscore`]. See [`parse_args_with`].
 pub fn parse_args<I: IntoIterator<Item = String>>(
     args: I,
+    keys: &[&str],
+    switches: &[&str],
+    apply: impl FnMut(&str, &str) -> Result<(), Rejected>,
+) -> Result<Vec<String>, ArgError> {
+    parse_args_with(args, KeyStyle::Underscore, keys, switches, apply)
+}
+
+/// Applies `--flag value` pairs through the same `apply` as the file, in
+/// one pass. `style` maps flags to keys; `keys` lists the settings keys,
+/// so a known flag without its value is told apart from an unknown one;
+/// `switches` lists the launcher's own flags that take no value
+/// (`--no-window`, `--check`), returned in order, so a value is never
+/// mistaken for a switch.
+pub fn parse_args_with<I: IntoIterator<Item = String>>(
+    args: I,
+    style: KeyStyle,
     keys: &[&str],
     switches: &[&str],
     mut apply: impl FnMut(&str, &str) -> Result<(), Rejected>,
@@ -231,13 +298,13 @@ pub fn parse_args<I: IntoIterator<Item = String>>(
     let mut args = args.into_iter();
     while let Some(flag) = args.next() {
         if matches!(flag.as_str(), "--help" | "-h" | "/?") {
-            return Err(ArgError::Help);
+            return Err(ArgError::Help(flag));
         }
         if switches.contains(&flag.as_str()) {
             seen.push(flag);
             continue;
         }
-        let Some(key) = flag_key(&flag).filter(|k| keys.contains(&k.as_str())) else {
+        let Some(key) = style.key(&flag).filter(|k| keys.contains(&k.as_str())) else {
             return Err(ArgError::Unknown(flag));
         };
         let Some(value) = args.next() else {
@@ -461,7 +528,11 @@ mod tests {
             args(&["game"]).unwrap_err(),
             ArgError::Unknown("game".into())
         );
-        assert_eq!(args(&["--help"]).unwrap_err(), ArgError::Help);
+        assert_eq!(
+            args(&["--help"]).unwrap_err(),
+            ArgError::Help("--help".into())
+        );
+        assert_eq!(args(&["/?"]).unwrap_err(), ArgError::Help("/?".into()));
         assert_eq!(flag_key("--hd-ui").as_deref(), Some("hd_ui"));
         assert_eq!(flag_key("-x"), None);
         assert_eq!(flag_key("--"), None);
@@ -485,6 +556,40 @@ mod tests {
         // `--check` after `--game` is the game folder's value, not a switch.
         assert_eq!(seen, ["--no-window", "--settings", "--linux"]);
         assert_eq!(s.game.as_deref(), Some("--check"));
+    }
+
+    #[test]
+    fn hyphenated_keys_keep_their_hyphens() {
+        let mut got = Vec::new();
+        parse_args_with(
+            ["--frame-limit".to_string(), "60".to_string()],
+            KeyStyle::Hyphen,
+            &["frame-limit"],
+            &[],
+            |k, v| {
+                got.push((k.to_owned(), v.to_owned()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(got, [("frame-limit".to_string(), "60".to_string())]);
+        assert_eq!(KeyStyle::Hyphen.flag("frame-limit"), "--frame-limit");
+        assert_eq!(
+            KeyStyle::Underscore.key("--frame-limit").as_deref(),
+            Some("frame_limit")
+        );
+        assert_eq!(KeyStyle::Hyphen.key("-x"), None);
+    }
+
+    #[test]
+    fn a_bom_is_read_past_and_kept_on_save() {
+        let text = decode(b"\xEF\xBB\xBFgame = C:\\G\r\nvsync = on\r\n".to_vec());
+        assert_eq!(file(&text).0.game.as_deref(), Some("C:\\G"));
+        let saved = set_key(&text, "game", "D:\\G");
+        assert_eq!(saved, "\u{feff}game = D:\\G\r\nvsync = on\r\n");
+        let cleared = clear_key(&saved, "game");
+        assert_eq!(cleared, "\u{feff}#game =\r\nvsync = on\r\n");
+        assert_eq!(set_key("\u{feff}", "a", "1"), "\u{feff}a = 1\n");
     }
 
     #[test]
@@ -574,7 +679,7 @@ mod tests {
         assert_eq!(
             file(&text).0.game.as_deref(),
             Some("D:\\Edição"),
-            "BOM dropped"
+            "past the BOM"
         );
         // Not a file: a real error, so the caller won't overwrite it.
         assert!(read_file(&dir).is_err());

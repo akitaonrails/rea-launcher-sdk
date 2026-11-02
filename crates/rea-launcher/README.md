@@ -17,11 +17,13 @@ made that copy the reference.
 | `saves` | Save mirroring by recorded state, for one file or a folder |
 | `ledger` | SHA-256 record of the components the launcher installed |
 | `ini` | Section-aware INI editing that keeps comments, case, CRLF, BOM, bytes |
-| `cfg` | `launcher.cfg` reading, line editing, value parsers, shared CLI flags |
+| `cfg` | `launcher.cfg` reading, line editing, value parsers, shared CLI flags; `cfg::spec` option tables |
 | `wine` | `WINEDLLOVERRIDES` merge, Wine detection from the environment, winebus names |
+| `download` | Pinned, resumable, verified downloads; unpacking with the `zip` feature |
 | `env` | Child environments and the `CreateProcessW` environment block |
 | `identify` | SHA-256 tables, hex, PE32 check |
-| `patch` | All-or-nothing byte sites, one-match signatures, caves, result hashes |
+| `patch` | Declarative patch sets (`PatchSet`, `apply_sets`, `describe`), byte sites, signatures, caves, result hashes |
+| `pe` | PE32/PE32+ headers and sections, VA ↔ file offset |
 | `display` | Monitor choice, landscape sizes, Steam Deck, the largest 16:9 size |
 | `pad` | XInput state parsing and settings-window navigation by edges |
 | `log` | `launcher.log` with a size cap |
@@ -126,6 +128,10 @@ ledger.take_out("dinput8.dll", &[xidi])?;
 ```
 
 ### ini
+
+`ini::set_owned` / `ini::release` with an `ini::Owned` record (saved
+beside the runtime) undo only values the launcher wrote and the player
+has not changed since in the game's menu.
 
 ```rust
 use rea_launcher::ini::Ini;
@@ -260,6 +266,165 @@ assert_eq!(args::quote_windows(OsStr::new(r"C:\Games\")), r#""C:\Games\\""#);
 assert_eq!(args::command_line(OsStr::new("a.exe"), &["-d"]), r#""a.exe" "-d""#);
 ```
 
+## One table for the window and the command line
+
+The rule: every window option has a flag and a `launcher.cfg` key, every
+flag that changes the game has a window control, the game runs fully with
+`--no-window`, and the window can set everything. `cfg::spec` keeps the
+rows in one `const` table; the launcher keeps its typed settings and an
+`apply(key, Value)`.
+
+```rust
+use rea_launcher::cfg::{self, spec, KeyStyle, Kind, OptionSpec, Rejected, Value};
+
+const MODES: &[(&str, &str)] = &[("fullscreen", "Fullscreen"), ("windowed", "Windowed")];
+
+const OPTIONS: &[OptionSpec] = &[
+    OptionSpec::new("game", Kind::Path, "Game folder", "The installed game; only read.")
+        .launcher_only(),
+    OptionSpec::new(
+        "resolution",
+        Kind::Size { min: (640, 480), max: (7680, 4320), aliases: cfg::ORIGINAL },
+        "Resolution",
+        "Display resolution, or original.",
+    )
+    .with_example("1920x1080"),
+    OptionSpec::new("display_mode", Kind::Choice(MODES), "Display mode", "How the game fills the screen."),
+    OptionSpec::new("vsync", Kind::Toggle, "VSync", "Wait for the screen's refresh."),
+];
+
+#[derive(Default)]
+struct Settings { mode: Option<&'static str>, vsync: Option<bool> }
+
+impl Settings {
+    fn apply(&mut self, key: &str, value: Value) -> Result<(), Rejected> {
+        match (key, value) {
+            ("display_mode", Value::Choice(mode)) => self.mode = Some(mode),
+            ("vsync", Value::Toggle(on)) => self.vsync = Some(on),
+            ("game" | "resolution", _) => {}
+            _ => return Err(Rejected::Unknown),
+        }
+        Ok(())
+    }
+}
+
+// launcher.cfg and the command line, checked against the same rows.
+let mut s = Settings::default();
+let warnings = spec::parse_file("vsync = on\n", "launcher.cfg", OPTIONS, |k, v| s.apply(k, v));
+let argv = ["--no-window", "--display-mode", "windowed"].map(String::from);
+let switches = spec::parse_args(argv, KeyStyle::Underscore, OPTIONS, &["--no-window"], |k, v| s.apply(k, v));
+assert!(warnings.is_empty() && switches.is_ok());
+assert_eq!((s.mode, s.vsync), (Some("windowed"), Some(true)));
+
+// --help lines and the first-run template come from the rows.
+let help = spec::usage(OPTIONS, KeyStyle::Underscore);
+let template = spec::template("Example launcher settings.", OPTIONS);
+assert!(help.contains("--display-mode fullscreen|windowed"));
+assert!(template.contains("#resolution = 1920x1080"));
+
+// In the launcher's tests: the window's controls match the table.
+spec::assert_parity(OPTIONS, &["resolution", "display_mode", "vsync"]);
+```
+
+`launcher_only` marks rows with no window control on purpose (the game
+and runtime folders, a log switch for bug reports). `assert_parity`
+panics with every row the window lacks, every window control without a
+row, duplicate keys or flags, empty choices and invalid examples.
+`OptionSpec::parse` checks one value, for a window's own text fields. A renamed key keeps its old name readable with
+`.with_aliases(&["old-name"])` (file and flags, no warning);
+`spec::set_key(text, &row, value)` writes the new name and comments out
+the old lines. `.helper_owned()` marks an option the Linux play
+helper reads rather than the game (gamescope scaler, vkBasalt): it still
+has a key and a window control, `usage` marks it "(Linux helper)", and the
+helper must honour the one-run flag passed to it as well as
+`launcher.cfg`.
+
+## Binary patches as one table
+
+A game's fixes are a `const` table of `PatchSet`s (see
+`docs/playbooks/binary-patching.md`). `apply_sets` identifies the build by
+SHA-256, resolves virtual addresses through the PE sections, refuses a site
+holding other bytes (all or nothing), accepts sites already patched,
+checks caves (zero, executable, not shared) and verifies each set's
+result hash. `describe` gives the offset table for docs and PCGamingWiki.
+
+```rust
+use rea_launcher::identify::hex32;
+use rea_launcher::patch::{self, At, PatchSet, PatchSite};
+use rea_launcher::pe::Pe;
+
+const RETAIL: [u8; 32] = hex32("9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa");
+
+const ASPECT: PatchSet = PatchSet {
+    name: "aspect",
+    summary: "Ultra-wide screens without stretching",
+    editions: &[RETAIL],
+    sites: &[PatchSite {
+        at: At::Va(0x0068_3fa4),
+        original: &[0x39, 0x8e, 0xe3, 0x3f],
+        patched: &[0x26, 0xb4, 0x17, 0x40],
+        note: "16:9 constant to 21:9",
+    }],
+    caves: &[],
+    results: &[], // (RETAIL, hash after) once measured on the real build
+};
+
+# fn main() -> Result<(), rea_launcher::patch::PatchError> {
+# let pristine = rea_launcher::pe::synthetic::image(
+#     rea_launcher::pe::Format::Pe32, 0x40_0000,
+#     &[(".rdata", 0x28_3000, &[0x39, 0x8e, 0xe3, 0x3f].repeat(0x400), rea_launcher::pe::synthetic::DATA)]);
+let pe = Pe::parse(&pristine).map_err(patch::PatchError::Pe)?;
+let rows = patch::describe(&ASPECT, Some(&pe))?;
+println!("{}", patch::to_markdown(&rows)); // docs/README
+println!("{}", patch::to_wikitext(&rows)); // PCGamingWiki fix box
+// The launcher: patched = patch::apply_sets(&pristine, &[&ASPECT])?;
+# Ok(()) }
+```
+
+In the launcher's tests, `patch::testing::assert_golden(&SET, &synthetic)`
+checks every site on a small synthetic file (golden bytes, idempotent,
+reversible, all-or-nothing), and
+`patch::testing::assert_real_game("GAME_DIR", &[&SET, …])` checks every set
+on the player's real build when the variable names its folder (and does
+nothing otherwise). `pe::synthetic::image` builds the synthetic PE.
+
+## Downloads on request
+
+`download` fetches a pinned file the player asked for (never on its own):
+free-space check, resume with an HTTP range (a server that sends the whole
+file again starts over), SHA-256 while streaming, then with the `zip`
+feature an unpack into a temporary folder renamed into place, a
+`.complete` marker and older versions removed. The platform supplies the
+HTTP GET as a `Fetch`; a window polls `Job::phase()` from another thread.
+
+```rust
+use std::path::Path;
+use rea_launcher::download::{self, Fetch, Job, Phase, Pin};
+
+struct Offline;
+
+impl Fetch for Offline {
+    fn fetch(&self, _url: &str, _from: u64, _start: &mut dyn FnMut(bool),
+             _chunk: &mut dyn FnMut(&[u8]) -> bool) -> Result<(), String> {
+        Err("no network in this example".into())
+    }
+}
+
+let pin = Pin::parse(&format!("https://example.org/r/Pack-v2.zip {} 1000 5000", "0".repeat(64))).unwrap();
+let root = std::env::temp_dir().join("rea-doc-download");
+let job = Job::default(); // Arc<Job> shared with the window in a launcher
+let free = |_: &Path| None; // the platform's free-space query
+let phase = download::download(&pin, &root, &free, &Offline, &job);
+assert!(matches!(phase, Phase::Failed(_)));
+assert_eq!(job.phase(), phase);
+# let _ = std::fs::remove_dir_all(root);
+```
+
+With `features = ["zip"]`, `download::install(&pin, &root, &free, &fetch,
+&job)` also unpacks and returns `Phase::Done(folder)`;
+`download::installed(&pin, &root)` finds a complete version later. Give
+each component its own `root`: older versions there are removed.
+
 ## Migration
 
 What changes for each launcher when it swaps its own copy for the SDK's.
@@ -272,7 +437,9 @@ Behaviour not listed here is the same.
   leftovers once with `fsx::remove_stale_temps(runtime, &[".cmr3-new"])`;
   it only unlinks, so a leftover hard link to an original is harmless.
   Pass suffixes like `.tmp` only for folders where the game has no `.tmp`
-  files of its own.
+  files of its own; `fsx::remove_stale_temps_here` looks in one folder
+  only, and `fsx::remove_files(&[path])` removes exact names (OR's
+  `.or-manifest.tmp`).
 - **A refused replace** on Windows now moves the old file to
   `.name.rea-old`, renames the new one in and removes the backup after;
   the older launchers deleted the old file first, which could lose both.
@@ -292,11 +459,17 @@ Behaviour not listed here is the same.
   - A line starting with `;` is a comment (only `#` was).
   - Unknown keys produce a warning ("ignored, kept in the file"), as CMR4
     did; CMR3, SCR, SRR and OR ignored them silently.
-  - `read_file` drops a UTF-8 BOM and reads non-UTF-8 as Latin-1 (CMR4
-    16edc74); only NotFound is a first run.
+  - `read_file` reads non-UTF-8 as Latin-1 (CMR4 16edc74); only NotFound
+    is a first run. A UTF-8 BOM stays in the text and is kept by
+    `set_key`/`clear_key`, so the file is saved with it (v0.1.0 dropped
+    it).
   - `parse_args` takes the launcher's value-less switches (`--no-window`,
     `--check`, `--settings`, `--linux`) in the same pass and returns them;
     a switch name in a value position is a value.
+  - `parse_args_with(…, KeyStyle::Hyphen, …)` keeps hyphens, for SRR's
+    `frame-limit` style keys (`--frame-limit` ↔ `frame-limit`).
+  - **v0.2.0, breaking:** `ArgError::Help(flag)` carries the flag given
+    (`--help`, `-h` or `/?`); match `ArgError::Help(_)`.
 - **`resolution`** words come from a table passed to
   `cfg::parse_resolution`; each launcher's current spellings:
 
@@ -310,7 +483,23 @@ Behaviour not listed here is the same.
 
   `×` and `X` are accepted as the separator everywhere (only `x` was).
 - **`display::landscape`** offers sizes larger than 640×480 (CMR3, CMR4,
-  OR); SRR's copy also offered exactly 640×480.
+  OR); SRR's copy also offered exactly 640×480: use
+  `display::landscape_from(screen, (640, 480))`.
+- **`paths::canonical_existing(path, cwd)`** is CMR4's
+  `canonical_existing` (the game folder must exist).
+- **`log::Log`** caps at 1 MiB by default; `.with_limit(bytes)` changes
+  the cap and `.without_limit()` removes it.
+- **Binary patches**: `patch::apply`, `signature_toggle` and `check_caves`
+  stay; new games describe fixes as `PatchSet` tables. SCR's `FixSet` /
+  `prepare` map to sites at `At::Offset` (its LE parser stays local, which
+  turns its VAs into offsets); SRR's pacer becomes a set with three caves
+  and a `results` hash, `pacer_verified` becomes `apply_sets`, and its
+  pattern-found aspect slots stay a launcher function (no fixed address);
+  CMR4's widescreen toggle stays `signature_toggle`.
+  `identify::validate_pe32` now reads the headers through `pe`.
+- **`Ledger::take_out_with(rel, known, &policy)`** brings the game's file
+  back the way a sync would (hard-linked where the policy links);
+  `take_out` copies.
 - **`display::game_monitor`** returns `Some(index)` only when a monitor
   other than the primary should be used (CMR4's `choose().output` was
   `index + 1`).
@@ -363,4 +552,11 @@ Behaviour not listed here is the same.
   OR's own record dropped such a save, so it came back one launch later;
   the SDK remembers it as gone. `.or-saves` (`size\tmtime\trel`) is read.
 - `ini.rs` → `Ini::parse` (spaced `key = value`, as before).
+- `hdpack.rs` → `download` with `features = ["zip"]`: `Pack` is `Pin`
+  (`sha256` is bytes; `unpacked` is `unpacked_size`), `install` takes a
+  free-space callback instead of `Option<u64>`, the marker is written
+  before the folder is renamed into place, and messages no longer name
+  the Download button (the window adds that).
+- `save_dir` → `paths::find_ignoring_case(runtime, "SaveGame")` (v0.2.0
+  reports the on-disk spelling on case-insensitive disks too).
 - Owned files: `Policy::owned(rel, stamp)`.

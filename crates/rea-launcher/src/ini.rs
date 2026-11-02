@@ -283,6 +283,174 @@ impl Ini {
     }
 }
 
+/// One value the launcher wrote: what it wrote, and what was there before
+/// (`None`: the key was absent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Wrote {
+    section: String,
+    key: String,
+    written: String,
+    previous: Option<String>,
+}
+
+/// The launcher's record of the INI values it last wrote, kept in a small
+/// file beside the runtime. CMR3 unset an option by deleting its key,
+/// wiping a choice the player had since made in the game's own menu; with
+/// this record an unset ([`release`]) only undoes what is still ours.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Owned {
+    /// By lower-case (section, key): sections and keys ignore case.
+    entries: std::collections::BTreeMap<(String, String), Wrote>,
+}
+
+fn escape(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('t') => out.push('\t'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+fn slot(section: &str, key: &str) -> (String, String) {
+    (section.to_lowercase(), key.to_lowercase())
+}
+
+impl Owned {
+    /// Reads the record; a missing file is an empty one, malformed lines
+    /// are skipped.
+    pub fn load(path: &std::path::Path) -> std::io::Result<Owned> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Owned::default()),
+            Err(e) => return Err(crate::fsx::at(path)(e)),
+        };
+        let mut owned = Owned::default();
+        for line in text.lines() {
+            let fields: Vec<&str> = line.split('\t').collect();
+            let (section, key, written, previous) = match fields.as_slice() {
+                [s, k, w, "-"] => (s, k, w, None),
+                [s, k, w, "=", p] => (s, k, w, Some(unescape(p))),
+                _ => continue,
+            };
+            let wrote = Wrote {
+                section: unescape(section),
+                key: unescape(key),
+                written: unescape(written),
+                previous,
+            };
+            owned
+                .entries
+                .insert(slot(&wrote.section, &wrote.key), wrote);
+        }
+        Ok(owned)
+    }
+
+    /// Writes the record (whole-file swap).
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let text: String = self
+            .entries
+            .values()
+            .map(|w| {
+                let previous = w
+                    .previous
+                    .as_ref()
+                    .map_or_else(|| "-".to_owned(), |p| format!("=\t{}", escape(p)));
+                format!(
+                    "{}\t{}\t{}\t{previous}\n",
+                    escape(&w.section),
+                    escape(&w.key),
+                    escape(&w.written)
+                )
+            })
+            .collect();
+        crate::fsx::write_atomic(path, text)
+    }
+
+    /// The value the launcher last wrote to (section, key), if any.
+    pub fn written(&self, section: &str, key: &str) -> Option<&str> {
+        self.entries
+            .get(&slot(section, key))
+            .map(|w| w.written.as_str())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Sets `key` in `[section]` and records it as ours. The value that was
+/// there before is remembered the first time (and again whenever the
+/// player had changed ours since), so [`release`] can put it back.
+pub fn set_owned(ini: &mut Ini, owned: &mut Owned, section: &str, key: &str, value: &str) {
+    let value = value.trim();
+    let current = ini.get(section, key).map(str::to_owned);
+    let slot = slot(section, key);
+    let previous = match owned.entries.get(&slot) {
+        // Still ours: keep what was there before we first wrote.
+        Some(w) if current.as_deref() == Some(w.written.as_str()) => w.previous.clone(),
+        _ => current,
+    };
+    ini.set(section, key, value);
+    owned.entries.insert(
+        slot,
+        Wrote {
+            section: section.to_owned(),
+            key: key.to_owned(),
+            written: value.to_owned(),
+            previous,
+        },
+    );
+}
+
+/// What [`release`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Released {
+    /// Ours and unchanged: the earlier value is back (or the key is gone).
+    Restored,
+    /// The player changed it since: left as it is, record dropped.
+    PlayerChanged,
+    /// Nothing recorded for this key.
+    NotOurs,
+}
+
+/// Undoes [`set_owned`] for an option the launcher no longer sets (unset
+/// means "keep the game's value"): only when the file still holds what we
+/// wrote is the earlier value restored or the key removed. Either way the
+/// record goes.
+pub fn release(ini: &mut Ini, owned: &mut Owned, section: &str, key: &str) -> Released {
+    let Some(wrote) = owned.entries.remove(&slot(section, key)) else {
+        return Released::NotOurs;
+    };
+    if ini.get(section, key) != Some(wrote.written.as_str()) {
+        return Released::PlayerChanged;
+    }
+    match &wrote.previous {
+        Some(previous) => ini.set(section, key, previous),
+        None => {
+            ini.remove(section, key);
+        }
+    }
+    Released::Restored
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,5 +668,90 @@ mod tests {
         assert_eq!(text.get("Graphics", "VSync"), Some("0"));
         text.set("Graphics", "VSync", "2");
         assert_eq!(text.to_text().unwrap(), "\u{feff}[Graphics]\nVSync = 2\n");
+    }
+
+    mod owned {
+        use super::super::*;
+        use crate::test_dir;
+
+        #[test]
+        fn release_undoes_only_what_is_still_ours() {
+            let mut ini = Ini::parse("[Graphics]\r\nVSync = 1\r\n");
+            let mut owned = Owned::default();
+            set_owned(&mut ini, &mut owned, "Graphics", "VSync", "0");
+            set_owned(&mut ini, &mut owned, "Graphics", "Aniso", "16");
+            // Setting again keeps the value from before our first write.
+            set_owned(&mut ini, &mut owned, "graphics", "vsync", "0");
+            assert_eq!(owned.written("GRAPHICS", "VSYNC"), Some("0"));
+            assert_eq!(
+                release(&mut ini, &mut owned, "Graphics", "VSync"),
+                Released::Restored
+            );
+            assert_eq!(
+                release(&mut ini, &mut owned, "Graphics", "Aniso"),
+                Released::Restored
+            );
+            assert_eq!(
+                ini.to_text().unwrap(),
+                "[Graphics]\r\nVSync = 1\r\n",
+                "as before, CRLF kept"
+            );
+            assert_eq!(
+                release(&mut ini, &mut owned, "Graphics", "VSync"),
+                Released::NotOurs
+            );
+            assert!(owned.is_empty());
+        }
+
+        #[test]
+        fn a_value_the_player_changed_in_game_is_kept() {
+            let mut ini = Ini::parse("[Graphics]\nVSync = 1\n");
+            let mut owned = Owned::default();
+            set_owned(&mut ini, &mut owned, "Graphics", "VSync", "0");
+            // The game's own menu writes the file.
+            ini.set("Graphics", "VSync", "2");
+            assert_eq!(
+                release(&mut ini, &mut owned, "Graphics", "VSync"),
+                Released::PlayerChanged
+            );
+            assert_eq!(ini.get("Graphics", "VSync"), Some("2"));
+            assert!(owned.is_empty(), "the record is dropped");
+            // Set over a player's change: their value is what comes back.
+            set_owned(&mut ini, &mut owned, "Graphics", "VSync", "0");
+            ini.set("Graphics", "VSync", "3");
+            set_owned(&mut ini, &mut owned, "Graphics", "VSync", "0");
+            release(&mut ini, &mut owned, "Graphics", "VSync");
+            assert_eq!(ini.get("Graphics", "VSync"), Some("3"));
+        }
+
+        #[test]
+        fn latin1_files_and_the_record_round_trip() {
+            let bytes = b"[Pad]\nName=Manette \xE9tendue\n";
+            let mut ini = Ini::from_bytes(bytes).tight();
+            let mut owned = Owned::default();
+            set_owned(&mut ini, &mut owned, "Pad", "Name", "Pad\tone");
+            set_owned(&mut ini, &mut owned, "Video", "Width", "1920");
+            let dir = test_dir("ini-owned");
+            let path = dir.join(".owned-ini");
+            owned.save(&path).unwrap();
+            let mut loaded = Owned::load(&path).unwrap();
+            assert_eq!(loaded, owned);
+            assert_eq!(
+                release(&mut ini, &mut loaded, "Pad", "Name"),
+                Released::Restored
+            );
+            assert_eq!(
+                release(&mut ini, &mut loaded, "Video", "Width"),
+                Released::Restored
+            );
+            assert_eq!(
+                ini.to_bytes(),
+                b"[Pad]\nName=Manette \xE9tendue\n\n[Video]\n"
+            );
+            assert!(Owned::load(&dir.join("missing")).unwrap().is_empty());
+            std::fs::write(&path, "junk\nmore\tjunk\n").unwrap();
+            assert!(Owned::load(&path).unwrap().is_empty());
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 }
