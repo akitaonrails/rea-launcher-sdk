@@ -21,7 +21,7 @@
 #   REA_LAUNCH_CMD       command run instead of the whole supervised launch
 #   REA_PROC             replaces /proc for the game-process check
 
-REA_SDK_VERSION=0.3.0
+REA_SDK_VERSION=0.3.1
 
 # --- configuration -------------------------------------------------------------
 # Every configuration variable the library reads. Sourcing unsets them, so

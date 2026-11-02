@@ -29,6 +29,12 @@ scripts/sdk-sync ../rea-colin-mcrae-4          # writes ../rea-colin-mcrae-4/sdk
 scripts/sdk-sync --check ../rea-colin-mcrae-4  # exit 1 on drift
 ```
 
+`--check` compares `sdk/` with the version `sdk/VERSION` records, whatever
+this SDK checkout is at: it runs that version's own `sdk-sync` from a
+temporary `git clone --shared` of this checkout (read only; `git fetch
+--tags` when the commit is missing). `--check --against-head` compares with
+this work tree instead (before re-syncing to it).
+
 Layout in the launcher: `sdk/rea-play.sh` (the play library, from the SDK's
 `shell/`), `sdk/scripts/wine-test` (Windows-target tests under Wine),
 `sdk/packaging/...` (as here), and `sdk/docs/STANDARDS.md` with
@@ -247,7 +253,8 @@ Inputs of `launcher-ci.yml` (all optional):
 | `wine-test-args` | `--locked --workspace` | |
 | `audit` | `true` | cargo-audit 0.22.1 + cargo-deny 0.19.8; fails without a `deny.toml` |
 | `sdk-check`, `sdk-dir`, `sdk-repository` | `true`, `sdk`, this repo | drift check against `sdk/VERSION` |
-| `imports-check` | `true` | for a Windows target: `.cargo/config.toml` links it with lld (`check-lld.sh`), and every import of the built `.exe`/`.dll` belongs to a descriptor (`check-imports.sh`) |
+| `extra-build` | empty | bash commands after the workspace release build, e.g. a dependency's DLL: `cargo build --release --locked --target "$RUST_TARGET" -p rea-launcher-close-hook` |
+| `imports-check` | `true` | for a Windows target: `.cargo/config.toml` links it with lld (`check-lld.sh`), and every import of the built `.exe`/`.dll` belongs to a descriptor (`check-imports.sh`): the release folder after the build, then every `.exe`/`.dll` in `package-dir` (folders and zips, third-party DLLs included) |
 | `imports-test`, `package-command` | empty | bash commands |
 | `package-dir`, `package-allowlist` | empty | glob of package folders/zips and the allowlist |
 | `artifact-name`, `artifact-paths` | empty | upload |

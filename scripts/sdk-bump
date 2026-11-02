@@ -172,6 +172,8 @@ FROM=${SINCE:-$OLD}
 : > "$T/notes"
 if [ -f "$CO/CHANGELOG.md" ]; then
   awk -v old="${FROM#v}" -v new="${NEW#v}" '
+    # Per release in range: its "### Migration" section when it has one;
+    # else (older changelogs) every bullet that mentions **Migration**.
     function cmp(a, b,   x, y, i) {
       split(a, x, "."); split(b, y, ".")
       for (i = 1; i <= 3; i++) {
@@ -180,19 +182,35 @@ if [ -f "$CO/CHANGELOG.md" ]; then
       }
       return 0
     }
+    function end_bullet(   i) {
+      if (nb && bullet_mig) for (i = 1; i <= nb; i++) inl[++ni] = b[i]
+      nb = 0; bullet_mig = 0
+    }
+    function flush(   i) {
+      end_bullet()
+      if (inrange && (ns || ni)) {
+        if (shown) print ""
+        print "### v" ver; shown = 1
+        if (ns) for (i = 1; i <= ns; i++) print sec[i]
+        else for (i = 1; i <= ni; i++) print inl[i]
+      }
+      ns = 0; ni = 0; insec = 0
+    }
     /^## / {
+      flush()
       h = $0; sub(/^##[ \t]+/, "", h); sub(/[ \t].*$/, "", h)
       gsub(/\[/, "", h); gsub(/\]/, "", h); sub(/^v/, "", h)
-      ver = h; item = 0
+      ver = h
       inrange = (h ~ /^[0-9]+\.[0-9]+\.[0-9]+/) && (old == "" || cmp(h, old) > 0) && cmp(h, new) <= 0
       next
     }
-    inrange && /^- \*\*Migration:?\*\*/ {
-      if (ver != shown) { if (shown != "") print ""; print "### v" ver; shown = ver }
-      item = 1; print; next
-    }
-    item && /^  +[^ ]/ { print; next }
-    { item = 0 }
+    /^### / { end_bullet(); insec = ($0 ~ /^### Migration[ \t]*$/); next }
+    !inrange { next }
+    insec { if ($0 !~ /^[ \t]*$/) sec[++ns] = $0; next }
+    /^- / { end_bullet(); b[++nb] = $0; bullet_mig = ($0 ~ /\*\*Migration/); next }
+    nb && /^  +[^ ]/ { b[++nb] = $0; if ($0 ~ /\*\*Migration/) bullet_mig = 1; next }
+    { end_bullet() }
+    END { flush() }
   ' "$CO/CHANGELOG.md" > "$T/notes"
 fi
 if [ -s "$T/notes" ]; then

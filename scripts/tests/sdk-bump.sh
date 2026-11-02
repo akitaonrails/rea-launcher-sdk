@@ -21,30 +21,40 @@ mkdir -p "$S/scripts" "$S/shell"
 cp -R "$ROOT/packaging" "$S/packaging"
 cp "$ROOT/scripts/sdk-sync" "$ROOT/scripts/sdk-bump" "$ROOT/scripts/wine-test" "$S/scripts/"
 echo '# play v1' > "$S/shell/rea-play.sh"
-changelog() { # versions... newest first, each "ver:migration text"
+changelog() { # versions... newest first, each "ver:style:migration text"
+  # style: section (### Migration, the current format; an inline mention
+  # elsewhere is then ignored), mid (a **Migration:** note inside an Added
+  # bullet), start (a bullet that starts with **Migration:**).
   echo '# Changelog'
   echo
   echo '## [Unreleased]'
   echo
-  echo '- **Migration:** unreleased, never shown'
+  echo '### Migration'
+  echo
+  echo '- unreleased, never shown'
   for v; do
+    ver=${v%%:*} rest=${v#*:}; style=${rest%%:*} text=${rest#*:}
     echo
-    echo "## [${v%%:*}] - 2026-11-02"
+    echo "## [$ver] - 2026-11-02"
     echo
-    echo '### Changed'
-    echo
-    echo "- **Migration:** ${v#*:}"
-    echo '  wrapped second line'
-    echo '- not a migration'
+    case $style in
+      section)
+        printf '### Migration\n\n- %s\n  wrapped second line\n- second item\n\n' "$text"
+        printf '### Added\n\n- a feature. **Migration:** not repeated from here\n' ;;
+      mid)
+        printf '### Added\n\n- a feature\n  more. **Migration:** %s\n  verify it\n- not a migration\n' "$text" ;;
+      start)
+        printf '### Changed\n\n- **Migration:** %s\n  wrapped second line\n- not a migration\n' "$text" ;;
+    esac
   done
 }
-changelog "0.1.0:first" > "$S/CHANGELOG.md"
+changelog "0.1.0:start:first" > "$S/CHANGELOG.md"
 (cd "$S" && git init -q && git add -A && git commit -qm v1 && git tag v0.1.0) || { echo "git setup failed"; exit 1; }
 echo '# play v2' > "$S/shell/rea-play.sh"
-changelog "0.2.0:rename Palette.line" "0.1.0:first" > "$S/CHANGELOG.md"
+changelog "0.2.0:mid:rename Palette.line" "0.1.0:start:first" > "$S/CHANGELOG.md"
 (cd "$S" && git commit -qam v2 && git tag v0.2.0)
 echo '# play v3' > "$S/shell/rea-play.sh"
-changelog "0.3.0:WindowFit opt-in" "0.2.0:rename Palette.line" "0.1.0:first" > "$S/CHANGELOG.md"
+changelog "0.3.0:section:WindowFit opt-in" "0.2.0:mid:rename Palette.line" "0.1.0:start:first" > "$S/CHANGELOG.md"
 (cd "$S" && git commit -qam v3 && git tag v0.3.0)
 V3=$(git -C "$S" rev-parse v0.3.0)
 BUMP=$S/scripts/sdk-bump
@@ -108,14 +118,17 @@ check "vendored files from v0.3.0" "# play v3" "$(cat "$L/sdk/rea-play.sh")"
 [ -x "$L/sdk/scripts/sdk-bump" ] && ok "sdk-bump vendored" || bad "sdk-bump vendored"
 check "workflow refs moved" "2" "$(grep -c 'rea-launcher-sdk/.github/workflows/[a-z-]*\.yml@v0.3.0$' "$L/.github/workflows/build.yml")"
 grep -q 'actions/checkout@3d3c42e5' "$L/.github/workflows/build.yml" && ok "other actions untouched" || bad "other actions untouched"
-check "Migration items of 0.2.0 and 0.3.0, newest first" "### v0.3.0
-- **Migration:** WindowFit opt-in
+check "Migration section (0.3.0) and a note inside a bullet (0.2.0), newest first" "### v0.3.0
+- WindowFit opt-in
   wrapped second line
+- second item
 
 ### v0.2.0
-- **Migration:** rename Palette.line
-  wrapped second line" "$(cat "$T/notes.md")"
-grep -q 'Migration:\*\* WindowFit opt-in' "$T/out" && ok "Migration items printed" || bad "Migration items printed"
+- a feature
+  more. **Migration:** rename Palette.line
+  verify it" "$(cat "$T/notes.md")"
+grep -q '^- WindowFit opt-in' "$T/out" && ok "Migration items printed" || bad "Migration items printed"
+if grep -q 'not repeated from here' "$T/notes.md"; then bad "a Migration section wins over inline notes"; else ok "a Migration section wins over inline notes"; fi
 
 # Idempotent; a dirty tree is refused.
 if sh "$BUMP" v0.3.0 "$L" >"$T/out" 2>&1; then bad "dirty tree refused"; else grep -q 'uncommitted changes' "$T/out" && ok "dirty tree refused" || bad "dirty tree: $(cat "$T/out")"; fi
@@ -147,8 +160,9 @@ if REA_SDK_URL=$S sh "$L/sdk/scripts/sdk-bump" --no-cargo v0.3.0 "$L" >"$T/out" 
 grep -q "SDK v0.3.0 from $T/cache\$" "$T/out" && ok "vendored run clones into the cache" || bad "cache: $(grep from "$T/out")"
 grep -qx "commit=$V3" "$L/sdk/VERSION" && ok "cache checkout at the tag" || bad "cache checkout at the tag"
 check "only v0.3.0's items after 0.2.0" "### v0.3.0
-- **Migration:** WindowFit opt-in
-  wrapped second line" "$(sed -n '/^### v/,$p' "$T/out" | sed '/^$/,$d')"
+- WindowFit opt-in
+  wrapped second line
+- second item" "$(sed -n '/^### v/,$p' "$T/out" | sed '/^$/,$d')"
 
 # 3. An SDK checkout not at the tag: its local tags feed the cache, no network.
 (cd "$L" && git add -A && git commit -qm up)
@@ -162,5 +176,13 @@ else
   bad "dirty SDK checkout: $(cat "$T/out")"
 fi
 grep -qx "commit=$V3" "$L/sdk/VERSION" && ok "stamped with the tag's commit, not the work tree" || bad "stamp: $(cat "$L/sdk/VERSION")"
+
+# The SDK's own CHANGELOG: every v0.2.0 and v0.3.0 Migration bullet is
+# found (the CMR4 bump missed the ones inside Added bullets).
+awk_prog=$(sed -n "/^  awk -v old=/,/^  ' \"\$CO\/CHANGELOG.md\"/p" "$ROOT/scripts/sdk-bump" | sed '1d;$d')
+real=$(awk -v old=0.1.0 -v new=0.3.0 "$awk_prog" "$ROOT/CHANGELOG.md")
+for want in 'Pin::name()' 'REA_HELPER_KEYS=' 'link-arg=-fuse-ld=lld' 'folder_field' 'LookCard' 'Palette` has a new' 'with_native_fit' 'ArgError::Help' 'contrast_problems' 'wine-test` keeps'; do
+  case $real in *"$want"*) ok "real CHANGELOG: $want listed" ;; *) bad "real CHANGELOG: $want missing" ;; esac
+done
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

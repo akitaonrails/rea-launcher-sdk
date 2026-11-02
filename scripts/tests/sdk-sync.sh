@@ -78,10 +78,30 @@ sh "$SYNC" "$L" >/dev/null 2>&1
 chmod -x "$L/sdk/packaging/smoke-package.sh"
 check_drift "lost exec bit is drift" "mode differs: sdk/packaging/smoke-package.sh"
 sh "$SYNC" "$L" >/dev/null 2>&1
-# A newer SDK commit makes the launcher's copy stale.
+# A newer SDK commit: --check still compares with the version sdk/VERSION
+# records (v9.9.9), so a launcher pinned to it has no drift; --against-head
+# compares with this checkout.
 echo "# newer" >> "$S/packaging/release-notes.sh"
 (cd "$S" && git commit -qam newer && git tag v9.9.10)
-check_drift "newer SDK version is drift" "changed: sdk/VERSION"
+check_ok "older pinned version: no drift against the recorded tag"
+grep -q 'comparing with SDK v9.9.9' "$T/err" && ok "says which version it compares with" || bad "which version: $(cat "$T/err")"
+if sh "$SYNC" --check --against-head "$L" >/dev/null 2>"$T/err"; then bad "--against-head sees the newer SDK"
+elif grep -q 'changed: sdk/packaging/release-notes.sh' "$T/err"; then ok "--against-head sees the newer SDK"
+else bad "--against-head: $(cat "$T/err")"; fi
+# An edit in the launcher is drift against the recorded version.
+echo "# local hack" >> "$L/sdk/packaging/smoke-package.sh"
+check_drift "edit is drift against the recorded version" "changed: sdk/packaging/smoke-package.sh"
+if grep -q 'release-notes' "$T/err"; then bad "the newer SDK's changes are not reported"; else ok "the newer SDK's changes are not reported"; fi
+sh "$SYNC" --tag v9.9.9 "$L" >/dev/null 2>&1
+# A recorded commit this checkout doesn't have.
+cp "$L/sdk/VERSION" "$T/VERSION.keep"
+sed -i 's/^commit=.*/commit=0123456789abcdef0123456789abcdef01234567/' "$L/sdk/VERSION"
+check_drift "unknown recorded commit: says how to fix it" "git -C .* fetch --tags, or pass --against-head"
+# An unreproducible stamp falls back to the work tree, and says so.
+sed -i 's/^commit=.*/commit=unknown/' "$L/sdk/VERSION"
+if sh "$SYNC" --check "$L" >/dev/null 2>"$T/err"; then :; fi
+grep -q 'comparing with this work tree' "$T/err" && ok "unreproducible stamp: work tree, announced" || bad "unreproducible: $(cat "$T/err")"
+cp "$T/VERSION.keep" "$L/sdk/VERSION"
 sh "$SYNC" "$L" >/dev/null 2>&1
 grep -qx 'tag=v9.9.10' "$L/sdk/VERSION" && ok "re-sync stamps the new tag" || bad "re-sync stamps the new tag"
 # Uncommitted SDK changes are stamped dirty.

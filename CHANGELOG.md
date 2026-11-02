@@ -2,10 +2,63 @@
 
 All notable changes to rea-launcher-sdk. Versions are git tags; launchers
 pin one (`tag = "vX.Y.Z"` in Cargo.toml, `@vX.Y.Z` for the reusable
-workflows, `sdk/VERSION` for the vendored files). Behaviour changes a
-launcher must act on are marked **Migration**.
+workflows, `sdk/VERSION` for the vendored files). Every change a launcher
+must act on is a bullet in its release's `### Migration` section (first in
+the release), saying what to do and how to verify it; `sdk-bump` and the
+`sdk-update` pull requests copy that section.
+
+## [0.3.1] - 2026-11-02
+
+### Added
+
+- `launcher-ci.yml` input `extra-build`: commands after the workspace
+  release build (e.g. a dependency's DLL such as `rea-launcher-close-hook`).
+- `sdk-sync --check --against-head`: compare with this SDK work tree.
+
+### Changed
+
+- `CHANGELOG.md`: each release lists every change a launcher must act on
+  as its own bullet in a `### Migration` section (v0.2.0 and v0.3.0 moved
+  there, wording unchanged); CONTRIBUTING's "Before tagging" requires it.
+- `launcher-ci.yml` `imports-check` also checks every `.exe`/`.dll` in
+  `package-dir` (folders and zips, third-party DLLs included).
+
+### Fixed
+
+- `sdk-bump` (and so the `sdk-update` pull requests) missed Migration
+  notes written inside Added bullets (the lld rule, `Pin::name`,
+  `REA_HELPER_KEYS`): it reads each release's `### Migration` section, and
+  for older releases every bullet that mentions **Migration**.
+- `sdk-sync --check` compared with this SDK checkout's HEAD instead of the
+  version recorded in the launcher's `sdk/VERSION`, so a launcher pinned to
+  an older tag showed false drift; it now runs that version's own
+  `sdk-sync` from a temporary `git clone --shared`.
 
 ## [0.3.0] - 2026-11-02
+
+### Migration
+
+- Every launcher sets
+  `rustflags = ["-C", "link-arg=-fuse-ld=lld"]` under each
+  `[target.*-pc-windows-gnu]` it builds (x86_64 too); verify with
+  `sdk/packaging/check-lld.sh <target>` and, after a release build,
+  `sdk/packaging/check-imports.sh target/<target>/release/*.exe` ("ok").
+- `widgets::folder_field(ui, value, label, hint, pick)` takes
+  the field's label: it is the text field's accessible name (it was the
+  placeholder hint, which is now the description). Pass the heading shown
+  above the field (e.g. `"Game folder"`); verify with a kittest
+  `get_by_role_and_label(Role::TextInput, "Game folder")`.
+- `LookCard` and `GameCard` have a `disabled` field: struct
+  literals without `..Default::default()` add `disabled: None`.
+- `Pin::name()` (and so
+  `Pin::dir`) now drops any short extension, not only `.zip`
+  (`setup.exe` → `setup`; `tool-v1.2` stays), so a non-zip download's
+  folder is no longer the file itself.
+- (CMR3): delete the local
+  `rea_hook_command`/`one_run_cfg` and set
+  `REA_HELPER_KEYS="scaler postfx resolution display_mode dxvk"`; verify
+  with `cmr3-play --play --scaler fsr` (play.log shows `-F fsr`) and a
+  plain `--play` afterwards (back to launcher.cfg's scaler).
 
 ### Added
 
@@ -27,21 +80,14 @@ launcher must act on are marked **Migration**.
   launcher's own extractor (a `.cab`, an installer) runs into a temporary
   folder that is marked complete and renamed into place like a zip;
   `Job::set_phase` lets it report progress; `download::unzip` is the zip
-  extractor `install` uses. **Migration:** `Pin::name()` (and so
-  `Pin::dir`) now drops any short extension, not only `.zip`
-  (`setup.exe` → `setup`; `tool-v1.2` stays), so a non-zip download's
-  folder is no longer the file itself.
+  extractor `install` uses.
 - `rea-play.sh` one-run flags: `REA_HELPER_KEYS` lists the `launcher.cfg`
   keys the helper reads itself (e.g. `scaler resolution display_mode
   postfx dxvk`). `x-play --play --scaler fsr --resolution 1280x720` still
   passes the flags to the launcher, and for that run `rea_get_key` returns
   them over `launcher.cfg` (gamescope size/filter/windowed skip, hooks such
   as postfx); the file is never written. `REA_FLAG_SWITCHES` names the
-  value-less flags. **Migration** (CMR3): delete the local
-  `rea_hook_command`/`one_run_cfg` and set
-  `REA_HELPER_KEYS="scaler postfx resolution display_mode dxvk"`; verify
-  with `cmr3-play --play --scaler fsr` (play.log shows `-F fsr`) and a
-  plain `--play` afterwards (back to launcher.cfg's scaler).
+  value-less flags.
 - `scripts/sdk-bump vX.Y.Z [repo]` (vendored as `sdk/scripts/sdk-bump`):
   moves a launcher to an SDK tag in one step (Cargo tags and `cargo
   update`, `sdk/` re-vendored, reusable workflow refs) and prints the
@@ -60,11 +106,7 @@ launcher must act on are marked **Migration**.
   for i686 and x86_64); names the orphans. `packaging/check-lld.sh TARGET…`:
   `.cargo/config.toml` links each Windows target with lld. `launcher-ci`
   runs both (`imports-check`, default on) and always installs lld for a
-  Windows target. **Migration:** every launcher sets
-  `rustflags = ["-C", "link-arg=-fuse-ld=lld"]` under each
-  `[target.*-pc-windows-gnu]` it builds (x86_64 too); verify with
-  `sdk/packaging/check-lld.sh <target>` and, after a release build,
-  `sdk/packaging/check-imports.sh target/<target>/release/*.exe` ("ok").
+  Windows target.
 - SDK CI `scaffold` job: generates a launcher with `scripts/new-launcher`
   and runs its checks (fmt, tests, clippy host and i686, linux and package
   tests, lld and import checks, Wine tests) against this checkout.
@@ -121,21 +163,29 @@ launcher must act on are marked **Migration**.
   880×640 (OR 880×760, Screamer 980×700); the docs show
   `scroll_to_me()` for widgets below a scrolling tab's fold.
 
-### Changed
-
-- **Migration:** `widgets::folder_field(ui, value, label, hint, pick)` takes
-  the field's label: it is the text field's accessible name (it was the
-  placeholder hint, which is now the description). Pass the heading shown
-  above the field (e.g. `"Game folder"`); verify with a kittest
-  `get_by_role_and_label(Role::TextInput, "Game folder")`.
-- **Migration:** `LookCard` and `GameCard` have a `disabled` field: struct
-  literals without `..Default::default()` add `disabled: None`.
-
 ## [0.2.0] - 2026-11-02
 
 The gaps found while moving the five launchers onto v0.1.0, and the
 owner's standards made into code. Minor version bump: some APIs changed
-(marked **Migration**).
+(see Migration).
+
+### Migration
+
+- `Palette` has a new `selection` field.
+- `WindowFit` resizes to fit on native Windows/Linux only
+  with `.with_native_fit(true)`.
+- `cfg::ArgError::Help` carries the flag typed (`-h`,
+  `--help`, `/?`).
+- `theme::contrast_problems` checks control borders:
+  `line` needs 3:1 against `base` and `panel` (WCAG non-text contrast).
+  All five launchers' `line` fails; the least lighter colour that passes
+  is in the `rea-launcher-ui` README. `line` is now a border colour only:
+  hovered chips and buttons and the not-ready Play plate fill with
+  `panel` instead.
+- `scripts/wine-test` keeps its Wine prefix in
+  `<workspace>/target/wine/prefix` (was `~/.cache/rea-wine-test`) and
+  resolves every path to an absolute one, so it behaves the same inside a
+  distrobox whose home differs. `REA_WINE_TEST_PREFIX` still overrides it.
 
 ### Added
 
@@ -212,23 +262,8 @@ owner's standards made into code. Minor version bump: some APIs changed
 
 ### Changed
 
-- **Migration:** `Palette` has a new `selection` field.
-- **Migration:** `WindowFit` resizes to fit on native Windows/Linux only
-  with `.with_native_fit(true)`.
-- **Migration:** `cfg::ArgError::Help` carries the flag typed (`-h`,
-  `--help`, `/?`).
 - Outline/folder buttons default to the action colour (as the launchers
   drew them); a hovered outline button shows ink text for contrast.
-- **Migration:** `theme::contrast_problems` checks control borders:
-  `line` needs 3:1 against `base` and `panel` (WCAG non-text contrast).
-  All five launchers' `line` fails; the least lighter colour that passes
-  is in the `rea-launcher-ui` README. `line` is now a border colour only:
-  hovered chips and buttons and the not-ready Play plate fill with
-  `panel` instead.
-- **Migration:** `scripts/wine-test` keeps its Wine prefix in
-  `<workspace>/target/wine/prefix` (was `~/.cache/rea-wine-test`) and
-  resolves every path to an absolute one, so it behaves the same inside a
-  distrobox whose home differs. `REA_WINE_TEST_PREFIX` still overrides it.
 
 ### Fixed
 
@@ -265,7 +300,8 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
-[Unreleased]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.0...HEAD
+[0.3.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/akitaonrails/rea-launcher-sdk/releases/tag/v0.1.0

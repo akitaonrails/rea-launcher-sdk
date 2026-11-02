@@ -88,11 +88,21 @@ on:
         description: The SDK repository sdk/VERSION refers to.
         type: string
         default: akitaonrails/rea-launcher-sdk
+      extra-build:
+        description: >-
+          Commands (bash) run after the workspace release build, for what
+          `cargo build --workspace` doesn't build: e.g. a dependency's DLL
+          such as rea-launcher-close-hook (`cargo build --release --locked
+          --target "$RUST_TARGET" -p rea-launcher-close-hook`). REA_RELEASE_DIR
+          is the release output folder.
+        type: string
+        default: ""
       imports-check:
         description: >-
           For a Windows rust-target: check that the launcher's
           .cargo/config.toml links it with lld, and that every import of the
-          built .exe/.dll files belongs to an import descriptor
+          built .exe/.dll files (the release folder, then every .exe/.dll in
+          package-dir) belongs to an import descriptor
           (sdk/packaging/check-lld.sh, check-imports.sh). GNU ld 2.47
           mis-links both i686 and x86_64 builds.
         type: boolean
@@ -299,6 +309,12 @@ jobs:
           case $ref in '' | *[!A-Za-z0-9._-]*) echo "::error::unexpected ref name"; exit 1 ;; esac
           echo "REA_VERSION_NAME=$ref" >> "$GITHUB_ENV"
 
+      - name: Extra build
+        if: inputs.extra-build != ''
+        env:
+          CMD: ${{ inputs.extra-build }}
+        run: bash -euo pipefail -c "$CMD"
+
       - name: Every import resolves (built programs)
         if: inputs.imports-check && inputs.rust-target != ''
         shell: sh
@@ -350,6 +366,33 @@ jobs:
         run: |
           export REA_SDK="$PWD/$SDK_DIR"
           bash -euo pipefail -c "$CMD"
+
+      - name: Every import resolves (packages)
+        if: inputs.imports-check && inputs.rust-target != '' && inputs.package-dir != '' && inputs.package-command != ''
+        shell: sh
+        env:
+          PACKAGES: ${{ inputs.package-dir }}
+        run: |
+          case $RUST_TARGET in *-windows-gnu*) ;; *) echo "not a Windows target"; exit 0 ;; esac
+          list=$RUNNER_TEMP/rea-package-programs
+          : > "$list"
+          n=0
+          for p in $PACKAGES; do
+            [ -e "$p" ] || continue
+            if [ -f "$p" ]; then
+              n=$((n + 1)); dir=$RUNNER_TEMP/rea-package-$n
+              rm -rf "$dir"; mkdir -p "$dir"
+              unzip -q "$p" -d "$dir"
+              p=$dir
+            fi
+            find "$p" -type f \( -name '*.[eE][xX][eE]' -o -name '*.[dD][lL][lL]' \) >> "$list"
+          done
+          [ -s "$list" ] || { echo "no .exe or .dll in $PACKAGES"; exit 0; }
+          status=0
+          while IFS= read -r f; do
+            sh "$SDK_DIR/packaging/check-imports.sh" "$f" || status=1
+          done < "$list"
+          exit "$status"
 
       - name: Package allowlist
         if: inputs.package-allowlist != ''

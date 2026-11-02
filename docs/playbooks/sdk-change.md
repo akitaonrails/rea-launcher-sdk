@@ -33,10 +33,13 @@
    If the launcher has no snapshots yet, add them *first*, at the old SDK
    version, in their own commit.
 2. **Branch** `sdk-update/vX.Y.Z` (the weekly `sdk-update` workflow opens it
-   as a pull request automatically).
+   as a pull request automatically); it is merged into the default branch
+   once CI is green.
 3. **Bump** with `sdk/scripts/sdk-bump vX.Y.Z`: Cargo tags and lockfile,
    re-vendored `sdk/`, workflow `@vX.Y.Z` references. Commit
-   `build: bump rea-launcher-sdk to vX.Y.Z`.
+   `build: bump rea-launcher-sdk to vX.Y.Z` — including the minimal API
+   changes needed to compile (every commit must pass the checks); larger
+   Migration items get their own commits in step 4.
 4. **Read every Migration item** between the old and the new version
    (`sdk-bump` prints them). Apply each in its own commit.
 5. **Remove workarounds** the new version makes unnecessary (local copies,

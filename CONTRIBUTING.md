@@ -45,10 +45,10 @@ default) is opt-in until every launcher using it has verified it.
    change that touches launcher-facing API, run the canary
    (`compat.yml`, also on every PR) and read any red launcher job. It
    skips checks whose tool is missing and says so; CI runs them all.
-4. Docs: the crate or folder README; **Migration** notes (in the crate
-   README's MIGRATION section and the CHANGELOG entry) whenever a launcher
-   must change something to adopt the release; an entry under
-   `## [Unreleased]` in `CHANGELOG.md`.
+4. Docs: the crate or folder README; whenever a launcher must change
+   something to adopt the release, a bullet under `### Migration` in the
+   `## [Unreleased]` section of `CHANGELOG.md` (and the crate README's
+   MIGRATION section); the other entries under `### Added`/`Changed`/`Fixed`.
 5. Commits: conventional style (`fix(core): …`, `feat(scripts): …`).
 
 ## Before tagging
@@ -62,11 +62,16 @@ Tag only when every box holds:
       its CHANGELOG Migration item says how to fix it. Never tag over a red
       job you haven't read. An allowed failure (`REA_CANARY_ALLOW_FAILURE`)
       is removed once that launcher has moved.
-- [ ] `CHANGELOG.md` complete for the version: every change a launcher must
-      act on is a `- **Migration:**` item that says **what to do** (the new
-      call, field or input) and **how to verify** it (the test, check or
-      screen that shows it worked). `sdk-bump` and `sdk-update.yml` copy
-      these items into each launcher's bump PR, so they must stand alone.
+- [ ] `CHANGELOG.md` complete for the version, with a `### Migration`
+      section first in the release: every change a launcher must act on is
+      its own bullet there (never only a sentence inside an Added or Changed
+      bullet) that says **what to do** (the new call, field or input) and
+      **how to verify** it (the test, check or screen that shows it
+      worked). `sdk-bump` and `sdk-update.yml` copy that section into each
+      launcher's bump PR, so each bullet must stand alone; a release with
+      nothing to do has no Migration section. Check with
+      `scripts/sdk-bump --no-cargo --since v<previous> v<this> <a launcher>`
+      on a scratch clone of a launcher.
 - [ ] Docs (crate READMEs, `packaging/README.md`, playbooks) match the code.
 
 ## Release process

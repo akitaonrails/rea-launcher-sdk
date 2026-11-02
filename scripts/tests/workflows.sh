@@ -156,6 +156,36 @@ grep -qx 'tag=canary' "$C/launcher/sdk/VERSION" && ok "compat: sdk/ re-vendored 
 if sh -e "$S" >"$T/out" 2>&1; then bad "compat: second patch refused"; else grep -q 'already patches' "$T/out" && ok "compat: second patch refused" || bad "compat: second: $(cat "$T/out")"; fi
 unset SDK LAUNCHER
 
+# launcher-ci: the imports check covers every .exe/.dll in the packages
+# (folders and zips, any letter case), not only the workspace build.
+P=$T/pkgimports
+mkdir -p "$P/sdk/packaging" "$P/dist/Game-v1/components" "$P/zipsrc/Other-v1" "$P/rt"
+cat > "$P/sdk/packaging/check-imports.sh" <<'STUB'
+#!/bin/sh
+for f; do echo "$f" >> "$CHECKED"; case $f in *bad*) exit 1 ;; esac; done
+STUB
+for f in Game.exe components/D3D9.DLL components/xidi.dll README.md; do echo x > "$P/dist/Game-v1/$f"; done
+echo x > "$P/zipsrc/Other-v1/tool.EXE"
+S=$(step launcher-ci.yml "Every import resolves (packages)") || exit 1
+pkg_env() { export SDK_DIR=sdk RUST_TARGET=i686-pc-windows-gnu RUNNER_TEMP="$P/rt" CHECKED="$P/checked" PACKAGES="$1"; }
+: > "$P/checked"
+if (cd "$P" && pkg_env 'dist/Game-*/' && sh -e "$S") >"$T/out" 2>&1; then ok "imports (packages): passes"; else bad "imports (packages): $(cat "$T/out")"; fi
+check_n() { [ "$(grep -c . "$P/checked")" = "$2" ] && ok "$1" || bad "$1: $(cat "$P/checked")"; }
+check_n "imports (packages): every .exe/.dll, any case" 3
+grep -q README "$P/checked" && bad "imports (packages): other files skipped" || ok "imports (packages): other files skipped"
+if command -v zip >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
+  (cd "$P/zipsrc" && zip -qr "$P/dist/Other-v1.zip" Other-v1)
+  : > "$P/checked"
+  (cd "$P" && pkg_env 'dist/Game-*/ dist/*.zip' && sh -e "$S") >"$T/out" 2>&1
+  grep -q 'Other-v1/tool.EXE$' "$P/checked" && ok "imports (packages): inside zips too" || bad "imports (packages): zip: $(cat "$P/checked")"
+fi
+echo x > "$P/dist/Game-v1/components/bad.dll"; : > "$P/checked"
+if (cd "$P" && pkg_env 'dist/Game-*/' && sh -e "$S") >"$T/out" 2>&1; then bad "imports (packages): a bad DLL fails"; else ok "imports (packages): a bad DLL fails"; fi
+check_n "imports (packages): the others are still checked" 4
+: > "$P/checked"
+(cd "$P" && pkg_env 'dist/Game-*/' && RUST_TARGET=x86_64-unknown-linux-gnu && sh -e "$S") >/dev/null 2>&1
+check_n "imports (packages): not for a native target" 0
+
 # No status-swallowing "check && echo" anywhere in the workflows.
 if grep -n '&& echo' "$WF"/*.yml; then bad "no '&& echo' checks in workflows"; else ok "no '&& echo' checks in workflows"; fi
 
