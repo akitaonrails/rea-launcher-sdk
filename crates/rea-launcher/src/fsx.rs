@@ -184,6 +184,9 @@ pub(crate) fn retry_denied(
 
 /// Replaces `path` with `bytes` as a fresh file (never through a link).
 pub fn install(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
+    if holds(path, bytes.as_ref()) {
+        return Ok(());
+    }
     put_in_place(path, |tmp| fs::write(tmp, bytes.as_ref()))
 }
 
@@ -191,6 +194,9 @@ pub fn install(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
 /// manifests and ledgers, where a crash must leave the old file or the new
 /// one, never a torn one.
 pub fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
+    if holds(path, bytes.as_ref()) {
+        return Ok(());
+    }
     put_in_place(path, |tmp| {
         let mut file = fs::File::create(tmp)?;
         io::Write::write_all(&mut file, bytes.as_ref())?;
@@ -201,10 +207,50 @@ pub fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
 /// Copies `from` over `path` as a fresh file its owner can write (a copy
 /// of a read-only original would be read-only too).
 pub fn install_copy(from: &Path, path: &Path) -> io::Result<()> {
+    // Already a writable copy with these bytes (not a hard link to
+    // `from`, which the caller wants replaced by a copy): nothing to do.
+    if fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && !m.permissions().readonly())
+        && !same_file(from, path)
+        && fs::read(from).is_ok_and(|bytes| holds(path, &bytes))
+    {
+        return Ok(());
+    }
     put_in_place(path, |tmp| {
         fs::copy(from, tmp)?;
         make_writable(tmp)
     })
+}
+
+/// True when `path` is a regular file (not a link) holding exactly
+/// `bytes`: [`install`], [`write_atomic`] and [`install_copy`] then leave
+/// it alone — no temp file, no rename (which can fail over a DLL a game
+/// has loaded), no flush. Nothing is written either way.
+fn holds(path: &Path, bytes: &[u8]) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == bytes.len() as u64)
+        && fs::read(path).is_ok_and(|current| current == bytes)
+}
+
+/// True when `a` and `b` are the same file (hard links included).
+fn same_file(a: &Path, b: &Path) -> bool {
+    let (Ok(a), Ok(b)) = (fs::metadata(a), fs::metadata(b)) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        a.dev() == b.dev() && a.ino() == b.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        // Hard links share one record: size and all three times. A copy
+        // gets its own creation time.
+        a.len() == b.len()
+            && a.created()
+                .ok()
+                .is_some_and(|t| b.created().ok() == Some(t))
+            && a.modified().ok() == b.modified().ok()
+            && a.accessed().ok() == b.accessed().ok()
+    }
 }
 
 /// Removes a file (or a symbolic link, dangling or not) when it exists.
@@ -386,6 +432,58 @@ mod tests {
         );
         fs::remove_dir_all(dir).unwrap();
         fs::remove_dir_all(game).unwrap();
+    }
+
+    #[test]
+    fn the_same_bytes_are_not_written_again() {
+        let dir = test_dir("fsx-same");
+        let dll = dir.join("d3d9.dll");
+        install(&dll, b"dxvk").unwrap();
+        let when = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&dll)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+        install(&dll, b"dxvk").unwrap();
+        write_atomic(&dll, b"dxvk").unwrap();
+        assert_eq!(
+            fs::metadata(&dll).unwrap().modified().unwrap(),
+            when,
+            "untouched"
+        );
+        let bundle = dir.join("bundle.dll");
+        fs::write(&bundle, b"dxvk").unwrap();
+        install_copy(&bundle, &dll).unwrap();
+        assert_eq!(fs::metadata(&dll).unwrap().modified().unwrap(), when);
+        // Different bytes are still swapped in.
+        install(&dll, b"dxvk 2").unwrap();
+        assert_eq!(fs::read(&dll).unwrap(), b"dxvk 2");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hard_link_to_the_source_is_still_replaced_by_a_copy() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = test_dir("fsx-same-link");
+        let original = dir.join("original.dat");
+        fs::write(&original, b"data").unwrap();
+        let link = dir.join("link.dat");
+        fs::hard_link(&original, &link).unwrap();
+        install_copy(&original, &link).unwrap();
+        let ino = |p: &Path| fs::metadata(p).unwrap().ino();
+        assert_ne!(ino(&original), ino(&link), "a copy now, not the original");
+        assert_eq!(fs::read(&link).unwrap(), b"data");
+        // A read-only copy is replaced by a writable one.
+        use std::os::unix::fs::PermissionsExt;
+        let ro = dir.join("ro.dat");
+        fs::write(&ro, b"data").unwrap();
+        fs::set_permissions(&ro, fs::Permissions::from_mode(0o444)).unwrap();
+        install_copy(&original, &ro).unwrap();
+        assert!(!fs::metadata(&ro).unwrap().permissions().readonly());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

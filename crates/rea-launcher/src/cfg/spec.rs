@@ -182,6 +182,14 @@ impl OptionSpec {
         self.flag_name(style) == flag || self.aliases.iter().any(|a| style.flag(a) == flag)
     }
 
+    /// [`OptionSpec::takes_flag`] with `_` read as `-` (`--display_mode`).
+    fn takes_flag_loosely(&self, flag: &str, style: KeyStyle) -> bool {
+        let loose = |f: &str| f.replace('_', "-");
+        let flag = loose(flag);
+        loose(&self.flag_name(style)) == flag
+            || self.aliases.iter().any(|a| loose(&style.flag(a)) == flag)
+    }
+
     /// The command-line flag.
     pub fn flag_name(&self, style: KeyStyle) -> String {
         self.flag
@@ -363,8 +371,10 @@ pub fn parse_file(
 }
 
 /// [`super::parse_args_with`] for a spec table: each row's
-/// [`OptionSpec::flag_name`] is its flag, values are checked before
-/// `apply`, and `switches` (value-less launcher flags) come back in order.
+/// [`OptionSpec::flag_name`] is its flag (`--flag value` or
+/// `--flag=value`; `_` read as `-` as a fallback), values are checked
+/// before `apply`, and `switches` (value-less launcher flags, never with
+/// `=value`) come back in order.
 pub fn parse_args<I: IntoIterator<Item = String>>(
     args: I,
     style: KeyStyle,
@@ -372,29 +382,18 @@ pub fn parse_args<I: IntoIterator<Item = String>>(
     switches: &[&str],
     mut apply: impl FnMut(&str, Value) -> Result<(), Rejected>,
 ) -> Result<Vec<String>, ArgError> {
-    let mut seen = Vec::new();
-    let mut args = args.into_iter();
-    while let Some(flag) = args.next() {
-        if matches!(flag.as_str(), "--help" | "-h" | "/?") {
-            return Err(ArgError::Help(flag));
-        }
-        if switches.contains(&flag.as_str()) {
-            seen.push(flag);
-            continue;
-        }
-        let Some(spec) = specs.iter().find(|s| s.takes_flag(&flag, style)) else {
-            return Err(ArgError::Unknown(flag));
-        };
-        let Some(value) = args.next() else {
-            return Err(ArgError::MissingValue(flag));
-        };
-        match dispatch(specs, spec.key, &value, &mut apply) {
-            Ok(()) => {}
-            Err(Rejected::Unknown) => return Err(ArgError::Unknown(flag)),
-            Err(Rejected::Needs(needs)) => return Err(ArgError::Bad { flag, value, needs }),
-        }
-    }
-    Ok(seen)
+    super::each_arg(
+        args,
+        switches,
+        |flag| {
+            specs
+                .iter()
+                .find(|s| s.takes_flag(flag, style))
+                .or_else(|| specs.iter().find(|s| s.takes_flag_loosely(flag, style)))
+                .map(|s| s.key.to_owned())
+        },
+        |key, value| dispatch(specs, key, value, &mut apply),
+    )
 }
 
 /// The option lines of `--help`: `  --flag <value>  label`, aligned;
@@ -695,6 +694,22 @@ mod tests {
             ArgError::MissingValue("--vsync".into())
         );
         assert_eq!(args(&["-h"]).unwrap_err(), ArgError::Help("-h".into()));
+    }
+
+    #[test]
+    fn spec_flags_take_equals_and_underscores() {
+        let (s, seen) =
+            args(&["--display_mode=borderless", "--pad-log=on", "--no-window"]).unwrap();
+        assert_eq!((s.mode, s.pad_log), (Some("borderless"), Some(true)));
+        assert_eq!(seen, ["--no-window"]);
+        assert!(matches!(
+            args(&["--no-window=yes"]),
+            Err(ArgError::Bad { .. })
+        ));
+        assert_eq!(
+            args(&["--fov=200"]).unwrap_err().to_string(),
+            "--fov needs 30 to 150, not 200"
+        );
     }
 
     #[test]

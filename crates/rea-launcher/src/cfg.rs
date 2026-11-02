@@ -286,7 +286,9 @@ pub fn parse_args<I: IntoIterator<Item = String>>(
 /// so a known flag without its value is told apart from an unknown one;
 /// `switches` lists the launcher's own flags that take no value
 /// (`--no-window`, `--check`), returned in order, so a value is never
-/// mistaken for a switch.
+/// mistaken for a switch. A value may follow as the next argument or as
+/// `--flag=value`; `--display_mode` is read as `--display-mode` (both as
+/// SDK v0.1 did); a switch never takes `=value`.
 pub fn parse_args_with<I: IntoIterator<Item = String>>(
     args: I,
     style: KeyStyle,
@@ -294,21 +296,66 @@ pub fn parse_args_with<I: IntoIterator<Item = String>>(
     switches: &[&str],
     mut apply: impl FnMut(&str, &str) -> Result<(), Rejected>,
 ) -> Result<Vec<String>, ArgError> {
+    each_arg(
+        args,
+        switches,
+        |flag| {
+            let known = |k: &String| keys.contains(&k.as_str());
+            style
+                .key(flag)
+                .filter(known)
+                // `--display_mode` for `--display-mode` (SDK v0.1 accepted both).
+                .or_else(|| style.key(&flag.replace('_', "-")).filter(known))
+        },
+        |key, value| apply(key, value),
+    )
+}
+
+/// One argument split as `--flag=value` (a long flag only).
+fn split_value(arg: &str) -> (&str, Option<&str>) {
+    match arg.split_once('=') {
+        Some((flag, value)) if flag.starts_with("--") && flag.len() > 2 => (flag, Some(value)),
+        _ => (arg, None),
+    }
+}
+
+/// The shared loop of the `parse_args` functions: help, switches (never
+/// with `=value`), `--flag value` and `--flag=value`; `key_of` finds the
+/// key a flag sets.
+pub(crate) fn each_arg<I: IntoIterator<Item = String>>(
+    args: I,
+    switches: &[&str],
+    key_of: impl Fn(&str) -> Option<String>,
+    mut apply: impl FnMut(&str, &str) -> Result<(), Rejected>,
+) -> Result<Vec<String>, ArgError> {
     let mut seen = Vec::new();
     let mut args = args.into_iter();
-    while let Some(flag) = args.next() {
-        if matches!(flag.as_str(), "--help" | "-h" | "/?") {
-            return Err(ArgError::Help(flag));
+    while let Some(arg) = args.next() {
+        if matches!(arg.as_str(), "--help" | "-h" | "/?") {
+            return Err(ArgError::Help(arg));
         }
-        if switches.contains(&flag.as_str()) {
-            seen.push(flag);
+        let (flag, inline) = split_value(&arg);
+        if switches.contains(&flag) {
+            if let Some(value) = inline {
+                return Err(ArgError::Bad {
+                    flag: flag.to_owned(),
+                    value: value.to_owned(),
+                    needs: "no value".to_owned(),
+                });
+            }
+            seen.push(arg);
             continue;
         }
-        let Some(key) = style.key(&flag).filter(|k| keys.contains(&k.as_str())) else {
+        let flag = flag.to_owned();
+        let Some(key) = key_of(&flag) else {
             return Err(ArgError::Unknown(flag));
         };
-        let Some(value) = args.next() else {
-            return Err(ArgError::MissingValue(flag));
+        let value = match inline {
+            Some(value) => value.to_owned(),
+            None => match args.next() {
+                Some(value) => value,
+                None => return Err(ArgError::MissingValue(flag)),
+            },
         };
         match apply(&key, &value) {
             Ok(()) => {}
@@ -556,6 +603,59 @@ mod tests {
         // `--check` after `--game` is the game folder's value, not a switch.
         assert_eq!(seen, ["--no-window", "--settings", "--linux"]);
         assert_eq!(s.game.as_deref(), Some("--check"));
+    }
+
+    #[test]
+    fn values_after_equals_and_underscore_flags() {
+        let (s, _) = (
+            args(&["--display_mode=windowed", "--vsync=on"]).unwrap(),
+            (),
+        );
+        assert_eq!((s.mode, s.vsync), (Some(1), Some(true)));
+        let s = args(&["--game=C:\\a=b", "--fov", "90"]).unwrap();
+        assert_eq!(
+            s.game.as_deref(),
+            Some("C:\\a=b"),
+            "only the first = splits"
+        );
+        assert_eq!(s.fov, Some(90));
+        assert_eq!(
+            args(&["--vsync=maybe"]).unwrap_err().to_string(),
+            "--vsync needs on or off, not maybe"
+        );
+        assert_eq!(
+            args(&["--bogus=1"]).unwrap_err(),
+            ArgError::Unknown("--bogus".into())
+        );
+        let mut s = Settings::default();
+        let switch = parse_args(
+            ["--no-window=1".to_string()],
+            &KEYS,
+            &["--no-window"],
+            |k, v| s.apply(k, v),
+        );
+        assert_eq!(
+            switch.unwrap_err(),
+            ArgError::Bad {
+                flag: "--no-window".into(),
+                value: "1".into(),
+                needs: "no value".into()
+            }
+        );
+        // Hyphen style: `--frame_limit` falls back to `frame-limit`.
+        let mut got = Vec::new();
+        parse_args_with(
+            ["--frame_limit=60".to_string()],
+            KeyStyle::Hyphen,
+            &["frame-limit"],
+            &[],
+            |k, v| {
+                got.push((k.to_owned(), v.to_owned()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(got, [("frame-limit".to_string(), "60".to_string())]);
     }
 
     #[test]

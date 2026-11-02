@@ -43,6 +43,10 @@ pub struct Ledger {
     runtime: PathBuf,
     file: PathBuf,
     owned: BTreeMap<String, String>,
+    /// Inside [`Ledger::batch`]: saves wait until it ends.
+    deferred: bool,
+    /// A save was deferred.
+    dirty: bool,
 }
 
 /// True for a plain relative `/`-separated path that stays below the
@@ -83,10 +87,36 @@ impl Ledger {
             runtime: runtime.to_path_buf(),
             file,
             owned,
+            deferred: false,
+            dirty: false,
         }
     }
 
-    fn save(&self) -> io::Result<()> {
+    /// Runs `work` and saves the ledger once at the end (when anything
+    /// changed), instead of after every install or take-out: one write for
+    /// a launch's whole set of components. The ledger is saved even when
+    /// `work` fails part way, so what was installed stays recorded.
+    pub fn batch<T>(&mut self, work: impl FnOnce(&mut Ledger) -> io::Result<T>) -> io::Result<T> {
+        let outer = self.deferred;
+        self.deferred = true;
+        let result = work(self);
+        self.deferred = outer;
+        if !outer && self.dirty {
+            self.dirty = false;
+            self.write()?;
+        }
+        result
+    }
+
+    fn save(&mut self) -> io::Result<()> {
+        if self.deferred {
+            self.dirty = true;
+            return Ok(());
+        }
+        self.write()
+    }
+
+    fn write(&self) -> io::Result<()> {
         let text: String = self
             .owned
             .iter()
@@ -460,6 +490,43 @@ mod tests {
             ledger.take_out_keep_game("d3d9.dll", &[]).unwrap(),
             Outcome::Absent
         );
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_batch_saves_the_ledger_once() {
+        let (game, rt) = setup("ledger-batch");
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        let saved = |rt: &Path| fs::read_to_string(rt.join(NAME)).unwrap_or_default();
+        ledger
+            .batch(|l| {
+                l.install("d3d9.dll", b"dxvk", &[])?;
+                l.install("dxgi.dll", b"dxgi", &[])?;
+                assert_eq!(saved(&rt), "", "not yet");
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(saved(&rt).lines().count(), 2);
+        // A failure part way still records what was installed.
+        let err = ledger.batch(|l| {
+            l.take_out("dxgi.dll", &[])?;
+            l.install("../escape.dll", b"x", &[])
+        });
+        assert!(err.is_err());
+        assert_eq!(saved(&rt).lines().count(), 1);
+        // Reinstalling the same bytes writes nothing.
+        let dll = rt.join("d3d9.dll");
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&dll)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+        ledger.install("d3d9.dll", b"dxvk", &[]).unwrap();
+        assert_eq!(fs::metadata(&dll).unwrap().modified().unwrap(), when);
         for d in [game, rt] {
             fs::remove_dir_all(d).unwrap();
         }
