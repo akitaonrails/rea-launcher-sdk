@@ -13,18 +13,45 @@
 3. Run `scripts/dev-check`. Release: bump the workspace version, CHANGELOG
    section, tag `vX.Y.Z`, push with the tag.
 
-## Bumping a launcher to a new SDK version
+## Releasing an SDK version
 
-1. Change the `tag = "vX.Y.Z"` of every `rea-launcher*` dependency in its
-   `Cargo.toml`; `cargo update -p rea-launcher -p rea-launcher-win32
-   -p rea-launcher-ui`.
-2. `<sdk>/scripts/sdk-sync <launcher>` to re-vendor `sdk/`; update the
-   `@vX.Y.Z` of the reusable workflows in `.github/workflows/`.
-3. Read the SDK CHANGELOG for the versions skipped; adapt and delete any
-   local workaround the new version makes unnecessary.
-4. Run the launcher's full check, `scripts/wine-test`, `sdk-sync --check`;
-   CHANGELOG "Unreleased" entry; commit `build: bump rea-launcher-sdk to
-   vX.Y.Z`.
+1. **Version.** Patch (`v0.2.1`): fixes only, no behaviour or API change.
+   Minor (`v0.3.0`, pre-1.0): API or behaviour changes, each marked
+   **Migration** in `CHANGELOG.md` with *who is affected, what to do, how to
+   verify*.
+2. **Canary.** The `compat` workflow builds and tests every launcher against
+   the SDK commit (its SDK dependency patched to the checkout, `sdk/`
+   re-vendored, Wine tests included). It must be green, or every red
+   launcher explained in the release notes with the migration that fixes it.
+3. **Tag** `vX.Y.Z` on `main` and push; the `release` workflow publishes the
+   notes from the CHANGELOG.
+
+## Upgrading a launcher (avoid regressions)
+
+1. **Baseline.** On the launcher's `main`: full check, `sdk/scripts/wine-test`,
+   and the golden snapshots (`STANDARDS.md`, "Golden snapshots") all pass.
+   If the launcher has no snapshots yet, add them *first*, at the old SDK
+   version, in their own commit.
+2. **Branch** `sdk-update/vX.Y.Z` (the weekly `sdk-update` workflow opens it
+   as a pull request automatically).
+3. **Bump** with `sdk/scripts/sdk-bump vX.Y.Z`: Cargo tags and lockfile,
+   re-vendored `sdk/`, workflow `@vX.Y.Z` references. Commit
+   `build: bump rea-launcher-sdk to vX.Y.Z`.
+4. **Read every Migration item** between the old and the new version
+   (`sdk-bump` prints them). Apply each in its own commit.
+5. **Remove workarounds** the new version makes unnecessary (local copies,
+   shims noted as "until the SDK has …").
+6. **Compare snapshots.** Any diff must be explained by step 4 or 5; an
+   unexplained diff is a regression — fix it or report it to the SDK
+   (`CONTRIBUTING.md`), don't regenerate the snapshot.
+7. **All checks** again: fmt, tests, clippy (Windows target), shell tests,
+   `cargo deny`, `sdk-sync --check`, `wine-test`, release build links.
+8. **Runtime notes.** Behaviour changes that need the real game go into
+   `docs/RUNTIME_NOTES.md` as pending checks; run them headless when the game
+   is available.
+9. **CHANGELOG** "Unreleased": `Updated rea-launcher-sdk to vX.Y.Z` plus every
+   player-visible change. Merge when CI is green; release a launcher version
+   when the owner says so.
 
 ## Auditing the launchers for drift
 

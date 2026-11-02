@@ -14,11 +14,31 @@ non-negotiables in its own words and adds what is specific to its game.
    whole-file swap (`rea_launcher::fsx`), never a write through a hard link,
    and the runtime may never overlap the game folder
    (`rea_launcher::paths::check_separate`).
-3. **Never commit a developer's absolute game path.** Code and tests take an
+3. **Everything outside the project is the user's, and read-only.** The
+   agent may read anything it needs, but it writes, moves or deletes nothing
+   outside the repository it works in — game installs, other repositories,
+   Wine prefixes, saves, home-folder configs, containers, the SDK checkout —
+   unless the user asked for it or approved it for that specific path.
+   That includes toolchains and package managers: never `mise install/use`,
+   `rustup default/toolchain install`, `cargo install` or a global tool
+   install without approval — select with environment variables
+   (`RUSTUP_TOOLCHAIN`), skip a missing tool with a warning and say what to
+   install. Tests isolate themselves with per-process environment
+   (`HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `CARGO_TARGET_DIR` pointing
+   into the repo's `.work/` or `target/`), never the user's real config or
+   data folders.
+   Scratch work goes in the repo's `.work/` or a temp folder the agent
+   created (and removes). When a change outside is approved: back the file
+   up first, change only what was approved, never delete by a broad glob,
+   and report exactly what changed. When unsure, ask. Destroying a user's
+   files is the one mistake we can't undo. The same holds for the launcher
+   at runtime: it writes only its own runtime copy, its settings, the
+   player's saves folder, and the registry/prefix keys it owns.
+4. **Never commit a developer's absolute game path.** Code and tests take an
    explicit path or a documented `<GAME>_GAME_DIR`-style variable.
-4. **Local investigation goes in `.work/`** (ignored by Git): REA snapshots,
+5. **Local investigation goes in `.work/`** (ignored by Git): REA snapshots,
    traces, test prefixes.
-5. **Third-party components are pinned.** Fetched at package time from URLs
+6. **Third-party components are pinned.** Fetched at package time from URLs
    with SHA-256 (`packaging/*.pins`), never committed. Every component is
    listed with its licence and source in `THIRD_PARTY.md`; check the
    licence before bundling. A file with no licence is not bundled — the
@@ -26,7 +46,7 @@ non-negotiables in its own words and adds what is specific to its game.
    — unless the owner decides otherwise and the decision is recorded in
    `THIRD_PARTY.md` (CMR3's HD UI; CMR4's dgVoodoo2 2.80, whose upstream
    archive is gone). Such files live in a mirror release, never in Git.
-6. **Exact binary identity before patching.** Executables are identified by
+7. **Exact binary identity before patching.** Executables are identified by
    SHA-256 (`rea_launcher::identify`), or by a byte signature that must
    match exactly once, with the file's digest logged. Community hash lists
    (MD5 from a patcher's script) are fine as a cross-reference, next to the
@@ -86,6 +106,24 @@ text ready to paste, evidence, status) and tell the owner. The owner
 reviews and posts. Only publish fixes verified in the real game.
 
 ## Product rules
+
+**Who it's for:** players who are not technical. They download one package,
+point it at their game, and press Play. Every decision below follows from
+that: if a step could be done by the launcher, the launcher does it.
+
+- **Bundle first.** Everything the game needs — libraries, runtimes,
+  wrappers, fixes, config — ships inside the package whenever its licence
+  allows (check the licence; Microsoft's redistributables usually allow it).
+  Bundled beats downloaded: it works offline, can't disappear upstream and
+  is the version we tested.
+- **Then a button.** Only when bundling isn't allowed (no licence, or the
+  author forbids redistribution) or the item is huge and optional (an HD
+  texture pack): one button in the window (and a `--download-…` flag) that
+  fetches the pinned file, verifies it and installs it.
+- **Never a manual step.** No "download X from this site", "unzip into the
+  game folder", "install winetricks", "run this command". If a fix truly
+  can't be automated, the launcher works without it and the README says
+  what the player loses.
 
 - **Zero manual steps.** The player never downloads, unpacks, copies or
   configures anything by hand that the launcher could do: components are
@@ -188,7 +226,7 @@ reviews and posts. Only publish fixes verified in the real game.
 
 ## Code
 
-- Rust for our code; edition 2024. `unsafe` and Win32 FFI only inside
+- Rust for our code (see "Rust first"); edition 2024. `unsafe` and Win32 FFI only inside
   `rea-launcher-win32`, one narrow `win32.rs` module, or a small hook crate
   at an FFI boundary the launcher doesn't own: a DLL injected into the game
   (CMR4's close hook) or a library linked into a third-party engine
@@ -210,6 +248,12 @@ reviews and posts. Only publish fixes verified in the real game.
 The player meets the launcher through its window and its command line, so
 these rules are firm:
 
+- **Write for people, then humanize.** Everything a player reads — the
+  README, window labels and descriptions, error messages, `--help`, release
+  notes, issue templates — is plain language, then passed through a
+  `humanizer` skill (strip AI tells: inflated claims, filler, "not X but Y",
+  forced triads, dash-heavy prose) before it ships. Keep facts exact; the
+  humanizer changes wording, never what the text says.
 - **Design with a design skill.** Any change to the settings window's look
   or layout goes through a design skill (`frontend-design`, then a review
   against `web-design-guidelines`), working within the SDK theme
@@ -275,19 +319,185 @@ these rules are firm:
   code only builds for Windows, the GUI tests run under `scripts/wine-test`
   (the harness works there, headless).
 
+## Clean exit, single instance
+
+Old games often ignore the ways modern systems ask a program to quit, and a
+launcher that leaves processes behind clutters the player's system and
+blocks the next start. CMR4 ignored Alt+F4 and window-close requests until
+its close hook.
+
+- **Every way of quitting works** and is tested for every game: the game's
+  own Quit, Alt+F4 / the window's close button (`WM_CLOSE`), the Steam
+  "Stop" button, `SIGINT`/`SIGTERM` to the Linux helper (`<id>-play stop`,
+  Ctrl+C), and gamescope being closed. If the game ignores close requests,
+  the launcher makes it honour them (a close hook in the game's message
+  loop, as CMR4 does), never by asking the player to kill it.
+- **Nothing is left behind.** After any of those, within a few seconds: no
+  game process, no launcher, no `wineserver`, no gamescope, no emulator. The
+  Linux helper runs the game in its own session and ends the whole group,
+  then `wineserver -k` for its prefix; the Windows launcher waits for the
+  game and closes every handle.
+- **One instance.** A second launcher start doesn't open a second window or
+  a second game: it brings the existing window forward (or says the game
+  is running) — a named mutex on Windows, the session lock on Linux. Play
+  is refused while the game from this runtime is still running.
+- **Test it:** the shell tests cover stop/interrupt/lock with fakes; a
+  real-game, env-gated test runs the game headless (`gamescope --backend
+  headless`), sends each close request, and checks that the process list
+  is clean afterwards. Record the results per game in
+  `docs/RUNTIME_NOTES.md`.
+
+## Clean up after yourself
+
+Builds and tests leave gigabytes behind (`target/` with host, i686 and
+x86_64 builds, Wine test prefixes, packages, scratch files, containers). After
+a successful release — and at the end of any long session — the agent runs
+the clean-up routine so the user's disk doesn't fill up:
+
+1. **Preview first.** `sdk/scripts/clean` (dry run by default) lists what it
+   would remove and how big it is: only build output inside the repository
+   that Git ignores and doesn't track — `target/` (including
+   `target/wine/`), `dist/`, and `.work/` entries the agent created during
+   this task.
+2. **Keep what matters.** Never remove investigation evidence the user may
+   want (REA snapshots and notes in `.work/` from earlier sessions), the
+   user's game installs, saves, prefixes, other repositories, or shared
+   caches (`~/.cargo`, `~/.rustup`, Docker images the user already had).
+3. **Remove** with `sdk/scripts/clean --yes`: explicit paths, never a broad
+   glob, never `git clean -fdx`, never following a symlink out of the repo.
+4. **Outside the repo**, remove only what this task created and recorded:
+   temp folders, test containers and images pulled just for the task,
+   throwaway Wine prefixes, leftover processes (see "Running the real game
+   in a test").
+5. **Report** what was removed, how much space it freed, and what was kept
+   on purpose.
+
+## Windows builds link with LLD
+
+GNU ld 2.47 mis-links the import tables of Rust Windows binaries (i686 and
+x86_64): some `kernel32` imports end up outside every import descriptor,
+Windows never fills them, and the program crashes before `main`. It hit Sega
+Rally Revo's and Screamer's builds, and Screamer shipped one. Every launcher
+links its Windows targets with LLD (`.cargo/config.toml`,
+`-C link-arg=-fuse-ld=lld`, in CI too, including MSYS2 jobs), and CI checks
+that the built exe's imports are complete and runs it under Wine.
+
+## Rust first
+
+Rust is the language of the launcher and of the SDK. It runs the same on
+Windows, under Wine and on Linux, cross-compiles to 32-bit Windows from
+Linux, and its type system plus `cargo test` let one host machine check
+nearly everything.
+
+- Logic of any size — parsing, planning, patching, file sync, downloads — is
+  Rust, in a library crate that builds and tests on the host.
+- POSIX `sh` only for the thin Linux helper (`linux/<id>-play` on
+  `rea-play.sh`) and packaging glue; keep it short and tested
+  (`linux/tests/`, run under dash in CI).
+- No Python, Node or PowerShell in what ships or in the build path. C or
+  assembly only at an FFI boundary we don't own (a hook DLL, an emulator
+  patch), behind a narrow interface.
+- Keep `main.rs` and the window code thin: they call planning functions
+  that live in the library. The audits found 400-line `run()` functions in
+  `cfg(windows)` code that no test ever executed.
+
+## Tests that catch regressions
+
+What this family learned, bug by bug:
+
+- **Reproduce first.** Every bug fix starts with a test that fails on the
+  old code, then the fix. Check that the test really fails without the fix
+  (temporarily revert it) — several "regression tests" here passed either
+  way until someone checked.
+- **Test behaviour, not the implementation.** CMR3's xdelta bug survived
+  because the unit test asserted the wrong argument list. Where a real tool
+  is involved, test against the real tool when it is installed (skip, don't
+  fail, when it isn't): the xdelta3 round trip caught it at once.
+- **Test the wiring, not only the parts.** Each layer can be correct while
+  the whole is wrong. Test option → `launcher.cfg` → generated game file /
+  registry / environment end to end (`plan()`), plus golden snapshots
+  (below), plus headless GUI tests for the window.
+- **Write tests as player stories** for anything with state: "the player
+  restores an older save backup", "the session is killed before write-back",
+  "saves copied from another PC with old timestamps", "a second launch while
+  the game runs". The save-mirror regression only showed up in such a story.
+- **Run Windows code on Windows semantics.** Case-insensitive names, `\\?\`
+  prefixes, read-only attributes, rename over an open file: four SDK bugs
+  appeared only under `scripts/wine-test`. Never rely on clippy alone for
+  `cfg(windows)` code. Don't use `#[should_panic]` (a panic aborts the whole
+  test binary under Wine); assert on a returned error instead.
+- **Hostile inputs:** paths with spaces, apostrophes and accents; files in a
+  Windows code page; CRLF; a BOM; truncated or malformed files with useful
+  error offsets; old formats from every earlier release.
+- **Fakes at the boundary, not mocks of our own code:** a fake HTTP server for
+  downloads, fake `wine`/`gamescope`/`cargo` on `PATH` for shell tests,
+  synthetic PE/LE images for patches, temp folders for file sync.
+- **Shell is tested too**, under dash and busybox as well as bash, with
+  globbing and quoting cases (`*` in a value, an apostrophe in a path).
+- **Measure, then aim.** Run `cargo llvm-cov` now and then to find untested
+  modules; library code should be close to fully covered, and every public
+  function has a test. Don't chase a percentage on `main.rs` — make it thin
+  instead.
+- **Review independently.** After a batch of changes, a reviewer who did not
+  write them reads the diff looking for regressions (this caught the
+  newer-wins save loss and the Wine DPI window bug here).
+
+## Golden snapshots (regression guard)
+
+Every launcher keeps snapshot tests of everything it produces, so an SDK
+upgrade or a refactor can't change behaviour silently:
+
+- `--help` and the generated `launcher.cfg` template;
+- for each look (Original, recommended, Steam Deck) and for a few option
+  combinations: the game files it writes (INI/CFG bytes), registry values,
+  environment (`WINEDLLOVERRIDES`, DXVK/vkBasalt variables), command-line
+  arguments and the patch sets it would apply.
+
+Keep the planning in a host-testable function (`plan(settings, game) ->
+Plan`) and compare its output with files under `tests/snapshots/`. A
+snapshot change is reviewed like code: it must match an intended change or
+an SDK **Migration** item, never be regenerated blindly.
+
 ## Testing (soft rules)
 
-- **Headless by default.** Automated tests and probes should not open
-  windows on the developer's desktop. Clear `DISPLAY`/`WAYLAND_DISPLAY` for
-  Wine runs, switch Wine's crash dialog off in a private test prefix
-  (`scripts/wine-test` does both), and run the real game in a headless
-  compositor (`gamescope --backend headless`) with a PipeWire null sink.
-  When a check really needs a visible window — judging the settings
-  window's look, a controller test — open one deliberately and say so; just
-  don't make it the default.
+- **Headless by default.** Whoever runs the agent — the SDK's owner or a new
+  developer building their first launcher — should never see windows pop up
+  out of nowhere. Automated tests, probes and game runs are headless: clear
+  `DISPLAY`/`WAYLAND_DISPLAY` for Wine runs, switch Wine's crash dialog off
+  in a private test prefix (`scripts/wine-test` does both), and run the real
+  game in a headless compositor (`gamescope --backend headless`) with a
+  PipeWire null sink. Prefer evidence that needs no eyes: logs, exit codes,
+  the process table, files written, headless screenshots
+  (`gamescope --backend headless` + a capture) the user can look at later.
+- **Visible when it matters — and announced.** Open a window only when the
+  check needs a person (judging how the settings window or the picture
+  looks, a controller test, anything the user must click) or when a
+  headless run would prove nothing (a bug that only shows on a real
+  display, focus or multi-monitor behaviour). Tell the user first: what
+  will open, why, roughly how long, and what to look for; wait until they
+  are ready; close it afterwards and clean up its processes.
 - **Exercise Windows code, not only lint it.** Link the i686 build and run
   the Windows-target tests under Wine with `scripts/wine-test`; clippy alone
   never runs `cfg(windows)` code.
+- **Running the real game in a test** (allowed, from the player's own
+  install outside the repo; never modify it):
+  - inside the container that has Wine/gamescope, with a finite timeout
+    *inside* it and a supervisor that waits for the actual game process —
+    never `timeout` around `distrobox enter`, never a live launcher piped
+    into `head`: killing the outer wrapper orphans Wine children;
+  - headless (`gamescope --backend headless`), a private PipeWire null sink,
+    a throwaway Wine prefix under `.work/`;
+  - record each task-started PID (name, start time, parent, container);
+    after the run, check the process table by name **and** by command
+    line/environment (`/proc/*/environ` for the test's `WINEPREFIX` or
+    `STEAM_COMPAT_DATA_PATH`), including `Z` (defunct) entries — a defunct
+    leader can still have live threads (`/proc/<pid>/task/*/status`);
+    signal exact task PIDs (TERM, then KILL) until the whole thread group
+    is gone. `wineserver -k` or a timeout exiting is not proof of cleanup;
+  - never restart the container or stop another game to hide a leftover;
+    report it.
+  (From distrobox-gaming's AGENTS.md, which keeps these rules for the
+  owner's machine.)
 - **The real game stays outside the repository** and outside ordinary host
   tests. Env-gated tests (`<GAME>_GAME_DIR=... cargo test -- --ignored`)
   may use it.

@@ -18,7 +18,11 @@ Non-negotiable, even if the user doesn't repeat it:
 - Research existing community fixes online before writing any fix; record them
   in `docs/RESEARCH.md` and build on them.
 - Never commit or copy game files; the game folder is read-only.
-- Tests and probes run headless; no windows on the user's desktop unless needed.
+- Everything outside the new repository is the user's and read-only (other repos,
+  prefixes, saves, configs) unless they ask or approve that change; back up first.
+- Tests, probes and game runs are headless; no windows pop up on the user's desktop.
+  Open one only when a check needs a person or headless would prove nothing, and
+  tell the user first what will open and why.
 - Settings-window work goes through a design skill; accessibility first; every
   option and CLI flag gets an end-to-end test; no confusing options.
 - Push, tag, or post anything public only with the user's go-ahead.

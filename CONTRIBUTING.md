@@ -41,7 +41,9 @@ default) is opt-in until every launcher using it has verified it.
    - Workflows: actionlint; shell steps are exercised by
      `scripts/tests/workflows.sh`.
    - Tests run headless: nothing opens a window on your desktop.
-3. Run everything with `scripts/dev-check` from the repository root. It
+3. Run everything with `scripts/dev-check` from the repository root; for a
+   change that touches launcher-facing API, run the canary
+   (`compat.yml`, also on every PR) and read any red launcher job. It
    skips checks whose tool is missing and says so; CI runs them all.
 4. Docs: the crate or folder README; **Migration** notes (in the crate
    README's MIGRATION section and the CHANGELOG entry) whenever a launcher
@@ -49,25 +51,46 @@ default) is opt-in until every launcher using it has verified it.
    `## [Unreleased]` in `CHANGELOG.md`.
 5. Commits: conventional style (`fix(core): …`, `feat(scripts): …`).
 
+## Before tagging
+
+Tag only when every box holds:
+
+- [ ] `scripts/dev-check` clean, and CI green on the release commit.
+- [ ] **Canary** (`.github/workflows/compat.yml`) green for all five
+      launchers, or each red/allowed-to-fail job explained: a launcher still
+      on an older SDK API may fail, but you know which change breaks it and
+      its CHANGELOG Migration item says how to fix it. Never tag over a red
+      job you haven't read. An allowed failure (`REA_CANARY_ALLOW_FAILURE`)
+      is removed once that launcher has moved.
+- [ ] `CHANGELOG.md` complete for the version: every change a launcher must
+      act on is a `- **Migration:**` item that says **what to do** (the new
+      call, field or input) and **how to verify** it (the test, check or
+      screen that shows it worked). `sdk-bump` and `sdk-update.yml` copy
+      these items into each launcher's bump PR, so they must stand alone.
+- [ ] Docs (crate READMEs, `packaging/README.md`, playbooks) match the code.
+
 ## Release process
 
 1. Move the `## [Unreleased]` entries in `CHANGELOG.md` to
    `## [X.Y.Z] - YYYY-MM-DD` and update the link references.
 2. Bump `version` in `[workspace.package]` (and the `rea-launcher`
    workspace dependency version) in `Cargo.toml`; `cargo update -w`.
-3. `scripts/dev-check` clean (and CI green on the release commit).
+3. Go through "Before tagging".
 4. Tag and push: `git tag -a vX.Y.Z -m "rea-launcher-sdk vX.Y.Z"`,
    `git push origin main vX.Y.Z`.
-5. Each launcher (`docs/playbooks/sdk-change.md`):
-   - change `tag = "vX.Y.Z"` on every `rea-launcher*` dependency and
-     `cargo update -p rea-launcher -p rea-launcher-win32 -p rea-launcher-ui`;
-   - from an SDK checkout at the tag, `scripts/sdk-sync <launcher>` (the
-     launcher's CI fails on drift from `sdk/VERSION`);
-   - move `@vX.Y.Z` on the reusable workflows in `.github/workflows/`;
-   - apply the Migration notes of every skipped version and drop local
+5. Each launcher (`docs/playbooks/sdk-change.md`) moves by a pull request,
+   never directly:
+   - its weekly `sdk-update` workflow (`packaging/README.md`, "Staying
+     current") opens `sdk-update/vX.Y.Z` with the bump and the Migration
+     items; or by hand, from the launcher's root:
+     `sdk/scripts/sdk-bump vX.Y.Z` (or `<sdk>/scripts/sdk-bump vX.Y.Z
+     <launcher>`), which moves the Cargo tags, runs `cargo update`,
+     re-vendors `sdk/`, moves `@vX.Y.Z` on the reusable workflows and prints
+     the Migration items;
+   - apply each Migration item and verify it as the item says; drop local
      workarounds the release made unnecessary;
    - run the launcher's checks, `sdk/scripts/wine-test` and
-     `scripts/sdk-sync --check <launcher>`; add a CHANGELOG entry; commit
+     `scripts/sdk-sync --check <launcher>`; add a CHANGELOG entry; merge as
      `build: bump rea-launcher-sdk to vX.Y.Z`.
 
 Licensed under MIT or Apache-2.0, at your option; contributions are

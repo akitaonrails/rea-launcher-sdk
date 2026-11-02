@@ -16,7 +16,10 @@ Read the component's licence first (record it in `docs/RESEARCH.md`).
 | Licence-less but the owner decided to bundle | Bundle, with the owner's decision recorded in `THIRD_PARTY.md` | CMR3's HD UI |
 | Must be built from source | Build in CI from a pinned commit, publish as our release asset | Screamer's dosbox-staging, CMR3's vkBasalt |
 
-Never ask the player to fetch something themselves when the launcher could.
+Choose in this order: **bundle** (always preferred — check the licence
+carefully before falling back), then **download on request** with one
+button, never a manual step. Never ask the player to fetch something
+themselves when the launcher could.
 
 **Microsoft redistributables** (d3dx9, DirectPlay, d3dcompiler, VC++
 runtimes): try Wine's builtins first and verify in the game. If the native
@@ -36,6 +39,11 @@ Every file is pinned by URL and SHA-256 in a pin file (`packaging/*.pins`, or on
   disappears: add the word `mirror` to the pin and its `pin_mirror_url` as
   the last fallback, then run the mirror workflow
   (`sdk/packaging/README.md`, "Mirroring").
+- **Licence-less, but the owner decided to host it** (table above): record
+  the decision in `THIRD_PARTY.md` first (who, when, why, the author's
+  terms), then mark the pin `hosted` instead of `mirror` and call the mirror
+  workflow with `include-hosted: true`. Without that input the workflow
+  skips `hosted` pins, so nothing licence-less is republished by accident.
 - **Upstream builds that change often** (Tweaks): repack each build as a
   release of ours and pin that (OutRun's `update-tweaks.sh`).
 - **Watch upstream** with the SDK's `upstream-watch.yml`: it opens an issue

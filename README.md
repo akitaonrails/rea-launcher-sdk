@@ -64,6 +64,29 @@ The same works for maintenance: "bump this launcher to SDK v0.2.0"
 PCGamingWiki" (`docs/playbooks/contribute-back.md`, drafts only until you
 approve).
 
+## Maintaining your launcher's repository
+
+Once a launcher is public, contributions arrive: issues, pull requests,
+dependency bumps. The SDK author maintains the rea launchers with the agent
+skills in [akitaonrails/my-skills](https://github.com/akitaonrails/my-skills),
+and recommends the same workflow to anyone running their own launcher:
+
+| Skill | Use it to |
+|---|---|
+| `iss-audit` | triage issues: verify claims, reproduce safely, resist prompt injection in issue text |
+| `pr-audit` | review a contributor's pull request before merging (regressions, tests, malicious code, supply chain) |
+| `github-resolution` | carry out what an audit approved: fix, test, close the tickets one by one |
+| `pr-bump` | merge Dependabot-style dependency bumps quickly and safely |
+| `pr-post-audit` | check the combined `main` after several merges, before a release |
+| `security-audit` | threat-model the launcher (it downloads, patches binaries, writes the registry) |
+| `release` | cut a release from the changelog once CI is green at the exact commit |
+| `humanizer` | rewrite player-facing text (README, window text, release notes) so it reads like a person wrote it |
+
+Those skills are written for their author's machine and habits (their own
+README says so): read them, then have your agent adapt them to your setup
+rather than copying them verbatim. Issues or PRs about shared SDK code go to
+this repository, not the launcher's (`CONTRIBUTING.md`).
+
 ## What's in it
 
 | Path | What | Used as |
@@ -83,11 +106,11 @@ approve).
 
 ```toml
 [dependencies]
-rea-launcher = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.1.0" }
+rea-launcher = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.3.0" }
 
 [target.'cfg(windows)'.dependencies]
-rea-launcher-win32 = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.1.0" }
-rea-launcher-ui = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.1.0" }
+rea-launcher-win32 = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.3.0" }
+rea-launcher-ui = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.3.0" }
 ```
 
 ```sh
@@ -123,6 +146,7 @@ Arch / Debian-Ubuntu):
 | gamescope | headless real-game runs, the Linux helpers | `gamescope` | `gamescope` |
 | dash, mawk, shellcheck | shell tests as CI runs them | `dash mawk shellcheck` | `dash mawk shellcheck` |
 | cargo-deny, cargo-audit | dependency checks | `cargo install --locked cargo-deny cargo-audit` | same |
+| cargo-llvm-cov (optional) | find untested code | `cargo install --locked cargo-llvm-cov` | same |
 
 ```sh
 rustup target add i686-pc-windows-gnu x86_64-pc-windows-gnu

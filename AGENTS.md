@@ -11,6 +11,7 @@ every launcher built on it.
 |---|---|
 | Build a launcher for a new game | `docs/playbooks/new-launcher.md` |
 | Change the SDK, or bump a launcher to a new SDK version | `docs/playbooks/sdk-change.md` |
+| Set up GitHub Actions to build and publish release binaries | `docs/playbooks/ci-and-releases.md` |
 | Pin, bundle, download and configure community fixes and packs | `docs/playbooks/community-components.md` |
 | Reverse engineer, test and apply a binary patch | `docs/playbooks/binary-patching.md` |
 | Share a fix we found with PCGamingWiki / upstream | `docs/playbooks/contribute-back.md` |
@@ -22,6 +23,10 @@ every launcher built on it.
   before reverse engineering anything. Record them in the launcher's
   `docs/RESEARCH.md`.
 - **The game folder is read-only, and nothing from it is ever committed.**
+- **Everything outside the repository you work in is read-only** (game
+  installs, other repos, prefixes, saves, home configs, containers) unless the
+  user asked for or approved that specific change. Back up first; never
+  delete by a broad glob; when unsure, ask.
 - **Headless by default.** Tests and probes never open windows on the
   owner's desktop: `scripts/wine-test` for Windows-target tests,
   `gamescope --backend headless` for game runs. Open a window only on
@@ -33,6 +38,9 @@ every launcher built on it.
   agents.
 - **Public actions need the owner's go-ahead**: pushing, tagging releases,
   posting issues, wiki edits.
+- **Clean up after releases and long sessions** with `scripts/clean`
+  (preview, then `--yes`): build output and task scratch only; keep evidence
+  and anything that isn't yours.
 - **Windows code must be run, not only linted**: link the i686 build and run
   `scripts/wine-test`.
 

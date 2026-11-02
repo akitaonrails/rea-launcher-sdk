@@ -124,16 +124,31 @@ Commit after each step, only when the checks pass.
 - The real game, headless, through the launcher: each look, each option you
   ship. Record exactly what was and was not verified in
   `docs/RUNTIME_NOTES.md`. Don't open windows on the owner's desktop unless
-  a check needs eyes, and say so first.
+  a check needs eyes or headless would prove nothing — then tell the user
+  what will open and why, and wait until they're ready
+  (`STANDARDS.md`, "Visible when it matters").
 
 ## Phase 6 — Document and release
 
 - README: what problems the launcher solves (one line each), install on
   Windows / Steam Deck / Linux, the options, credits to every community
   project, "built on rea-launcher-sdk", and a Contributing section routing
-  shared-code issues to the SDK repository.
+  shared-code issues to the SDK repository. Follow
+  `docs/playbooks/readme.md` (outline, rules, final humanizer pass).
 - `THIRD_PARTY.md`, `CHANGELOG.md`, `AGENTS.md` up to date.
-- Push only when the owner says so; tag a release once CI is green.
+- GitHub Actions build the zip and AppImage and publish releases: check
+  and adapt the generated `.github/workflows/build.yml` following
+  `docs/playbooks/ci-and-releases.md`. Push only when the owner says so;
+  release (tag) only once CI is green and the owner asks.
+
+## Maintain it
+
+Contributions to the launcher's own repository (issues, pull requests,
+dependency bumps, releases) are handled with the maintenance skills the
+SDK README recommends ("Maintaining your launcher's repository":
+`iss-audit`, `pr-audit`, `github-resolution`, `pr-bump`, `pr-post-audit`,
+`security-audit`, `release`) — adapted to the maintainer's setup. SDK
+upgrades follow `sdk-change.md` ("Upgrading a launcher").
 
 ## Phase 7 — Give back
 
