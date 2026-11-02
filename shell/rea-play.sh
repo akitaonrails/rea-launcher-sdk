@@ -25,7 +25,9 @@ REA_SDK_VERSION=0.2.0
 
 # --- configuration -------------------------------------------------------------
 # Every configuration variable the library reads. Sourcing unsets them, so
-# only what the game script assigns after sourcing counts.
+# only what the game script assigns after sourcing counts. REA_FUNCTIONS_ONLY
+# and REA_PLAY_HERE (the test convention, see README.md "Tests") are read by
+# the game script before it sources this file, and dropped here too.
 REA_CONFIG_VARS='REA_APP REA_MODE REA_EXE REA_EXE_NAME REA_EXE_HINT REA_EXE_SEARCH
 REA_HERE REA_NAME REA_PREFIX REA_STATE REA_STATE_BASE REA_RUN REA_WAIT
 REA_ALWAYS_WAIT REA_CFG REA_CFG_NAME REA_CFG_APPDATA REA_PLAY_ARGS
@@ -36,7 +38,8 @@ REA_DEFAULT_SCALER REA_WINDOWED_KEY REA_WINDOWED_VALUES REA_SDL_ENV
 REA_SDL_SETTINGS REA_GPU_ICD_PIN REA_GPU REA_DLL_OVERRIDES REA_WINEDBG_OFF
 REA_GAME_PROCS REA_GAME_SETTLE REA_WINEBUS_MARKER REA_WINEBUS_VALUES
 REA_DIRECT_NOTE REA_TEST REA_SYSFS REA_ICD_DIRS REA_NV_LIB_CHECK
-REA_GAMESCOPE_CHECK REA_LAUNCH_CMD REA_PROC REA_INITED'
+REA_GAMESCOPE_CHECK REA_LAUNCH_CMD REA_PROC REA_INITED REA_ORIGINAL_WORDS
+REA_FUNCTIONS_ONLY REA_PLAY_HERE'
 # shellcheck disable=SC2086
 unset $REA_CONFIG_VARS 2>/dev/null || true
 
@@ -67,6 +70,7 @@ rea_defaults() {
   : "${REA_RES_KEY:=resolution}"
   : "${REA_DEFAULT_SIZE:=1920x1080}"
   : "${REA_ORIGINAL_SIZE:=}"        # "original" means this (empty: default)
+  : "${REA_ORIGINAL_WORDS:=original}"  # the words that mean it (OR's Rust: "original off")
   : "${REA_FULLSCREEN_SIZE:=}"      # "screen": fullscreen = the screen size
   : "${REA_SCREEN:=}"               # WIDTHxHEIGHT instead of asking xrandr
   : "${REA_SCALER_KEY=scaler}"      # empty: always REA_DEFAULT_SCALER
@@ -241,15 +245,24 @@ rea_screen_size() {
   fi
 }
 
-# Sets REA_W and REA_H from the cfg's resolution: WIDTHxHEIGHT, "original"
-# (REA_ORIGINAL_SIZE), fullscreen/full/desktop (the screen, when
-# REA_FULLSCREEN_SIZE=screen); anything else is REA_DEFAULT_SIZE.
+# Sets REA_W and REA_H from the cfg's resolution: WIDTHxHEIGHT, a word in
+# REA_ORIGINAL_WORDS (REA_ORIGINAL_SIZE), fullscreen/full/desktop (the
+# screen, when REA_FULLSCREEN_SIZE=screen); anything else is
+# REA_DEFAULT_SIZE.
 rea_game_size() {
   _rea_r=$(rea_get_key "$REA_RES_KEY" | tr -d ' \t\r' | tr 'A-Z' 'a-z')
   _rea_size=
-  case $_rea_r in
-    original) _rea_size=$(rea_parse_size "$REA_ORIGINAL_SIZE") ;;
-    fullscreen|full|desktop)
+  rea_noglob
+  # shellcheck disable=SC2086
+  set -- $REA_ORIGINAL_WORDS
+  rea_glob
+  _rea_orig=
+  for _rea_word in "$@"; do
+    [ -n "$_rea_r" ] && [ "$_rea_r" = "$(printf '%s' "$_rea_word" | tr 'A-Z' 'a-z')" ] && _rea_orig=1
+  done
+  case $_rea_orig:$_rea_r in
+    1:*) _rea_size=$(rea_parse_size "$REA_ORIGINAL_SIZE") ;;
+    :fullscreen|:full|:desktop)
       [ "$REA_FULLSCREEN_SIZE" = screen ] && _rea_size=$(rea_screen_size) ;;
     *) _rea_size=$(rea_parse_size "$_rea_r") ;;
   esac

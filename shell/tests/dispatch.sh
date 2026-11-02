@@ -90,10 +90,13 @@ chmod +x "$T/scr/ScreamerLauncher"
 cat > "$T/scr/linux/screamer-play" <<'SCR'
 #!/bin/sh
 set -u
+_fonly=${REA_FUNCTIONS_ONLY:-}
 _here=$(dirname "$(readlink -f "$0")")
+[ "$_fonly" = 1 ] && [ -n "${REA_PLAY_HERE:-}" ] && _here=$REA_PLAY_HERE
 if [ -f "$_here/rea-play.sh" ]; then . "$_here/rea-play.sh"
 elif [ -f "$_here/../sdk/rea-play.sh" ]; then . "$_here/../sdk/rea-play.sh"
 else echo "rea-play.sh not found next to $0 or in ../sdk" >&2; exit 1; fi
+REA_HERE=$_here REA_NAME=screamer-play
 REA_MODE=native REA_APP=screamer-launcher REA_EXE_NAME=ScreamerLauncher
 REA_EXE_HINT=SCREAMER_LAUNCHER REA_EXE=${SCREAMER_LAUNCHER:-}
 REA_EXE_SEARCH="../target/release/ScreamerLauncher ../target/debug/ScreamerLauncher"
@@ -108,7 +111,7 @@ rea_hook_command() {
   esac
 }
 rea_init
-[ -n "${SCREAMER_PLAY_FUNCTIONS_ONLY:-}" ] && return 0
+[ "$_fonly" = 1 ] && return 0
 rea_main "$@"
 SCR
 scr() { rm -f "$T/scr.log"; PATH=$T/scr:$PATH sh "$T/scr/linux/screamer-play" "$@" > "$T/out" 2>&1; echo $?; }
@@ -133,6 +136,8 @@ cp "$T/scr/linux/screamer-play" "$T/scr/linux/rea-play.sh" "$T/scr2/linux/"
 cp "$T/scr/ScreamerLauncher" "$T/scr2/target/release/"
 rm -f "$T/scr.log"; (cd / && sh "$T/scr2/linux/screamer-play" --check > /dev/null 2>&1)
 check "a relative REA_EXE_SEARCH works from any cwd" "$(cat "$T/scr.log" 2>/dev/null)" "launcher --check"
+got=$(cd / && REA_FUNCTIONS_ONLY=1 REA_PLAY_HERE=$T/scr2/linux sh -c '. "$1"; echo "$REA_EXE"' sh "$T/scr2/linux/screamer-play")
+check "the recipe sourced by a test finds its launcher" "$got" "$T/scr2/target/release/ScreamerLauncher"
 rm "$T/scr/ScreamerLauncher"
 check "no launcher for a pass-through: exit 1" "$(scr --check)" 1
 contains "with the reason" "$(cat "$T/out")" "ScreamerLauncher not found next to screamer-play (or set SCREAMER_LAUNCHER)"

@@ -119,6 +119,17 @@ size "fullscreen without REA_FULLSCREEN_SIZE: default" 'resolution = fullscreen\
 REA_FULLSCREEN_SIZE=screen
 size "fullscreen is the screen's size (SCR)" 'resolution = fullscreen\n' 2560x1600 2560x1600
 size "a bogus screen size: default" 'resolution = fullscreen\n' 1920x1080 0x0
+REA_ORIGINAL_SIZE=640x480 REA_FULLSCREEN_SIZE=
+size "off is not original by default (OR today: 1920x1080)" 'resolution = off\n' 1920x1080
+REA_ORIGINAL_WORDS="original off"
+size "REA_ORIGINAL_WORDS='original off': off is original" 'resolution = OFF\n' 640x480
+size "...and original still is" 'resolution = original\n' 640x480
+REA_ORIGINAL_WORDS=off
+size "only the listed words count" 'resolution = original\n' 1920x1080
+size "an empty value is never a word" 'resolution =\n' 1920x1080
+REA_ORIGINAL_WORDS='*'
+mkdir -p "$T/g"; : > "$T/g/off"; (cd "$T/g" && { printf 'resolution = off\n' > "$C"; rea_game_size; check "the word list never globs" "${REA_W}x$REA_H" 1920x1080; })
+REA_ORIGINAL_WORDS=original
 REA_DEFAULT_SIZE=1024x768
 size "REA_DEFAULT_SIZE (CMR4 1024x768)" 'game = C:\\x\n' 1024x768
 rm -f "$C"

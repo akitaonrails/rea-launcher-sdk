@@ -14,10 +14,13 @@ window and command dispatch.
 - In a launcher repo, `scripts/sdk-sync` vendors it as `sdk/rea-play.sh`.
 - In a package (zip, AppImage), the builder copies it next to the helper.
 
-A game script finds it like this:
+A game script finds it like this (the first three lines are the test
+convention, see "Tests for a game script" below):
 
 ```sh
+_fonly=${REA_FUNCTIONS_ONLY:-}
 _here=$(dirname "$(readlink -f "$0")")
+[ "$_fonly" = 1 ] && [ -n "${REA_PLAY_HERE:-}" ] && _here=$REA_PLAY_HERE
 if [ -f "$_here/rea-play.sh" ]; then
   . "$_here/rea-play.sh"
 elif [ -f "$_here/../sdk/rea-play.sh" ]; then
@@ -26,6 +29,7 @@ else
   echo "rea-play.sh not found next to $0 or in ../sdk (run scripts/sdk-sync)" >&2
   exit 1
 fi
+REA_HERE=$_here REA_NAME=<x>-play
 ```
 
 The SDK's `packaging/appimage/AppRun.in` exports `<PREFIX>_LAUNCHER`,
@@ -52,7 +56,7 @@ REA_CFG_APPDATA=CMR4Launcher
 # ...game choices (see the tables below)...
 rea_hook_before_start() { ...; }         # 3. only the hooks it needs
 rea_init || exit 1                       # 4. defaults, paths, state folder, prefix
-[ -n "${CMR4_PLAY_FUNCTIONS_ONLY:-}" ] && return 0
+[ "$_fonly" = 1 ] && return 0            # tests: loaded, not run
 rea_main "$@"                            # 5. (calls rea_init itself if needed)
 ```
 
@@ -150,6 +154,7 @@ empty value (empty means "none").
 | `REA_RES_KEY` | `resolution` | the cfg key that holds the size |
 | `REA_DEFAULT_SIZE` | `1920x1080` | used when the value is unset, invalid or unknown |
 | `REA_ORIGINAL_SIZE` | empty | what `original` means. Empty: the default size |
+| `REA_ORIGINAL_WORDS` | `original` | the resolution words that mean `REA_ORIGINAL_SIZE` (case-insensitive; only these). OR's Rust config treats `off` as original too (`ORIGINAL_OR_OFF`), but or-play has always given gamescope the default 1920x1080 for `off`; OR keeps the default, and a game that wants both sets `REA_ORIGINAL_WORDS="original off"` |
 | `REA_FULLSCREEN_SIZE` | empty | `screen`: `fullscreen`, `full` and `desktop` mean the screen's size (`REA_SCREEN`, else xrandr's current mode) |
 | `REA_SCALER_KEY` | `scaler` | the cfg key for gamescope's `-F`. Empty: always use `REA_DEFAULT_SCALER` |
 | `REA_DEFAULT_SCALER` | `linear` | |
@@ -268,6 +273,7 @@ gets the defaults back, as the launchers' `launch` did everywhere.
 | gamescope (`REA_GAMESCOPE`) | auto | auto | **off** (DXVK lands on the iGPU inside gamescope on hybrid hosts) | auto | auto |
 | `REA_DEFAULT_SIZE` | 1920x1080 | **1024x768** | — | 1920x1080 | 1920x1080 |
 | `REA_ORIGINAL_SIZE` | 640x480 | *(empty → default)* | — | 640x480 | *(empty → default)* |
+| `REA_ORIGINAL_WORDS` | original | original | — | original (`off` stays 1920x1080, as today) | original |
 | `REA_FULLSCREEN_SIZE` | — | — | — | — | **screen** (+ `REA_SCREEN=${SCREAMER_SCREEN:-}`) |
 | scaler | `scaler`, linear | **fixed nis** (`REA_SCALER_KEY=`) | — | `scaler`, linear | `scaler`, **fsr** |
 | `REA_GAMESCOPE_OUTPUT` | 1 | 1 | — | 1 | **0** |
@@ -368,10 +374,13 @@ No hooks. Never set `REA_WINDOWED_KEY` or `REA_GAME_PROCS`.
 ```sh
 #!/bin/sh
 set -u
+_fonly=${REA_FUNCTIONS_ONLY:-}
 _here=$(dirname "$(readlink -f "$0")")
+[ "$_fonly" = 1 ] && [ -n "${REA_PLAY_HERE:-}" ] && _here=$REA_PLAY_HERE
 if [ -f "$_here/rea-play.sh" ]; then . "$_here/rea-play.sh"
 elif [ -f "$_here/../sdk/rea-play.sh" ]; then . "$_here/../sdk/rea-play.sh"
 else echo "rea-play.sh not found next to $0 or in ../sdk" >&2; exit 1; fi
+REA_HERE=$_here REA_NAME=screamer-play
 REA_MODE=native REA_APP=screamer-launcher REA_EXE_NAME=ScreamerLauncher
 REA_EXE_HINT=SCREAMER_LAUNCHER REA_EXE=${SCREAMER_LAUNCHER:-}
 REA_EXE_SEARCH="../target/release/ScreamerLauncher ../target/debug/ScreamerLauncher"
@@ -386,7 +395,7 @@ rea_hook_command() {
   esac
 }
 rea_init || exit 1
-[ -n "${SCREAMER_PLAY_FUNCTIONS_ONLY:-}" ] && return 0
+[ "$_fonly" = 1 ] && return 0
 rea_main "$@"
 ```
 
@@ -397,14 +406,60 @@ script's folder. Test seams map as `SCREAMER_NV_LIB_CHECK` →
 `SCREAMER_DOSBOX` and `SCREAMER_GAME_DIR` stay plain environment for the
 launcher.
 
-### Tests
+### Tests for a game script
+
+One convention for every launcher's `linux/tests/*.sh`:
+
+- `REA_FUNCTIONS_ONLY=1` makes the game script load (library, config,
+  hooks, `rea_init`) and `return` before `rea_main`.
+- `REA_PLAY_HERE=<the script's folder>` replaces `dirname "$0"` for the
+  library lookup and `REA_HERE`, because `$0` is the test when a test sources
+  the script. It counts only together with `REA_FUNCTIONS_ONLY=1`; a
+  normal run ignores it.
+- The library drops both once sourced (like every `REA_*` variable), so
+  they never reach the game's processes. Never set them outside tests: with
+  `REA_FUNCTIONS_ONLY=1` the helper does nothing.
+
+```sh
+# linux/tests/<x>.sh
+HERE=$(dirname "$(readlink -f "$0")")
+REA_FUNCTIONS_ONLY=1 REA_PLAY_HERE=$HERE/.. . "$HERE/../<x>-play"
+REA_TEST=1 REA_SYSFS=$T/nosys REA_RUN=$T/fake-run REA_GPU=   # seams + fakes
+rea_start > /dev/null
+```
+
+In a repo checkout this finds `linux/../sdk/rea-play.sh`; in a package,
+`<dir>/rea-play.sh`. `shell/tests/example.sh` checks the convention in
+both layouts, and `shell/tests/dispatch.sh` checks it for the Screamer
+recipe.
+
+To adopt it, each launcher replaces its own hook:
+
+1. In `linux/<x>-play`, replace the lines before the library lookup with
+   the three convention lines from "Where the library lives". Remove
+   CMR3's `CMR3_PLAY_HERE` branch, Screamer's `${SCREAMER_PLAY_DIR:-…}` and
+   SRR's `../../sdk` fallback.
+2. Right after the lookup, add `REA_HERE=$_here REA_NAME=<x>-play`.
+   Without it, a sourced script's `REA_HERE` would be `linux/tests`, and
+   launcher discovery and messages would be wrong.
+3. Replace `[ -n "${<X>_PLAY_FUNCTIONS_ONLY:-}" ] && return 0` with
+   `[ "$_fonly" = 1 ] && return 0`. It stays after `rea_init` and the hooks.
+4. In `linux/tests/*.sh`, replace `<X>_PLAY_FUNCTIONS_ONLY=1` and
+   `CMR3_PLAY_HERE=…` / `SCREAMER_PLAY_DIR=…` with
+   `REA_FUNCTIONS_ONLY=1 REA_PLAY_HERE=$HERE/..` on the `.` line. Then set
+   `REA_TEST=1` before using any seam.
+5. CMR4 runs `sh -c` with `CMR4_PLAY_FUNCTIONS_ONLY=1`; OR re-sources `"$0"`
+   with `OR_PLAY_FUNCTIONS_ONLY=1`. Both use the same pair:
+   `REA_FUNCTIONS_ONLY=1 REA_PLAY_HERE=<linux dir> sh -c '. "$1"; …' sh <script>`.
+   Tests that run the script normally (`sh <x>-play status`) need neither.
+6. Re-run `scripts/sdk-sync` to vendor the new `sdk/rea-play.sh`, and grep the
+   repo for `_PLAY_FUNCTIONS_ONLY`, `_PLAY_HERE` and `_PLAY_DIR`; nothing
+   should remain.
 
 The library's tests cover the shared behaviour. A launcher keeps tests only
 for its own configuration (one `gamescope`/`--play` command assertion is
 enough to catch a wrong variable) and for its game hooks (CMR3 `postfx.sh`,
-SRR `winetricks`). Its tests source the game script with
-`<X>_PLAY_FUNCTIONS_ONLY=1`, set `REA_TEST=1` and the seams they need, and
-call `rea_start`, `rea_settings` and `rea_stop`.
+SRR `winetricks`).
 
 ## Tests
 
