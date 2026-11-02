@@ -22,6 +22,27 @@ pub fn native(root: &Path, rel: &str) -> PathBuf {
         .fold(root.to_path_buf(), |p, part| p.join(part))
 }
 
+/// The file or folder at `/`-separated `rel` below `root`, matching each
+/// part without regard to ASCII case (a Windows game's `DINPUT8.DLL` for
+/// `dinput8.dll` on a case-sensitive Linux disk). An exact match wins.
+pub fn find_ignoring_case(root: &Path, rel: &str) -> Option<PathBuf> {
+    let mut path = root.to_path_buf();
+    for part in rel.split('/').filter(|p| !p.is_empty()) {
+        let exact = path.join(part);
+        if std::fs::symlink_metadata(&exact).is_ok() {
+            path = exact;
+            continue;
+        }
+        let found = std::fs::read_dir(&path)
+            .ok()?
+            .flatten()
+            .map(|e| e.file_name())
+            .find(|name| name.to_str().is_some_and(|n| n.eq_ignore_ascii_case(part)))?;
+        path.push(found);
+    }
+    Some(path)
+}
+
 /// Drops `.` and folds `..` into the component before it, as text.
 pub fn normalize(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
@@ -167,6 +188,19 @@ mod tests {
             Path::new("root").join("Data").join("Tracks").join("a.dat")
         );
         assert_eq!(native(Path::new("root"), ""), Path::new("root"));
+    }
+
+    #[test]
+    fn files_are_found_whatever_their_case() {
+        let root = test_dir("paths-case");
+        std::fs::create_dir_all(root.join("DATA")).unwrap();
+        std::fs::write(root.join("DATA/DInput8.DLL"), b"x").unwrap();
+        assert_eq!(
+            find_ignoring_case(&root, "data/dinput8.dll"),
+            Some(root.join("DATA/DInput8.DLL"))
+        );
+        assert_eq!(find_ignoring_case(&root, "data/missing.dll"), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

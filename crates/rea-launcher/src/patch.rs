@@ -29,6 +29,13 @@ pub struct Site<'a> {
 /// Why a patch was refused. Nothing was written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatchError {
+    /// A site's `expected` and `patched` bytes differ in length: a mistake
+    /// in the launcher's site table, not in the player's file.
+    LengthMismatch {
+        name: String,
+        expected: usize,
+        patched: usize,
+    },
     /// A site lies past the end of the file.
     Truncated {
         name: String,
@@ -67,6 +74,14 @@ pub enum PatchError {
 impl std::fmt::Display for PatchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            PatchError::LengthMismatch {
+                name,
+                expected,
+                patched,
+            } => write!(
+                f,
+                "{name}: the site table is wrong ({expected} expected bytes, {patched} patched)"
+            ),
             PatchError::Truncated { name, offset } => {
                 write!(f, "{name}: offset {offset:#x} is past the end of the file")
             }
@@ -136,6 +151,13 @@ fn slice<'d>(
 /// changed (0: already fully patched). On error `data` is unchanged.
 pub fn apply(data: &mut [u8], sites: &[Site]) -> Result<usize, PatchError> {
     for site in sites {
+        if !site.expected.is_empty() && site.expected.len() != site.patched.len() {
+            return Err(PatchError::LengthMismatch {
+                name: site.name.to_owned(),
+                expected: site.expected.len(),
+                patched: site.patched.len(),
+            });
+        }
         let found = slice(data, site.name, site.offset, site.patched.len())?;
         if !site.expected.is_empty() && found != site.expected && found != site.patched {
             return Err(PatchError::Unexpected {
@@ -305,6 +327,25 @@ mod tests {
             apply(&mut short, &SITES),
             Err(PatchError::Truncated { offset: 4, .. })
         ));
+        // A table mistake is told apart from an unknown build.
+        let mut data = [0x55, 0x8b, 0x00];
+        let wrong = [Site {
+            name: "typo",
+            offset: 0,
+            expected: &[0x55, 0x8b],
+            patched: &[0xc3],
+        }];
+        let err = apply(&mut data, &wrong).unwrap_err();
+        assert!(matches!(
+            err,
+            PatchError::LengthMismatch {
+                expected: 2,
+                patched: 1,
+                ..
+            }
+        ));
+        assert!(err.to_string().contains("site table"));
+        assert_eq!(data, [0x55, 0x8b, 0x00]);
         // An unchecked site writes whatever is there.
         let mut any = [7, 7];
         let normalise = [Site {

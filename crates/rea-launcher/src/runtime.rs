@@ -22,7 +22,7 @@ use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::fsx;
-use crate::paths::native;
+use crate::paths::{find_ignoring_case, native};
 
 /// A source file's size and modification time (whole seconds).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,15 +58,26 @@ pub trait Policy {
     }
 
     /// Files the game writes (saves, its own settings): copied once, then
-    /// never overwritten by a later change in the source.
-    fn game_written(&self, _rel: &str) -> bool {
+    /// never overwritten by a later change in the source. `source` is the
+    /// game folder's stamp.
+    fn game_written(&self, _rel: &str, _source: Stamp) -> bool {
         false
     }
 
     /// Files the launcher places itself (wrappers, generated configs, a
-    /// repack's stray DLL): recorded in the manifest, never copied.
-    fn owned(&self, _rel: &str) -> bool {
+    /// repack's stray DLL, SCR's sub-50 KB `GLIDE2X.OVL` stub): recorded in
+    /// the manifest, never copied.
+    fn owned(&self, _rel: &str, _source: Stamp) -> bool {
         false
+    }
+
+    /// Whether the runtime already has `rel`, at `path` (its
+    /// [`Policy::runtime_rel`]). By default a regular file that is not a
+    /// symbolic link: a link left by an older launcher (SCR linked into
+    /// the player's folder) counts as missing and is replaced. SRR also
+    /// counts its switched-off `rel.srr-disabled`.
+    fn present(&self, _rel: &str, path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
     }
 
     /// Where `rel` goes in the runtime folder (SCR stages DOS names in
@@ -101,7 +112,8 @@ pub struct SyncReport {
 
 /// Decides which source files to bring over: missing in the runtime, or
 /// changed since the last sync (per `manifest`) unless the game writes
-/// them. Owned files are recorded but never brought.
+/// them. Owned files are recorded but never brought. `runtime_has` is
+/// [`Policy::present`] in [`sync`].
 pub fn plan(
     source: &Listing,
     runtime_has: &dyn Fn(&str) -> bool,
@@ -112,14 +124,14 @@ pub fn plan(
     let mut next = Listing::new();
     for (rel, stamp) in source {
         let recorded = manifest.get(rel);
-        if policy.owned(rel) {
+        if policy.owned(rel, *stamp) {
             // Kept so a file an older launcher once copied is not seen as
             // new forever.
             next.insert(rel.clone(), *recorded.unwrap_or(stamp));
             continue;
         }
         let changed = recorded != Some(stamp);
-        if !runtime_has(rel) || (changed && !policy.game_written(rel)) {
+        if !runtime_has(rel) || (changed && !policy.game_written(rel, *stamp)) {
             copy.push(rel.clone());
             next.insert(rel.clone(), *stamp);
         } else {
@@ -262,36 +274,39 @@ fn bring_over(from: &Path, to: &Path, link: bool) -> io::Result<bool> {
         // setting it would change the player's file.
         return Ok(true);
     }
-    let modified = fs::metadata(from)?.modified().ok();
+    let modified = fs::metadata(from).map_err(fsx::at(from))?.modified().ok();
     fsx::install_copy(from, to)?;
     if let Some(when) = modified {
         // Whole seconds, as the manifest compares.
         let secs = when.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
         fs::OpenOptions::new()
             .write(true)
-            .open(to)?
-            .set_modified(UNIX_EPOCH + Duration::from_secs(secs))?;
+            .open(to)
+            .and_then(|f| f.set_modified(UNIX_EPOCH + Duration::from_secs(secs)))
+            .map_err(fsx::at(to))?;
     }
     Ok(false)
 }
 
 /// Brings `runtime` up to date with `game`, recording the result in
-/// `runtime/manifest_name`. Never deletes runtime-only files and never
-/// writes into `game`.
+/// `runtime/manifest_name`. Never deletes runtime-only files, never writes
+/// into `game`, and replaces (never writes through) a symbolic link in the
+/// runtime. Errors name the path.
 pub fn sync(
     game: &Path,
     runtime: &Path,
     policy: &dyn Policy,
     manifest_name: &str,
 ) -> io::Result<SyncReport> {
-    let (source, warnings) = list_with_warnings(game)?;
-    fs::create_dir_all(runtime)?;
+    let (source, warnings) = list_with_warnings(game).map_err(fsx::at(game))?;
+    fs::create_dir_all(runtime).map_err(fsx::at(runtime))?;
     let manifest_path = runtime.join(manifest_name);
     let manifest = fs::read_to_string(&manifest_path)
         .map(|t| parse_manifest(&t))
         .unwrap_or_default();
     let to = |rel: &str| native(runtime, &policy.runtime_rel(rel));
-    let plan = plan(&source, &|rel| to(rel).is_file(), &manifest, policy);
+    let present = |rel: &str| policy.present(rel, &to(rel));
+    let plan = plan(&source, &present, &manifest, policy);
     let mut linked = 0;
     for rel in &plan.copy {
         if bring_over(&native(game, rel), &to(rel), policy.link(rel))? {
@@ -306,16 +321,40 @@ pub fn sync(
     })
 }
 
-/// Puts the game's own `rel` back in the runtime folder (linked when
-/// `link`, else copied), or removes the runtime's when the game has none.
-pub fn restore(game: &Path, runtime: &Path, rel: &str, link: bool) -> io::Result<()> {
-    let from = native(game, rel);
-    let to = native(runtime, rel);
-    if from.is_file() {
-        bring_over(&from, &to, link).map(|_| ())
-    } else {
-        fsx::remove(&to)
+/// Puts the game's own `rel` (found whatever its case) back in the
+/// runtime at [`Policy::runtime_rel`], linked when [`Policy::link`] says
+/// so, or removes the runtime's when the game has none.
+pub fn restore(game: &Path, runtime: &Path, rel: &str, policy: &dyn Policy) -> io::Result<()> {
+    let to = native(runtime, &policy.runtime_rel(rel));
+    match find_ignoring_case(game, rel).filter(|p| p.is_file()) {
+        Some(from) => bring_over(&from, &to, policy.link(rel)).map(|_| ()),
+        None => fsx::remove(&to),
     }
+}
+
+/// Removes the symbolic links older launchers left in the runtime folder
+/// (SCR's pointed straight into the player's folder, so the game wrote
+/// there). Links to folders are removed, not entered. The next [`sync`]
+/// brings real files in their place. Returns how many went.
+pub fn remove_legacy_links(runtime: &Path) -> io::Result<usize> {
+    let Ok(entries) = fs::read_dir(runtime) else {
+        return Ok(0);
+    };
+    let mut removed = 0;
+    for entry in entries {
+        let path = entry.map_err(fsx::at(runtime))?.path();
+        let meta = fs::symlink_metadata(&path).map_err(fsx::at(&path))?;
+        if meta.file_type().is_symlink() {
+            // A Windows directory link is removed as a folder.
+            fs::remove_file(&path)
+                .or_else(|_| fs::remove_dir(&path))
+                .map_err(fsx::at(&path))?;
+            removed += 1;
+        } else if meta.is_dir() {
+            removed += remove_legacy_links(&path)?;
+        }
+    }
+    Ok(removed)
 }
 
 #[cfg(test)]
@@ -343,7 +382,7 @@ mod tests {
             }
         }
 
-        fn game_written(&self, rel: &str) -> bool {
+        fn game_written(&self, rel: &str, _: Stamp) -> bool {
             rel.eq_ignore_ascii_case("CMR3")
         }
     }
@@ -352,13 +391,13 @@ mod tests {
     struct OutRun;
 
     impl Policy for OutRun {
-        fn game_written(&self, rel: &str) -> bool {
+        fn game_written(&self, rel: &str, _: Stamp) -> bool {
             rel.split('/')
                 .next()
                 .is_some_and(|top| top.eq_ignore_ascii_case("SaveGame"))
         }
 
-        fn owned(&self, rel: &str) -> bool {
+        fn owned(&self, rel: &str, _: Stamp) -> bool {
             ["d3d9.dll", "or2006c2c.exe"].contains(&rel.to_ascii_lowercase().as_str())
         }
     }
@@ -626,7 +665,7 @@ mod tests {
         fs::write(game.join("Rally_3PC.exe"), b"exe").unwrap();
         sync(&game, &rt, &Cmr3, MANIFEST).unwrap();
         // The runtime already holds a link to this very file.
-        restore(&game, &rt, "Rally_3PC.exe", true).unwrap();
+        restore(&game, &rt, "Rally_3PC.exe", &Cmr3).unwrap();
         assert!(!fsx::temp_beside(&rt.join("Rally_3PC.exe")).exists());
         assert_eq!(fs::read(rt.join("Rally_3PC.exe")).unwrap(), b"exe");
         for d in [game, rt] {
@@ -641,12 +680,122 @@ mod tests {
         fs::write(game.join("dinput8.dll"), b"game's own").unwrap();
         fs::write(rt.join("dinput8.dll"), b"ours").unwrap();
         fs::write(rt.join("d3d9.dll"), b"ours").unwrap();
-        restore(&game, &rt, "dinput8.dll", false).unwrap();
-        restore(&game, &rt, "d3d9.dll", false).unwrap();
+        restore(&game, &rt, "dinput8.dll", &CopyAll).unwrap();
+        restore(&game, &rt, "d3d9.dll", &CopyAll).unwrap();
         assert_eq!(fs::read(rt.join("dinput8.dll")).unwrap(), b"game's own");
         assert!(!rt.join("d3d9.dll").exists());
         for d in [game, rt] {
             fs::remove_dir_all(d).unwrap();
         }
+    }
+
+    /// SCR: DOS names in upper case, a small Glide stub never staged.
+    struct Screamer;
+
+    impl Policy for Screamer {
+        fn owned(&self, rel: &str, source: Stamp) -> bool {
+            rel.eq_ignore_ascii_case("GLIDE2X.OVL") && source.size < 50_000
+        }
+        fn runtime_rel(&self, rel: &str) -> String {
+            rel.to_ascii_uppercase()
+        }
+    }
+
+    #[test]
+    fn owned_and_game_written_see_the_source_stamp() {
+        let src = listing(&[
+            ("glide2x.ovl", stamp(31_000, 1)),
+            ("x/glide2x.ovl", stamp(1, 1)),
+        ]);
+        let p = plan(&src, &|_| false, &Listing::new(), &Screamer);
+        assert_eq!(p.copy, ["x/glide2x.ovl"]);
+        let dos = listing(&[("GLIDE2X.OVL", stamp(120_000, 1))]);
+        assert_eq!(
+            plan(&dos, &|_| false, &Listing::new(), &Screamer)
+                .copy
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn restore_follows_the_runtime_name_and_finds_any_case() {
+        let game = test_dir("rt-restore-case-game");
+        let rt = test_dir("rt-restore-case-rt");
+        fs::write(game.join("Choice.dat"), b"game's").unwrap();
+        fs::write(rt.join("CHOICE.DAT"), b"ours").unwrap();
+        restore(&game, &rt, "choice.dat", &Screamer).unwrap();
+        assert_eq!(fs::read(rt.join("CHOICE.DAT")).unwrap(), b"game's");
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn presence_is_the_policys_call() {
+        /// SRR: a switched-off DLL is still there, under another name.
+        struct Srr;
+        impl Policy for Srr {
+            fn present(&self, _: &str, path: &Path) -> bool {
+                let mut off = path.as_os_str().to_owned();
+                off.push(".srr-disabled");
+                path.is_file() || Path::new(&off).is_file()
+            }
+        }
+        let game = test_dir("rt-present-game");
+        let rt = test_dir("rt-present-rt");
+        fs::write(game.join("d3d9.dll"), b"dxvk").unwrap();
+        fs::write(game.join("SEGA Rally.exe"), b"exe").unwrap();
+        assert_eq!(sync(&game, &rt, &Srr, MANIFEST).unwrap().brought, 2);
+        // The launcher switches the DLL off by renaming it.
+        fs::rename(rt.join("d3d9.dll"), rt.join("d3d9.dll.srr-disabled")).unwrap();
+        assert_eq!(sync(&game, &rt, &Srr, MANIFEST).unwrap().brought, 0);
+        assert!(!rt.join("d3d9.dll").exists());
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_left_by_older_launchers_are_replaced_by_real_files() {
+        let game = test_dir("rt-legacy-game");
+        let rt = test_dir("rt-legacy-rt");
+        fs::create_dir_all(game.join("CONFIG")).unwrap();
+        fs::write(game.join("CHOICE.DAT"), b"player's").unwrap();
+        fs::write(game.join("CONFIG/SETUP.CFG"), b"cfg").unwrap();
+        // SCR v0.1 linked files and whole folders into the player's folder.
+        std::os::unix::fs::symlink(game.join("CHOICE.DAT"), rt.join("CHOICE.DAT")).unwrap();
+        std::os::unix::fs::symlink(game.join("CONFIG"), rt.join("CONFIG")).unwrap();
+        // Without the cleanup a linked file is still replaced, not written through.
+        let report = sync(&game, &rt, &CopyAll, MANIFEST).unwrap();
+        assert!(report.brought >= 1);
+        assert!(
+            !fs::symlink_metadata(rt.join("CHOICE.DAT"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::write(rt.join("CHOICE.DAT"), b"played").unwrap();
+        assert_eq!(fs::read(game.join("CHOICE.DAT")).unwrap(), b"player's");
+        // The folder link goes with the cleanup, then real files come in.
+        assert_eq!(remove_legacy_links(&rt).unwrap(), 1);
+        fs::remove_file(rt.join(MANIFEST)).unwrap();
+        sync(&game, &rt, &CopyAll, MANIFEST).unwrap();
+        assert!(fs::symlink_metadata(rt.join("CONFIG")).unwrap().is_dir());
+        fs::write(rt.join("CONFIG/SETUP.CFG"), b"changed").unwrap();
+        assert_eq!(fs::read(game.join("CONFIG/SETUP.CFG")).unwrap(), b"cfg");
+        assert_eq!(remove_legacy_links(&rt.join("missing")).unwrap(), 0);
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn sync_errors_name_the_path() {
+        let missing = test_dir("rt-err").join("no-such-game");
+        let err = sync(&missing, &test_dir("rt-err-rt"), &CopyAll, MANIFEST).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("no-such-game"), "{err}");
     }
 }

@@ -30,30 +30,113 @@ pub fn temp_beside(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// Where [`put_in_place`] keeps the old file while a refused replacement
+/// is retried (`.name.rea-old`).
+pub const BACKUP_SUFFIX: &str = ".rea-old";
+
+fn backup_beside(path: &Path) -> PathBuf {
+    let mut name = OsString::from(".");
+    name.push(path.file_name().unwrap_or_default());
+    name.push(BACKUP_SUFFIX);
+    path.with_file_name(name)
+}
+
+/// `e` with `path` in its message (same kind).
+pub(crate) fn at(path: &Path) -> impl FnOnce(io::Error) -> io::Error + '_ {
+    move |e| io::Error::new(e.kind(), format!("{}: {e}", path.display()))
+}
+
 /// Builds `path`'s new content with `make` at [`temp_beside`], then renames
 /// it over `path`. Parent folders are created. Nothing is ever written
 /// through `path`, which may be a hard link to the player's original.
+///
+/// When the rename keeps being refused (Windows will not replace a
+/// read-only file), the old file is moved aside to a backup name, the new
+/// one renamed in, and the backup removed only after that succeeded; on
+/// failure the old file is moved back and the temp file, holding the new
+/// content, is left for the next attempt. Errors name the path.
 pub fn put_in_place(path: &Path, make: impl FnOnce(&Path) -> io::Result<()>) -> io::Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        fs::create_dir_all(dir)?;
+        fs::create_dir_all(dir).map_err(at(dir))?;
+    }
+    let backup = backup_beside(path);
+    if !exists(path) && exists(&backup) {
+        // An earlier swap failed after moving the old file aside.
+        let _ = fs::rename(&backup, path);
     }
     let tmp = temp_beside(path);
     let _ = fs::remove_file(&tmp);
-    let result = make(&tmp).and_then(|()| {
-        match retry_denied(RENAME_TRIES, RENAME_WAIT, || fs::rename(&tmp, path)) {
-            // Windows refuses to replace a read-only file: remove it (std
-            // ignores the attribute and never changes it), then rename.
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && exists(path) => {
-                fs::remove_file(path)?;
-                fs::rename(&tmp, path)
-            }
-            other => other,
-        }
-    });
+    if let Err(e) = make(&tmp) {
+        let _ = fs::remove_file(&tmp);
+        return Err(at(path)(e));
+    }
+    swap_in(
+        &tmp,
+        path,
+        &mut |from, to| fs::rename(from, to),
+        RENAME_WAIT,
+    )
+    .map_err(at(path))?;
     // Gone after a rename, except when `path` already was the same file
     // (renaming a hard link onto itself does nothing).
     let _ = fs::remove_file(&tmp);
-    result
+    Ok(())
+}
+
+/// Renames `tmp` over `path` (see [`put_in_place`]); `rename` is
+/// injectable so the Windows fallback is tested on any host.
+fn swap_in(
+    tmp: &Path,
+    path: &Path,
+    rename: &mut dyn FnMut(&Path, &Path) -> io::Result<()>,
+    wait: Duration,
+) -> io::Result<()> {
+    match retry_denied(RENAME_TRIES, wait, || rename(tmp, path)) {
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied && exists(path) => {
+            let backup = backup_beside(path);
+            let _ = fs::remove_file(&backup);
+            rename(path, &backup)?;
+            match retry_denied(RENAME_TRIES, wait, || rename(tmp, path)) {
+                Ok(()) => {
+                    // Unlinked only: it may be a hard link to an original.
+                    let _ = fs::remove_file(&backup);
+                    Ok(())
+                }
+                Err(e) => {
+                    let _ = rename(&backup, path);
+                    Err(e)
+                }
+            }
+        }
+        other => other,
+    }
+}
+
+/// Removes (unlinks, never writes) every file below `dir` whose name ends
+/// with one of `suffixes` and is longer than it: temp files older
+/// launchers left (`.cmr3-new`, `.cmr4-new`, `.srr-tmp`; ours are
+/// [`TEMP_SUFFIX`]). A leftover may be a hard link to the player's
+/// original, which unlinking leaves alone. Symbolic links to folders are
+/// not followed. Returns what was removed.
+pub fn remove_stale_temps(dir: &Path, suffixes: &[&str]) -> io::Result<Vec<PathBuf>> {
+    let mut removed = Vec::new();
+    for entry in fs::read_dir(dir).map_err(at(dir))? {
+        let path = entry.map_err(at(dir))?.path();
+        let meta = fs::symlink_metadata(&path).map_err(at(&path))?;
+        if meta.is_dir() {
+            removed.extend(remove_stale_temps(&path, suffixes)?);
+            continue;
+        }
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if suffixes
+            .iter()
+            .any(|s| !s.is_empty() && name.len() > s.len() && name.ends_with(s))
+        {
+            fs::remove_file(&path).map_err(at(&path))?;
+            removed.push(path);
+        }
+    }
+    Ok(removed)
 }
 
 /// Runs `op` up to `tries` times while it fails with PermissionDenied,
@@ -105,7 +188,7 @@ pub fn install_copy(from: &Path, path: &Path) -> io::Result<()> {
 /// the player's original, which shares them.
 pub fn remove(path: &Path) -> io::Result<()> {
     if exists(path) {
-        fs::remove_file(path)?;
+        fs::remove_file(path).map_err(at(path))?;
     }
     Ok(())
 }
@@ -160,6 +243,102 @@ mod tests {
             .collect();
         assert_eq!(names, ["Settings.ini"]);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A rename that refuses to replace `locked` (Windows and a read-only
+    /// file), and with `held` refuses to move the temp file at all (an
+    /// antivirus holding it).
+    fn refusing(locked: PathBuf, held: bool) -> impl FnMut(&Path, &Path) -> io::Result<()> {
+        move |from: &Path, to: &Path| {
+            let from_temp = from.to_string_lossy().ends_with(TEMP_SUFFIX);
+            if (held && from_temp) || (to == locked && to.exists()) {
+                return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+            }
+            fs::rename(from, to)
+        }
+    }
+
+    #[test]
+    fn a_refused_replace_moves_the_old_file_aside_and_back() {
+        let dir = test_dir("fsx-swap");
+        let path = dir.join("Rally_3PC.exe");
+        let tmp = temp_beside(&path);
+        fs::write(&path, b"old").unwrap();
+        fs::write(&tmp, b"new").unwrap();
+        let mut rename = refusing(path.clone(), false);
+        swap_in(&tmp, &path, &mut rename, Duration::ZERO).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert!(
+            !backup_beside(&path).exists(),
+            "the backup goes after success"
+        );
+
+        // The new file cannot go in either: the old one comes back, and
+        // the temp keeps the new content.
+        fs::write(&tmp, b"newer").unwrap();
+        let mut rename = refusing(path.clone(), true);
+        assert!(swap_in(&tmp, &path, &mut rename, Duration::ZERO).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(fs::read(&tmp).unwrap(), b"newer");
+        assert!(!backup_beside(&path).exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_backup_left_by_a_failed_swap_is_recovered() {
+        let dir = test_dir("fsx-recover");
+        let path = dir.join("a.ini");
+        fs::write(backup_beside(&path), b"old").unwrap();
+        // The make fails: nothing replaces it, but the old file is back.
+        assert!(put_in_place(&path, |_| Err(io::Error::other("full disk"))).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn errors_name_the_path() {
+        let dir = test_dir("fsx-context");
+        let err = install_copy(&dir.join("missing"), &dir.join("x.dll")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("x.dll"), "{err}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_temps_are_unlinked() {
+        let dir = test_dir("fsx-stale");
+        fs::create_dir_all(dir.join("Data")).unwrap();
+        fs::write(dir.join(".CMR3.cmr3-new"), b"x").unwrap();
+        fs::write(dir.join("Data/.a.dat.rea-new"), b"x").unwrap();
+        fs::write(dir.join("keep.dat"), b"x").unwrap();
+        fs::write(dir.join(".cmr3-new"), b"exactly the suffix").unwrap();
+        let mut removed = remove_stale_temps(&dir, &[".cmr3-new", TEMP_SUFFIX]).unwrap();
+        removed.sort();
+        assert_eq!(
+            removed,
+            [dir.join(".CMR3.cmr3-new"), dir.join("Data/.a.dat.rea-new")]
+        );
+        assert!(dir.join("keep.dat").exists() && dir.join(".cmr3-new").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_temps_that_are_links_leave_the_original() {
+        let dir = test_dir("fsx-stale-link");
+        let game = test_dir("fsx-stale-link-game");
+        fs::write(game.join("a.dat"), b"original").unwrap();
+        fs::hard_link(game.join("a.dat"), dir.join(".a.dat.cmr3-new")).unwrap();
+        std::os::unix::fs::symlink(&game, dir.join("linked")).unwrap();
+        fs::write(game.join(".b.cmr3-new"), b"not ours to follow").unwrap();
+        remove_stale_temps(&dir, &[".cmr3-new"]).unwrap();
+        assert_eq!(fs::read(game.join("a.dat")).unwrap(), b"original");
+        assert!(
+            game.join(".b.cmr3-new").exists(),
+            "symlinked folders are not entered"
+        );
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(game).unwrap();
     }
 
     #[test]

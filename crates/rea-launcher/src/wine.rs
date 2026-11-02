@@ -72,6 +72,16 @@ pub fn merge_dll_overrides(ours: &str, existing: Option<&str>) -> String {
     rules.join(";")
 }
 
+/// The variable Wine reads DLL overrides from.
+pub const DLL_OVERRIDES: &str = "WINEDLLOVERRIDES";
+
+/// [`merge_dll_overrides`] with the player's rules read from `vars` (the
+/// environment the game will inherit), whatever the name's case.
+pub fn dll_overrides_for(ours: &str, vars: &[(std::ffi::OsString, std::ffi::OsString)]) -> String {
+    let existing = crate::env::lookup(vars, DLL_OVERRIDES).map(|v| v.to_string_lossy());
+    merge_dll_overrides(ours, existing.as_deref())
+}
+
 /// Environment variables that only exist under Wine or Proton (set by
 /// Wine itself, Proton, or the play helpers).
 pub const WINE_VARIABLES: [&str; 3] = ["WINEPREFIX", "WINELOADER", "STEAM_COMPAT_DATA_PATH"];
@@ -155,6 +165,13 @@ mod tests {
             override_names("D3D9.dll,dxgi=n,b;mscoree=d;stray"),
             ["d3d9", "dxgi", "mscoree"]
         );
+    }
+
+    #[test]
+    fn overrides_merge_with_the_inherited_environment() {
+        let env = [("WineDllOverrides".into(), "D3D9.dll=b;xinput1_3=n".into())];
+        assert_eq!(dll_overrides_for("d3d9=n,b", &env), "d3d9=n,b;xinput1_3=n");
+        assert_eq!(dll_overrides_for("d3d9=n,b", &[]), "d3d9=n,b");
     }
 
     #[test]

@@ -216,19 +216,26 @@ impl std::fmt::Display for ArgError {
 
 impl std::error::Error for ArgError {}
 
-/// Applies `--flag value` pairs through the same `apply` as the file.
-/// `keys` lists the settings keys, so a known flag without its value is
-/// told apart from an unknown one. Flags the launcher handles itself
-/// (`--no-window`, `--check`) are taken out before.
+/// Applies `--flag value` pairs through the same `apply` as the file, in
+/// one pass. `keys` lists the settings keys, so a known flag without its
+/// value is told apart from an unknown one; `switches` lists the
+/// launcher's own flags that take no value (`--no-window`, `--check`),
+/// returned in order, so a value is never mistaken for a switch.
 pub fn parse_args<I: IntoIterator<Item = String>>(
     args: I,
     keys: &[&str],
+    switches: &[&str],
     mut apply: impl FnMut(&str, &str) -> Result<(), Rejected>,
-) -> Result<(), ArgError> {
+) -> Result<Vec<String>, ArgError> {
+    let mut seen = Vec::new();
     let mut args = args.into_iter();
     while let Some(flag) = args.next() {
         if matches!(flag.as_str(), "--help" | "-h" | "/?") {
             return Err(ArgError::Help);
+        }
+        if switches.contains(&flag.as_str()) {
+            seen.push(flag);
+            continue;
         }
         let Some(key) = flag_key(&flag).filter(|k| keys.contains(&k.as_str())) else {
             return Err(ArgError::Unknown(flag));
@@ -242,7 +249,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(
             Err(Rejected::Needs(needs)) => return Err(ArgError::Bad { flag, value, needs }),
         }
     }
-    Ok(())
+    Ok(seen)
 }
 
 /// What [`parse_bool`] takes, for messages.
@@ -264,8 +271,10 @@ pub fn on_off(value: bool) -> &'static str {
 /// A display resolution setting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resolution {
-    /// `original`: the size the game shipped with.
+    /// The size the game shipped with (`original`).
     Original,
+    /// The whole screen at its own size (SCR's `fullscreen`).
+    Fullscreen,
     Size(u32, u32),
 }
 
@@ -273,10 +282,33 @@ impl std::fmt::Display for Resolution {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Resolution::Original => f.write_str("original"),
+            Resolution::Fullscreen => f.write_str("fullscreen"),
             Resolution::Size(w, h) => write!(f, "{w}x{h}"),
         }
     }
 }
+
+/// Words a `resolution` value may be instead of a size, per launcher (see
+/// the README's migration notes).
+pub type Aliases = [(&'static str, Resolution)];
+
+/// No words: sizes only (SRR).
+pub const SIZES_ONLY: &Aliases = &[];
+/// `original` (CMR3, CMR4).
+pub const ORIGINAL: &Aliases = &[("original", Resolution::Original)];
+/// `original` or `off` (OR).
+pub const ORIGINAL_OR_OFF: &Aliases = &[
+    ("original", Resolution::Original),
+    ("off", Resolution::Original),
+];
+/// `original`/`off`, and `fullscreen`/`full`/`desktop` (SCR).
+pub const ORIGINAL_OR_FULLSCREEN: &Aliases = &[
+    ("original", Resolution::Original),
+    ("off", Resolution::Original),
+    ("fullscreen", Resolution::Fullscreen),
+    ("full", Resolution::Fullscreen),
+    ("desktop", Resolution::Fullscreen),
+];
 
 /// `WIDTHxHEIGHT` (`x`, `X` or `×`) within `min..=max` on both sides.
 pub fn parse_size(value: &str, min: (u32, u32), max: (u32, u32)) -> Option<(u32, u32)> {
@@ -287,12 +319,15 @@ pub fn parse_size(value: &str, min: (u32, u32), max: (u32, u32)) -> Option<(u32,
     ((min.0..=max.0).contains(&w) && (min.1..=max.1).contains(&h)).then_some((w, h))
 }
 
-/// [`parse_size`], or `original`.
-pub fn parse_resolution(value: &str, min: (u32, u32), max: (u32, u32)) -> Option<Resolution> {
-    if value.trim().eq_ignore_ascii_case("original") {
-        return Some(Resolution::Original);
-    }
-    parse_size(value, min, max).map(|(w, h)| Resolution::Size(w, h))
+/// [`parse_size`], or one of the `aliases` words (any case).
+pub fn parse_resolution(
+    value: &str,
+    min: (u32, u32),
+    max: (u32, u32),
+    aliases: &Aliases,
+) -> Option<Resolution> {
+    parse_enum(value, aliases)
+        .or_else(|| parse_size(value, min, max).map(|(w, h)| Resolution::Size(w, h)))
 }
 
 /// The value whose name matches, any case.
@@ -343,7 +378,7 @@ mod tests {
             match key {
                 "game" => self.game = Some(value.into()),
                 "resolution" => {
-                    let r = parse_resolution(value, (640, 480), (7680, 4320));
+                    let r = parse_resolution(value, (640, 480), (7680, 4320), ORIGINAL);
                     self.resolution = Some(need(r, "WIDTHxHEIGHT or original")?);
                 }
                 "vsync" => self.vsync = Some(need(parse_bool(value), ON_OFF)?),
@@ -365,7 +400,9 @@ mod tests {
 
     fn args(a: &[&str]) -> Result<Settings, ArgError> {
         let mut s = Settings::default();
-        parse_args(a.iter().map(|s| s.to_string()), &KEYS, |k, v| s.apply(k, v))?;
+        parse_args(a.iter().map(|s| s.to_string()), &KEYS, &[], |k, v| {
+            s.apply(k, v)
+        })?;
         Ok(s)
     }
 
@@ -435,6 +472,22 @@ mod tests {
     }
 
     #[test]
+    fn launcher_switches_are_taken_in_the_same_pass() {
+        let mut s = Settings::default();
+        let argv = ["--no-window", "--game", "--check", "--settings", "--linux"];
+        let seen = parse_args(
+            argv.iter().map(|a| a.to_string()),
+            &KEYS,
+            &["--no-window", "--check", "--settings", "--linux"],
+            |k, v| s.apply(k, v),
+        )
+        .unwrap();
+        // `--check` after `--game` is the game folder's value, not a switch.
+        assert_eq!(seen, ["--no-window", "--settings", "--linux"]);
+        assert_eq!(s.game.as_deref(), Some("--check"));
+    }
+
+    #[test]
     fn set_key_keeps_the_rest_of_the_file() {
         let filled = set_key(TEMPLATE, "game", r"D:\CMR3");
         assert!(filled.contains("\n# The game folder.\ngame = D:\\CMR3\n"));
@@ -479,13 +532,24 @@ mod tests {
         assert_eq!(parse_bool("0"), Some(false));
         assert_eq!(parse_bool("maybe"), None);
         assert_eq!(on_off(true), "on");
-        let r = |v| parse_resolution(v, (640, 480), (7680, 4320));
+        let r = |v| parse_resolution(v, (640, 480), (7680, 4320), ORIGINAL);
         assert_eq!(r("ORIGINAL"), Some(Resolution::Original));
         assert_eq!(r("2560 x 1440"), Some(Resolution::Size(2560, 1440)));
         assert_eq!(r("1920×1080"), Some(Resolution::Size(1920, 1080)));
         assert_eq!(r("320x240"), None);
         assert_eq!(r("wide"), None);
         assert_eq!(Resolution::Size(1280, 800).to_string(), "1280x800");
+        // Every launcher's spellings are expressible.
+        let scr = |v| parse_resolution(v, (320, 200), (7680, 4320), ORIGINAL_OR_FULLSCREEN);
+        assert_eq!(scr("Off"), Some(Resolution::Original));
+        assert_eq!(scr("desktop"), Some(Resolution::Fullscreen));
+        assert_eq!(scr("320x200"), Some(Resolution::Size(320, 200)));
+        let or = |v| parse_resolution(v, (640, 480), (7680, 4320), ORIGINAL_OR_OFF);
+        assert_eq!(or("off"), Some(Resolution::Original));
+        assert_eq!(or("full"), None);
+        let srr = |v| parse_resolution(v, (640, 480), (7680, 4320), SIZES_ONLY);
+        assert_eq!(srr("original"), None);
+        assert_eq!(Resolution::Fullscreen.to_string(), "fullscreen");
         assert_eq!(parse_enum("WINDOWED", &MODES), Some(1));
         assert_eq!(one_of(&MODES), "fullscreen, windowed or borderless");
         assert_eq!(one_of(&MODES[..1]), "fullscreen");

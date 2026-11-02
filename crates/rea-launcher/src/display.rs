@@ -36,33 +36,32 @@ pub fn primary(monitors: &[Monitor]) -> Option<Monitor> {
         .copied()
 }
 
-/// Where a fullscreen game should land, and its index in `monitors`: the
-/// primary when it is landscape, else the largest landscape monitor (ties
-/// keep the first), else the primary anyway. CMR4 hands a non-primary
-/// choice to dgVoodoo as `FullScreenOutput = index + 1`.
-pub fn game_monitor(monitors: &[Monitor]) -> Option<(usize, Monitor)> {
+/// The monitor a fullscreen game should use instead of the primary, by
+/// index in `monitors`: `None` keeps the primary (it is landscape, or no
+/// monitor is); otherwise the largest landscape monitor, ties keeping the
+/// first. CMR4 hands it to dgVoodoo as `FullScreenOutput = index + 1`.
+pub fn game_monitor(monitors: &[Monitor]) -> Option<usize> {
     let primary_index = monitors.iter().position(|m| m.primary).unwrap_or(0);
-    let primary = *monitors.get(primary_index)?;
-    if primary.landscape() {
-        return Some((primary_index, primary));
+    if monitors.get(primary_index)?.landscape() {
+        return None;
     }
     monitors
         .iter()
-        .copied()
         .enumerate()
         .filter(|(_, m)| m.landscape())
         .max_by_key(|(index, m)| (u64::from(m.width) * u64::from(m.height), usize::MAX - index))
-        .or(Some((primary_index, primary)))
+        .map(|(index, _)| index)
 }
 
 /// The Steam Deck's screen, landscape.
 pub const STEAM_DECK_SCREEN: (u32, u32) = (1280, 800);
 
-/// A screen size as a landscape resolution a game can use (even sizes,
-/// 640×480 up to 7680×4320), or `None`.
+/// A screen size as a landscape resolution worth offering (even sizes,
+/// larger than 640×480, up to 7680×4320), or `None`. CMR3/CMR4/OR's rule;
+/// SRR also took exactly 640×480.
 pub fn landscape((a, b): (u32, u32)) -> Option<(u32, u32)> {
     let (w, h) = (a.max(b) & !1, a.min(b) & !1);
-    (w >= 640 && h >= 480 && w <= 7680 && h <= 4320).then_some((w, h))
+    (w > 640 && h > 480 && w <= 7680 && h <= 4320).then_some((w, h))
 }
 
 /// True for a Steam Deck's screen, in either orientation.
@@ -112,7 +111,7 @@ mod tests {
     #[test]
     fn landscape_primary_is_kept() {
         let monitors = [m(2160, 3840, false), m(3840, 2160, true)];
-        assert_eq!(game_monitor(&monitors), Some((1, m(3840, 2160, true))));
+        assert_eq!(game_monitor(&monitors), None);
         assert_eq!(primary(&monitors), Some(m(3840, 2160, true)));
     }
 
@@ -120,7 +119,7 @@ mod tests {
     fn portrait_primary_selects_the_landscape_monitor() {
         // Measured: Wine lists the rotated DP-2 first, as primary.
         let monitors = [m(2160, 3840, true), m(3840, 2160, false)];
-        assert_eq!(game_monitor(&monitors), Some((1, m(3840, 2160, false))));
+        assert_eq!(game_monitor(&monitors), Some(1));
     }
 
     #[test]
@@ -131,15 +130,12 @@ mod tests {
             m(2560, 1440, false),
             m(2560, 1440, false),
         ];
-        assert_eq!(game_monitor(&monitors).map(|(i, _)| i), Some(2));
+        assert_eq!(game_monitor(&monitors), Some(2));
     }
 
     #[test]
     fn only_portrait_or_nothing_falls_back() {
-        assert_eq!(
-            game_monitor(&[m(1080, 1920, true)]),
-            Some((0, m(1080, 1920, true)))
-        );
+        assert_eq!(game_monitor(&[m(1080, 1920, true)]), None);
         assert_eq!(game_monitor(&[]), None);
         assert_eq!(primary(&[]), None);
         // No flagged primary: the first monitor stands in.
@@ -150,7 +146,8 @@ mod tests {
     fn landscape_sizes_and_the_steam_deck() {
         assert_eq!(landscape((800, 1280)), Some((1280, 800)));
         assert_eq!(landscape((1365, 767)), Some((1364, 766)));
-        assert_eq!(landscape((640, 480)), Some((640, 480)));
+        assert_eq!(landscape((640, 480)), None);
+        assert_eq!(landscape((642, 482)), Some((642, 482)));
         assert_eq!(landscape((320, 240)), None);
         assert!(is_steam_deck(Some((800, 1280))));
         assert!(!is_steam_deck(Some((1920, 1080))));

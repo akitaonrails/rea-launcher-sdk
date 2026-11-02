@@ -7,6 +7,16 @@
 
 use std::ffi::{OsStr, OsString};
 
+/// The value of `name` in `vars`, compared without regard to case as
+/// Windows does (Wine's environment may hold `WineDllOverrides`); the
+/// last match wins, as with duplicates in a real environment block.
+pub fn lookup<'a>(vars: &'a [(OsString, OsString)], name: &str) -> Option<&'a OsStr> {
+    vars.iter()
+        .rev()
+        .find(|(n, _)| n.to_string_lossy().eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_os_str())
+}
+
 /// `base` (normally `std::env::vars_os()`) with `changes` applied: a value
 /// sets the variable, `None` removes it. Names compare case-insensitively,
 /// as Windows does, and the result is sorted the way `CreateProcessW`
@@ -70,6 +80,17 @@ mod tests {
         list.iter()
             .map(|(n, v)| ((*n).into(), (*v).into()))
             .collect()
+    }
+
+    #[test]
+    fn lookup_ignores_case_and_takes_the_last() {
+        let env = vars(&[
+            ("WineDllOverrides", "a=b"),
+            ("PATH", "x"),
+            ("WINEDLLOVERRIDES", "c=d"),
+        ]);
+        assert_eq!(lookup(&env, "winedlloverrides"), Some(OsStr::new("c=d")));
+        assert_eq!(lookup(&env, "HOME"), None);
     }
 
     #[test]

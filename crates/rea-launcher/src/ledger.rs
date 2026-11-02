@@ -20,8 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::fsx;
 use crate::identify::{hex, sha256};
-use crate::paths::native;
-use crate::runtime;
+use crate::paths::{find_ignoring_case, native};
 
 /// What [`Ledger::install`] and [`Ledger::take_out`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,7 +103,7 @@ impl Ledger {
     /// of `known` (bundle files we may have written before the ledger).
     pub fn owns(&self, rel: &str, known: &[&[u8]]) -> io::Result<bool> {
         plain(rel)?;
-        match fs::read(native(&self.runtime, rel)) {
+        match fs::read(self.runtime_path(rel)) {
             Ok(bytes) => Ok(self.owned.get(rel) == Some(&hex(&sha256(&bytes)))
                 || known.contains(&bytes.as_slice())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -112,13 +111,25 @@ impl Ledger {
         }
     }
 
+    /// The runtime's `rel`, in whatever case it exists (Wine would load a
+    /// `D3D9.DLL` for `d3d9.dll`, so a second spelling is never added).
+    fn runtime_path(&self, rel: &str) -> PathBuf {
+        find_ignoring_case(&self.runtime, rel).unwrap_or_else(|| native(&self.runtime, rel))
+    }
+
+    /// The game's own `rel`, in whatever case it exists.
+    fn game_file(&self, rel: &str) -> Option<PathBuf> {
+        find_ignoring_case(&self.game, rel).filter(|p| p.is_file())
+    }
+
     /// True when the runtime's `rel` is byte-equal to the game's own.
     fn untouched_game_copy(&self, rel: &str) -> io::Result<bool> {
-        let game = native(&self.game, rel);
-        if !game.is_file() {
+        let Some(game) = self.game_file(rel) else {
             return Ok(false);
-        }
-        Ok(fs::read(game)? == fs::read(native(&self.runtime, rel))?)
+        };
+        let runtime = self.runtime_path(rel);
+        Ok(fs::read(&game).map_err(fsx::at(&game))?
+            == fs::read(&runtime).map_err(fsx::at(&runtime))?)
     }
 
     /// Installs `bytes` as the runtime's `rel` and records it — only when
@@ -127,7 +138,7 @@ impl Ledger {
     /// [`Outcome::NotOurs`] (writing nothing) otherwise.
     pub fn install(&mut self, rel: &str, bytes: &[u8], known: &[&[u8]]) -> io::Result<Outcome> {
         plain(rel)?;
-        let path = native(&self.runtime, rel);
+        let path = self.runtime_path(rel);
         if fs::symlink_metadata(&path).is_ok()
             && !self.owns(rel, known)?
             && !self.untouched_game_copy(rel)?
@@ -141,16 +152,18 @@ impl Ledger {
     }
 
     /// Takes the runtime's `rel` out when it is ours: the game's own file
-    /// comes back (copied), or the file goes. Someone else's file stays.
+    /// (found whatever its case) comes back as a copy, or the file goes. Someone else's file stays.
     /// The record goes either way.
     pub fn take_out(&mut self, rel: &str, known: &[&[u8]]) -> io::Result<Outcome> {
         plain(rel)?;
+        let path = self.runtime_path(rel);
         let outcome = if self.owns(rel, known)? {
-            runtime::restore(&self.game, &self.runtime, rel, false)?;
+            match self.game_file(rel) {
+                Some(game) => fsx::install_copy(&game, &path)?,
+                None => fsx::remove(&path)?,
+            }
             Outcome::Restored
-        } else if fs::symlink_metadata(native(&self.runtime, rel)).is_ok()
-            && !self.untouched_game_copy(rel)?
-        {
+        } else if fs::symlink_metadata(&path).is_ok() && !self.untouched_game_copy(rel)? {
             Outcome::NotOurs
         } else {
             Outcome::Absent
@@ -291,6 +304,28 @@ mod tests {
             Outcome::Restored
         );
         assert_eq!(fs::read(rt.join("dsound.dll")).unwrap(), b"game's");
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn names_match_the_game_and_runtime_whatever_their_case() {
+        let (game, rt) = setup("ledger-case");
+        fs::write(game.join("DINPUT8.DLL"), b"game's own").unwrap();
+        fs::write(rt.join("DInput8.dll"), b"game's own").unwrap();
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        assert_eq!(
+            ledger.install("dinput8.dll", b"xidi", &[]).unwrap(),
+            Outcome::Installed
+        );
+        assert_eq!(fs::read(rt.join("DInput8.dll")).unwrap(), b"xidi");
+        assert!(!rt.join("dinput8.dll").exists(), "no second spelling");
+        assert_eq!(
+            ledger.take_out("dinput8.dll", &[]).unwrap(),
+            Outcome::Restored
+        );
+        assert_eq!(fs::read(rt.join("DInput8.dll")).unwrap(), b"game's own");
         for d in [game, rt] {
             fs::remove_dir_all(d).unwrap();
         }

@@ -11,7 +11,7 @@ made that copy the reference.
 
 | Module | What it does |
 |---|---|
-| `fsx` | Whole-file swaps (temp + rename) that never write through a hard link |
+| `fsx` | Whole-file swaps (temp + rename) that never write through a hard link; stale temp cleanup |
 | `paths` | `resolve`, the runtime/game overlap check, `native`, `\\?\` stripping |
 | `runtime` | The private runtime copy: list, plan, sync, restore, manifest |
 | `saves` | Save mirroring by recorded state, for one file or a folder |
@@ -58,7 +58,7 @@ assert!(paths::check_separate(&game, &game.join("runtime")).is_err());
 ### runtime
 
 ```rust
-use rea_launcher::runtime::{self, Policy};
+use rea_launcher::runtime::{self, Policy, Stamp};
 
 struct Cmr3;
 
@@ -66,7 +66,7 @@ impl Policy for Cmr3 {
     fn link(&self, rel: &str) -> bool {
         rel.starts_with("Data/") || rel.ends_with(".exe")
     }
-    fn game_written(&self, rel: &str) -> bool {
+    fn game_written(&self, rel: &str, _source: Stamp) -> bool {
         rel.eq_ignore_ascii_case("CMR3")
     }
 }
@@ -92,7 +92,7 @@ use rea_launcher::saves::{FirstRun, Mirror};
 # std::fs::create_dir_all(&rt)?;
 let state = rt.join(".cmr3-profile-state");
 let (rt_profile, saved) = (rt.join("CMR3"), saves.join("CMR3"));
-let mirror = Mirror::file(&rt_profile, &saved, &state).first_run(FirstRun::NewerWins);
+let mirror = Mirror::file(&rt_profile, &saved, &state, FirstRun::NewerWins);
 let moved = mirror.before()?; // a changed saves copy wins, else a changed runtime copy
 // … the game runs …
 let copied = mirror.after()?; // runtime → saves where the bytes differ
@@ -100,8 +100,11 @@ let copied = mirror.after()?; // runtime → saves where the bytes differ
 # Ok(()) }
 ```
 
-`Mirror::folder(…)` does the same for every file below a folder, and
-`.only(&filter)` limits it to some names.
+`Mirror::folder(…)` does the same for every file below a folder;
+`.scan(&["", "CONFIG"])` looks only directly inside some subfolders,
+`.only(&filter)` limits it to some names, and `.deleted(Deleted::Stays)`
+leaves a save deleted on one side gone. Names match without regard to
+case between the two sides.
 
 ### ledger
 
@@ -127,9 +130,10 @@ ledger.take_out("dinput8.dll", &[xidi])?;
 ```rust
 use rea_launcher::ini::Ini;
 let bytes = b"[GameController]\r\nName=Manette \xE9tendue\r\n";
-let mut ini = Ini::from_bytes(bytes).tight(); // byte-faithful, `key=value`
+let mut ini = Ini::from_bytes(bytes).tight(); // not UTF-8: byte-faithful, `key=value`
 ini.set("Graphics", "VSync", "1");
 assert!(ini.to_bytes().starts_with(bytes));
+assert!(ini.to_text().is_none()); // only to_bytes can write this file back
 assert_eq!(ini.get("graphics", "vsync"), Some("1"));
 ```
 
@@ -155,8 +159,14 @@ let mut s = Settings::default();
 let warnings = cfg::parse("vsync = on\n", "launcher.cfg", |k, v| s.apply(k, v));
 assert!(warnings.is_empty());
 // The same apply serves `--vsync off`.
-cfg::parse_args(["--vsync".into(), "off".into()], &["vsync"], |k, v| s.apply(k, v)).unwrap();
-assert_eq!(s.vsync, Some(false));
+let switches = cfg::parse_args(
+    ["--no-window".into(), "--vsync".into(), "off".into()],
+    &["vsync"],
+    &["--no-window"],
+    |k, v| s.apply(k, v),
+)
+.unwrap();
+assert_eq!((s.vsync, switches), (Some(false), vec!["--no-window".to_string()]));
 // Only the launcher's own line changes; comments stay.
 assert_eq!(cfg::set_key("# Picture\n#vsync =\n", "vsync", "on"), "# Picture\nvsync = on\n");
 ```
@@ -167,6 +177,10 @@ assert_eq!(cfg::set_key("# Picture\n#vsync =\n", "vsync", "on"), "# Picture\nvsy
 use rea_launcher::wine;
 let merged = wine::merge_dll_overrides("dinput8,d3d9=n,b", Some("D3D9.dll=b;xinput1_3=n"));
 assert_eq!(merged, "dinput8,d3d9=n,b;xinput1_3=n");
+// Or straight from the environment the game inherits (any name case):
+let env: Vec<_> = std::env::vars_os().collect();
+let for_game = wine::dll_overrides_for("d3d9=n,b", &env);
+# let _ = for_game;
 let seed = wine::SDL_ONLY; // under wine::WINEBUS_KEY, only where absent
 # let _ = (seed, wine::is_wine_env());
 ```
@@ -214,7 +228,7 @@ let monitors = [
     Monitor { width: 2160, height: 3840, primary: true },
     Monitor { width: 3840, height: 2160, primary: false },
 ];
-assert_eq!(display::game_monitor(&monitors).map(|(i, _)| i), Some(1));
+assert_eq!(display::game_monitor(&monitors), Some(1)); // None: keep the primary
 assert!(display::is_steam_deck(Some((800, 1280))));
 assert_eq!(display::largest_16_9(Some((1280, 800)), (3840, 2160), (1920, 1080)), (1280, 720));
 ```
@@ -245,3 +259,108 @@ use std::ffi::OsStr;
 assert_eq!(args::quote_windows(OsStr::new(r"C:\Games\")), r#""C:\Games\\""#);
 assert_eq!(args::command_line(OsStr::new("a.exe"), &["-d"]), r#""a.exe" "-d""#);
 ```
+
+## Migration
+
+What changes for each launcher when it swaps its own copy for the SDK's.
+Behaviour not listed here is the same.
+
+### Every launcher
+
+- **Temp files** are `.name.rea-new` (CMR3 used `.name.cmr3-new`, CMR4
+  `.name.cmr4-new`, OR `name.tmp`, SRR `name.srr-tmp`). Remove old
+  leftovers once with `fsx::remove_stale_temps(runtime, &[".cmr3-new"])`;
+  it only unlinks, so a leftover hard link to an original is harmless.
+  Pass suffixes like `.tmp` only for folders where the game has no `.tmp`
+  files of its own.
+- **A refused replace** on Windows now moves the old file to
+  `.name.rea-old`, renames the new one in and removes the backup after;
+  the older launchers deleted the old file first, which could lose both.
+- **Runtime presence**: a symbolic link in the runtime counts as missing
+  and is replaced by a real file (`Policy::present`). Call
+  `runtime::remove_legacy_links` once to also drop links to folders.
+- **`Policy::owned` and `game_written`** receive the source `Stamp`.
+- **Errors** from `runtime::sync`, `saves` and `fsx` name the path.
+- **`launcher.cfg`**:
+  - `set_key` rewrites every active line of the key (CMR3, SCR and OR
+    rewrote the first; a later duplicate then won when parsed). CMR4 and
+    SRR already rewrote all.
+  - With no active line, `set_key` turns the first `#key =` placeholder
+    into the line, under its comment (all five appended at the end; OR's
+    test `set_key("#game = x\n", …)` expected `#game = x\ngame = y`).
+    Prose comments that mention the key are not placeholders.
+  - A line starting with `;` is a comment (only `#` was).
+  - Unknown keys produce a warning ("ignored, kept in the file"), as CMR4
+    did; CMR3, SCR, SRR and OR ignored them silently.
+  - `read_file` drops a UTF-8 BOM and reads non-UTF-8 as Latin-1 (CMR4
+    16edc74); only NotFound is a first run.
+  - `parse_args` takes the launcher's value-less switches (`--no-window`,
+    `--check`, `--settings`, `--linux`) in the same pass and returns them;
+    a switch name in a value position is a value.
+- **`resolution`** words come from a table passed to
+  `cfg::parse_resolution`; each launcher's current spellings:
+
+  | Launcher | Table | Sizes |
+  |---|---|---|
+  | CMR3 | `ORIGINAL` (`original` = 640×480) | 640×480 – 7680×4320 |
+  | CMR4 | `ORIGINAL` | 320×240 – 7680×4320 |
+  | OR | `ORIGINAL_OR_OFF` (`off` too) | 640×480 – 7680×4320 |
+  | SCR | `ORIGINAL_OR_FULLSCREEN` (`off`; `fullscreen`, `full`, `desktop`) | 320×200 – 7680×4320 |
+  | SRR | `SIZES_ONLY` | 640×480 – 7680×4320 |
+
+  `×` and `X` are accepted as the separator everywhere (only `x` was).
+- **`display::landscape`** offers sizes larger than 640×480 (CMR3, CMR4,
+  OR); SRR's copy also offered exactly 640×480.
+- **`display::game_monitor`** returns `Some(index)` only when a monitor
+  other than the primary should be used (CMR4's `choose().output` was
+  `index + 1`).
+
+### CMR3
+
+- Profile mirroring: `Mirror::file(…, FirstRun::NewerWins)`. The old
+  `.cmr3-profile-state` (`size\tmtime`) is read; it is rewritten in the
+  five-field format.
+- `runtime::restore(game, runtime, rel, &policy)` takes the policy (for
+  linking and the runtime name) instead of using `is_static` itself.
+- The component ledger (`.cmr3-launcher-components`) keeps its format.
+  `Ledger::install` now refuses (`Outcome::NotOurs`) to replace a file
+  that is neither ours nor an untouched copy of the game's; CMR3's
+  `put_owned` overwrote it.
+
+### CMR4
+
+- `components.rs` → `Ledger`: `install_wrapper`'s refusal becomes
+  `Outcome::NotOurs` instead of an error; turn it into one if wanted.
+- `runtime::list` skips loops, unreadable folders and non-Unicode names
+  with warnings (CMR4 failed on the first unreadable entry).
+- `check_separate` no longer requires the game folder to exist.
+
+### SCR
+
+- `stage_source_tree` → `runtime::sync` with a policy whose
+  `runtime_rel` upper-cases, `owned` covers the generated files, CD images
+  and the sub-50 KB `GLIDE2X.OVL` (by its `Stamp`), and `game_written`
+  the saves. CD-image filtering stays in the launcher.
+- Saves: `Mirror::folder(runtime, saves, state, FirstRun::NewerWins)
+  .scan(&["", "CONFIG", "REPLAYS"]).only(&is_save)`. `.screamer-saves`
+  is read (its upper-case names match any case now). The state file may
+  stay in the runtime folder; it is never mirrored itself.
+- `launcher.log` → `log::Log` (same 1 MiB cap and truncation).
+
+### SRR
+
+- Count `rel.srr-disabled` as present with `Policy::present`.
+- `config.ini` → `Ini::from_bytes(…).tight()` and `to_bytes()`. A valid
+  UTF-8 file is now edited as UTF-8 text (SRR always used Latin-1 per
+  byte, which wrote UTF-8 names back unchanged too, but would have
+  written a new non-ASCII value as Latin-1 into a UTF-8 file).
+
+### OR
+
+- Saves: `Mirror::folder(…, FirstRun::SavesWin)`, plus
+  `.deleted(Deleted::Stays)` to keep OR's launch rule: a save missing on
+  one side while the other is unchanged is not copied back at launch.
+  OR's own record dropped such a save, so it came back one launch later;
+  the SDK remembers it as gone. `.or-saves` (`size\tmtime\trel`) is read.
+- `ini.rs` → `Ini::parse` (spaced `key = value`, as before).
+- Owned files: `Policy::owned(rel, stamp)`.

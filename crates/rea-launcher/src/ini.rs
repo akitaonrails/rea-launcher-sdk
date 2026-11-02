@@ -8,23 +8,29 @@
 //! section starts on its own line (CMR3 15b6aac); CRLF is kept (SRR); and
 //! [`Ini::from_bytes`] edits a file in any encoding byte for byte, keeping
 //! a UTF-8 BOM (SRR f7fbc67 — a controller name in another encoding made
-//! the file unreadable, and the launcher replaced it with a seed).
+//! the file unreadable, and the launcher replaced it with a seed). Each
+//! line keeps its own ending, so an unedited line is unchanged to the byte.
 //!
 //! Keys before the first header belong to the section `""`.
 
 /// The UTF-8 byte-order mark some editors write.
 const BOM: &str = "\u{feff}";
 
-/// An INI file being edited.
+/// One line and the line ending it had (`""`: the last line, without one).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Line {
+    text: String,
+    eol: &'static str,
+}
+
+/// An INI file being edited. Unedited lines keep their exact bytes,
+/// line endings included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ini {
-    lines: Vec<String>,
-    crlf: bool,
-    /// Ends with a newline (an empty file gains one when edited).
-    trailing_newline: bool,
+    lines: Vec<Line>,
     bom: bool,
-    /// Read one byte per character (see [`Ini::from_bytes`]).
-    latin1: bool,
+    /// Not UTF-8: held one byte per character (see [`Ini::from_bytes`]).
+    bytes: bool,
     /// What goes between a key and its value when we write one.
     pub separator: &'static str,
 }
@@ -50,20 +56,39 @@ impl Ini {
             Some(rest) => (true, rest),
             None => (false, text),
         };
+        let mut lines = Vec::new();
+        let mut parts = text.split('\n').peekable();
+        while let Some(part) = parts.next() {
+            let last = parts.peek().is_none();
+            if last && part.is_empty() {
+                break;
+            }
+            let (text, eol) = match (last, part.strip_suffix('\r')) {
+                (true, _) => (part, ""),
+                (false, Some(text)) => (text, "\r\n"),
+                (false, None) => (part, "\n"),
+            };
+            lines.push(Line {
+                text: text.to_owned(),
+                eol,
+            });
+        }
         Ini {
-            lines: text.lines().map(str::to_owned).collect(),
-            crlf: text.contains("\r\n"),
-            trailing_newline: text.is_empty() || text.ends_with('\n'),
+            lines,
             bom,
-            latin1: false,
+            bytes: false,
             separator: " = ",
         }
     }
 
-    /// Parses raw bytes one byte per character, so a file in any encoding
-    /// (valid UTF-8 or not) is written back byte for byte by
-    /// [`Ini::to_bytes`]. Values read this way are Latin-1 decoded.
+    /// Parses a file's bytes. Valid UTF-8 is read as text (as
+    /// [`Ini::parse`]); anything else is held one byte per character
+    /// (Latin-1), so a name in any 8-bit encoding is written back byte for
+    /// byte by [`Ini::to_bytes`]. A UTF-8 BOM is kept either way.
     pub fn from_bytes(bytes: &[u8]) -> Ini {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            return Ini::parse(text);
+        }
         let (bom, body) = match bytes.strip_prefix(BOM.as_bytes()) {
             Some(body) => (true, body),
             None => (false, bytes),
@@ -71,7 +96,7 @@ impl Ini {
         let text: String = body.iter().map(|&b| char::from(b)).collect();
         Ini {
             bom,
-            latin1: true,
+            bytes: true,
             ..Ini::parse(&text)
         }
     }
@@ -82,26 +107,47 @@ impl Ini {
         self
     }
 
-    /// The edited text (a BOM read is written back).
-    pub fn to_text(&self) -> String {
-        let eol = if self.crlf { "\r\n" } else { "\n" };
+    /// False when the file was not UTF-8: then only [`Ini::to_bytes`]
+    /// writes it back faithfully.
+    pub fn is_text(&self) -> bool {
+        !self.bytes
+    }
+
+    /// The ending for new lines: CRLF when the file has any (Notepad).
+    fn eol(&self) -> &'static str {
+        if self.lines.iter().any(|l| l.eol == "\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        }
+    }
+
+    fn joined(&self) -> String {
         let mut out = String::new();
         if self.bom {
             out.push_str(BOM);
         }
-        out.push_str(&self.lines.join(eol));
-        if self.trailing_newline {
-            out.push_str(eol);
+        for line in &self.lines {
+            out.push_str(&line.text);
+            out.push_str(line.eol);
         }
         out
     }
 
-    /// The edited file as bytes: one byte per character after
-    /// [`Ini::from_bytes`] (characters we wrote beyond Latin-1 go as
-    /// UTF-8), else UTF-8.
+    /// The edited text, or `None` for a file that was not UTF-8: its
+    /// characters stand for bytes, and writing them as UTF-8 would corrupt
+    /// it. Use [`Ini::to_bytes`] to write any file.
+    pub fn to_text(&self) -> Option<String> {
+        self.is_text().then(|| self.joined())
+    }
+
+    /// The edited file as bytes: UTF-8 for a text file; for a file that
+    /// was not UTF-8, its own bytes, with what we wrote in it (ASCII keys
+    /// and values; other characters up to U+00FF as one byte, beyond as
+    /// UTF-8).
     pub fn to_bytes(&self) -> Vec<u8> {
-        let text = self.to_text();
-        if !self.latin1 {
+        let text = self.joined();
+        if !self.bytes {
             return text.into_bytes();
         }
         let mut out = Vec::with_capacity(text.len());
@@ -121,13 +167,39 @@ impl Ini {
         out
     }
 
+    /// Inserts a line at `at`. Appended after a last line without an
+    /// ending, it takes over that shape (the file still ends without one).
+    fn insert(&mut self, at: usize, text: String) {
+        let eol = self.eol();
+        let mut new = Line { text, eol };
+        if at == self.lines.len()
+            && let Some(last) = self.lines.last_mut()
+            && last.eol.is_empty()
+        {
+            last.eol = eol;
+            new.eol = "";
+        }
+        self.lines.insert(at, new);
+    }
+
+    /// Removes line `n`, keeping a missing final ending missing.
+    fn remove_line(&mut self, n: usize) {
+        let gone = self.lines.remove(n);
+        if gone.eol.is_empty()
+            && n == self.lines.len()
+            && let Some(last) = self.lines.last_mut()
+        {
+            last.eol = "";
+        }
+    }
+
     /// The line range of `[section]`'s body (`""`: before any header), and
     /// the header's index.
     fn section(&self, section: &str) -> Option<(Option<usize>, std::ops::Range<usize>)> {
         let next_header = |from: usize| {
             self.lines[from..]
                 .iter()
-                .position(|l| header(l).is_some())
+                .position(|l| header(&l.text).is_some())
                 .map_or(self.lines.len(), |n| from + n)
         };
         if section.is_empty() {
@@ -136,51 +208,52 @@ impl Ini {
         let start = self
             .lines
             .iter()
-            .position(|l| header(l).is_some_and(|h| h.eq_ignore_ascii_case(section)))?;
+            .position(|l| header(&l.text).is_some_and(|h| h.eq_ignore_ascii_case(section)))?;
         Some((Some(start), start + 1..next_header(start + 1)))
     }
 
     fn matches(&self, range: std::ops::Range<usize>, key: &str) -> Vec<usize> {
         range
-            .filter(|&n| key_of(&self.lines[n]).is_some_and(|k| k.eq_ignore_ascii_case(key)))
+            .filter(|&n| key_of(&self.lines[n].text).is_some_and(|k| k.eq_ignore_ascii_case(key)))
             .collect()
     }
 
-    /// The value of `key` in `[section]` (the first one), trimmed.
+    /// The value of `key` in `[section]` (the first one), trimmed. In a
+    /// file that was not UTF-8, bytes above 0x7F read as Latin-1.
     pub fn get(&self, section: &str, key: &str) -> Option<&str> {
         let (_, range) = self.section(section)?;
         let n = *self.matches(range, key).first()?;
-        self.lines[n].split_once('=').map(|(_, v)| v.trim())
+        self.lines[n].text.split_once('=').map(|(_, v)| v.trim())
     }
 
     /// Sets `key` in `[section]`: the first match is replaced in place in
     /// our spelling, later duplicates in the section are dropped, a missing
     /// key goes at the section's end (before its trailing blank lines), and
-    /// a missing section is appended to the file.
+    /// a missing section is appended to the file on its own line.
     pub fn set(&mut self, section: &str, key: &str, value: &str) {
         let entry = format!("{key}{}{value}", self.separator);
         let Some((start, range)) = self.section(section) else {
-            if self.lines.last().is_some_and(|l| !l.trim().is_empty()) {
-                self.lines.push(String::new());
+            if self.lines.last().is_some_and(|l| !l.text.trim().is_empty()) {
+                self.insert(self.lines.len(), String::new());
             }
-            self.lines.push(format!("[{section}]"));
-            self.lines.push(entry);
+            self.insert(self.lines.len(), format!("[{section}]"));
+            self.insert(self.lines.len(), entry);
             return;
         };
         let found = self.matches(range.clone(), key);
         if let Some((&first, rest)) = found.split_first() {
-            self.lines[first] = entry;
+            self.lines[first].text = entry;
             for &n in rest.iter().rev() {
-                self.lines.remove(n);
+                self.remove_line(n);
             }
             return;
         }
         let floor = start.map_or(0, |s| s + 1);
         let mut at = range.end;
-        while at > floor && self.lines[at - 1].trim().is_empty() {
+        while at > floor && self.lines[at - 1].text.trim().is_empty() {
             at -= 1;
         }
-        self.lines.insert(at, entry);
+        self.insert(at, entry);
     }
 
     /// Removes every active `key` line in `[section]`. True when any was.
@@ -190,7 +263,7 @@ impl Ini {
         };
         let found = self.matches(range, key);
         for &n in found.iter().rev() {
-            self.lines.remove(n);
+            self.remove_line(n);
         }
         !found.is_empty()
     }
@@ -200,9 +273,9 @@ impl Ini {
         let mut out = Vec::new();
         let mut section = String::new();
         for line in &self.lines {
-            if let Some(h) = header(line) {
+            if let Some(h) = header(&line.text) {
                 section = h.to_owned();
-            } else if let Some(key) = key_of(line) {
+            } else if let Some(key) = key_of(&line.text) {
                 out.push((section.clone(), key.to_owned()));
             }
         }
@@ -219,19 +292,19 @@ mod tests {
     fn set(text: &str, section: &str, key: &str, value: &str) -> String {
         let mut ini = Ini::parse(text);
         ini.set(section, key, value);
-        ini.to_text()
+        ini.to_text().unwrap()
     }
 
     fn tight(text: &str, section: &str, key: &str, value: &str) -> String {
         let mut ini = Ini::parse(text).tight();
         ini.set(section, key, value);
-        ini.to_text()
+        ini.to_text().unwrap()
     }
 
     fn remove(text: &str, section: &str, key: &str) -> String {
         let mut ini = Ini::parse(text);
         ini.remove(section, key);
-        ini.to_text()
+        ini.to_text().unwrap()
     }
 
     #[test]
@@ -319,12 +392,12 @@ mod tests {
         ini.set("", "Width", "1920");
         ini.set("", "Fullscreen", "1");
         assert_eq!(
-            ini.to_text(),
+            ini.to_text().unwrap(),
             "Width = 1920\nHeight=480\nFullscreen = 1\n\n[Other]\nWidth = 1\n"
         );
         let mut empty = Ini::parse("");
         empty.set("", "a", "b");
-        assert_eq!(empty.to_text(), "a = b\n");
+        assert_eq!(empty.to_text().unwrap(), "a = b\n");
     }
 
     #[test]
@@ -375,11 +448,46 @@ mod tests {
         let out = ini.to_bytes();
         assert!(out.starts_with(b"[GameController]\r\nGUID={1234}\r\nName=Manette \xE9tendue\r\n"));
         assert!(out.ends_with(b"VSync=1\r\n"));
+        assert!(
+            !ini.is_text() && ini.to_text().is_none(),
+            "never written as UTF-8 text"
+        );
         // Valid UTF-8 survives byte for byte too.
         let utf8 = "[GameController]\nName=Manette étendue\n".as_bytes();
         let mut ini = Ini::from_bytes(utf8);
         ini.set("Graphics", "VSync", "1");
         assert!(ini.to_bytes().starts_with(utf8));
+    }
+
+    #[test]
+    fn utf8_files_are_text_and_take_utf8_values() {
+        let mut ini = Ini::from_bytes("[Pad]\nName=Manette étendue\n".as_bytes());
+        assert!(ini.is_text());
+        assert_eq!(ini.get("Pad", "Name"), Some("Manette étendue"));
+        ini.set("Pad", "Alias", "Sôlo");
+        assert_eq!(
+            ini.to_bytes(),
+            "[Pad]\nName=Manette étendue\nAlias = Sôlo\n".as_bytes()
+        );
+        // In a Latin-1 file a value up to U+00FF is one byte.
+        let mut latin1 = Ini::from_bytes(b"[Pad]\nName=\xE9\n");
+        assert_eq!(latin1.get("Pad", "Name"), Some("é"));
+        latin1.set("Pad", "Alias", "Sôlo");
+        assert_eq!(latin1.to_bytes(), b"[Pad]\nName=\xE9\nAlias = S\xF4lo\n");
+    }
+
+    #[test]
+    fn mixed_line_endings_and_a_missing_last_one_round_trip() {
+        let bytes = b"[A]\r\nx=1\ny=\xFF\r\nz=2";
+        let mut ini = Ini::from_bytes(bytes);
+        assert_eq!(ini.to_bytes(), bytes);
+        ini.set("A", "w", "3");
+        assert_eq!(ini.to_bytes(), b"[A]\r\nx=1\ny=\xFF\r\nz=2\r\nw = 3");
+        ini.remove("A", "w");
+        assert_eq!(ini.to_bytes(), bytes);
+        let mut text = Ini::parse("a = 1\nb = 2");
+        text.remove("", "b");
+        assert_eq!(text.to_text().unwrap(), "a = 1");
     }
 
     #[test]
@@ -391,6 +499,6 @@ mod tests {
         let mut text = Ini::parse("\u{feff}[Graphics]\nVSync=0\n");
         assert_eq!(text.get("Graphics", "VSync"), Some("0"));
         text.set("Graphics", "VSync", "2");
-        assert_eq!(text.to_text(), "\u{feff}[Graphics]\nVSync = 2\n");
+        assert_eq!(text.to_text().unwrap(), "\u{feff}[Graphics]\nVSync = 2\n");
     }
 }
