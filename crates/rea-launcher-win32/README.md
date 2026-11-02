@@ -10,7 +10,7 @@ state parsing and button bits (`rea_launcher::pad`) — live in the portable
 
 | Module | What | From |
 |---|---|---|
-| `wine` | `is_wine` (export + env fallback), `seed_winebus` | CMR4 / OR |
+| `wine` | `is_wine` (export + env fallback), `seed_winebus`, `app_dll_overrides`/`remove_app_dll_overrides(exe, &[(dll, DllMode)])` → `Applied { written, ours, player }`; pure `DllMode`, `app_defaults_key`, `plan` | CMR4 / OR / SRR |
 | `reg` | pure: `Error`, `seed_missing`, `virtual_store_path`, `uses_32_bit_view`; RAII `Key`: `open_read` and `Key::read_machine` (read-only, never create; VirtualStore value first, as the game sees it); `dword`/`string`/`has`/`set_*`/`*_if_missing`/`seed_dwords`; `Key::machine_or_virtual_store` (HKLM — 32-bit view under `SOFTWARE` only — or HKCU VirtualStore on access denied; `Place::describe` gives the launchers' log labels "HKLM 32-bit view" / "HKCU VirtualStore") | CMR4 |
 | `process` | `Launch` builder (args, cwd, env, hidden) → `Running` (`wait`, `is_alive`, `exit_code`, `close_gracefully(timeout)` → `Closed::{AlreadyExited, Closed, Terminated}`, `message_hook` for a close-hook DLL such as `rea-launcher-close-hook`; `#[must_use]` hook); `top_level_windows(pid)` | CMR4 + CMR3 |
 | `instance` | `single(name) -> Result<Guard, AlreadyRunning>` (named mutex in `Local\`), `AlreadyRunning::bring_to_front(Window::Title/Class)`, `is_window_found`, `mutex_name` | new |
@@ -57,6 +57,21 @@ when no launcher window exists (`is_window_found` is false) it is the game
 that runs, and the player is told so (`Mode::Play`). See the `instance`
 module docs.
 
+## Wine DLL overrides: the registry, not the environment block
+
+Under Wine, `WINEDLLOVERRIDES` in the child's environment block
+(`Launch::env`) is **ignored** by Wine's loader in the game; only the Unix
+environment it inherited (from `<id>-play`, the AppImage or Proton) and the
+registry count. So under plain Proton/Steam, with no helper script, a
+bundled DLL Wine also has (d3d9, dinput8, d3dx9_*…) may silently load as
+Wine's. Before starting the game, under Wine, call
+`wine::app_dll_overrides(exe_file_name, &[(dll, DllMode::…)])`: it writes
+`HKCU\Software\Wine\AppDefaults\<exe>\DllOverrides` in the current prefix
+(only where no value exists; the player's values are kept) and is a no-op
+on Windows. When a component is turned off,
+`wine::remove_app_dll_overrides` removes only the values still equal to
+ours. A Wine test proves both halves (`wine::tests`).
+
 ## Use
 
 ```toml
@@ -69,12 +84,18 @@ rea-launcher-win32 = { git = "https://github.com/akitaonrails/rea-launcher-sdk",
 #[cfg(windows)]
 fn play(runtime: &std::path::Path) -> Result<u32, String> {
     use rea_launcher::wine::merge_dll_overrides;
-    use rea_launcher_win32::{gpu, process::Launch, reg, wine};
+    use rea_launcher_win32::{gpu, process::Launch, reg, wine::{self, DllMode}};
 
     let exe = runtime.join("game.exe");
     let mut launch = Launch::new(&exe).cwd(runtime);
     if wine::is_wine() {
         wine::seed_winebus(&[("Map Controllers", 1)])?;
+        // What Wine's loader reads for the game, in any prefix.
+        wine::app_dll_overrides(
+            "game.exe",
+            &[("d3d9", DllMode::NativeThenBuiltin), ("dxgi", DllMode::NativeThenBuiltin)],
+        )?;
+        // Kept for the log; Wine ignores it in the child's block.
         let existing = std::env::var("WINEDLLOVERRIDES").ok();
         launch = launch.env(
             "WINEDLLOVERRIDES",

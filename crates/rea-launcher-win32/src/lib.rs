@@ -29,7 +29,6 @@ pub mod instance;
 pub mod process;
 #[cfg(windows)]
 pub mod wide;
-#[cfg(windows)]
 pub mod wine;
 #[cfg(windows)]
 pub mod xinput;

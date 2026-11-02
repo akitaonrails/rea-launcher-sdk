@@ -101,8 +101,8 @@ mod windows {
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_CONFIG, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE,
         KEY_READ, KEY_SET_VALUE, KEY_WOW64_32KEY, REG_DWORD, REG_EXPAND_SZ,
-        REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW, RegOpenKeyExW,
-        RegQueryValueExW, RegSetValueExW,
+        REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteValueW,
+        RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
     };
 
     use super::Error;
@@ -339,6 +339,20 @@ mod windows {
                 RegSetValueExW(self.0, name_wide.as_ptr(), 0, REG_DWORD, data.as_ptr(), 4)
             };
             check(code, name)
+        }
+
+        /// Deletes the value `name`; false when it was not there.
+        pub fn delete_value(&self, name: &str) -> Result<bool, Error> {
+            let name_wide = wide(name);
+            // SAFETY: an open key and a NUL-terminated name.
+            match unsafe { RegDeleteValueW(self.0, name_wide.as_ptr()) } {
+                ERROR_SUCCESS => Ok(true),
+                ERROR_FILE_NOT_FOUND => Ok(false),
+                code => Err(Error {
+                    what: format!("cannot delete registry value {name}"),
+                    code,
+                }),
+            }
         }
 
         pub fn set_string(&self, name: &str, value: &str) -> Result<(), Error> {

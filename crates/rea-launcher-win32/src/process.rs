@@ -1,16 +1,24 @@
 //! Starting the game (or a helper) with `CreateProcessW`.
 //!
 //! From CMR4's `run_game`: RAII handles, environment changes in the child's
-//! own block (so `WINEDLLOVERRIDES` works without the Linux helper), and
+//! own block, and
 //! the main thread id, which CMR4 needs to hook the game's message loop
 //! with a close-hook DLL. CMR3 adds arguments (quoted by
 //! `rea_launcher::args::command_line`) and hidden helpers (`CREATE_NO_WINDOW`).
 //! `std::process::Command` covers neither the thread id nor the hook.
 //!
+//! Under Wine, `WINEDLLOVERRIDES` in the child's block is **not** read by
+//! Wine's loader (see `wine` module docs): set the game's DLL overrides
+//! with `wine::app_dll_overrides` before starting it. Keeping the block
+//! value too is harmless (and shows up in the log).
+//!
 //! ```no_run
 //! # use rea_launcher::wine::merge_dll_overrides;
 //! # use rea_launcher_win32::process::Launch;
+//! # use rea_launcher_win32::wine::{self, DllMode};
 //! # fn main() -> Result<(), String> {
+//! // Under Wine: what the loader actually reads (no-op on Windows).
+//! wine::app_dll_overrides("game.exe", &[("d3d9", DllMode::NativeThenBuiltin)])?;
 //! let ours = "d3d9,dxgi=n,b";
 //! let overrides = merge_dll_overrides(ours, std::env::var("WINEDLLOVERRIDES").ok().as_deref());
 //! let game = Launch::new(r"C:\rt\game.exe")
@@ -77,6 +85,8 @@ impl Launch {
     }
 
     /// Sets a variable in the child's environment (the rest is inherited).
+    /// Under Wine, `WINEDLLOVERRIDES` set here does not reach Wine's loader:
+    /// use `wine::app_dll_overrides`.
     pub fn env(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Launch {
         self.env.push((name.into(), Some(value.into())));
         self

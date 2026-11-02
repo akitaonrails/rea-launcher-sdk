@@ -28,3 +28,13 @@ features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ]
+
+# Test helpers for the Wine DLL-override test (`wine::tests`): a stand-in
+# native DLL with a Wine builtin's name, and a program that reports which
+# copy it loaded.
+[[example]]
+name = "d3dx9_35"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "dll_probe"
