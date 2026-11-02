@@ -21,7 +21,7 @@
 #   REA_LAUNCH_CMD       command run instead of the whole supervised launch
 #   REA_PROC             replaces /proc for the game-process check
 
-REA_SDK_VERSION=0.2.0
+REA_SDK_VERSION=0.3.0
 
 # --- configuration -------------------------------------------------------------
 # Every configuration variable the library reads. Sourcing unsets them, so
@@ -39,7 +39,7 @@ REA_SDL_SETTINGS REA_GPU_ICD_PIN REA_GPU REA_DLL_OVERRIDES REA_WINEDBG_OFF
 REA_GAME_PROCS REA_GAME_SETTLE REA_WINEBUS_MARKER REA_WINEBUS_VALUES
 REA_DIRECT_NOTE REA_TEST REA_SYSFS REA_ICD_DIRS REA_NV_LIB_CHECK
 REA_GAMESCOPE_CHECK REA_LAUNCH_CMD REA_PROC REA_INITED REA_ORIGINAL_WORDS
-REA_FUNCTIONS_ONLY REA_PLAY_HERE'
+REA_FUNCTIONS_ONLY REA_PLAY_HERE REA_HELPER_KEYS REA_FLAG_SWITCHES REA_ONE_RUN'
 # shellcheck disable=SC2086
 unset $REA_CONFIG_VARS 2>/dev/null || true
 
@@ -90,6 +90,10 @@ rea_defaults() {
   : "${REA_WINEBUS_MARKER:=.rea-winebus}"
   : "${REA_WINEBUS_VALUES:=DisableHidraw|DisableInput|Enable SDL|Map Controllers}"
   : "${REA_DIRECT_NOTE:=starting without a gamescope of our own}"
+  # One-run flags: launcher.cfg keys the helper itself reads, which a
+  # `--play --<key> value` run overrides for that run (rea_one_run).
+  : "${REA_HELPER_KEYS=}"           # e.g. "scaler resolution display_mode postfx dxvk"
+  : "${REA_FLAG_SWITCHES=--no-window --settings --linux --check}"  # flags without a value
 }
 
 # A test seam's value, only under REA_TEST=1.
@@ -199,6 +203,13 @@ rea_find_cfg() {
 # and value are trimmed (spaces, tabs, CR); # lines are comments. The key is
 # compared as text, never used as a pattern.
 rea_get_key() {
+  # A one-run value (rea_one_run) wins over launcher.cfg; an explicit FILE
+  # is always read as it is.
+  if [ -z "${2:-}" ] && [ -n "${REA_ONE_RUN:-}" ]; then
+    _rea_v=$(printf '%s\n' "$REA_ONE_RUN" | awk -v key="$1" '
+      { i = index($0, "="); if (substr($0, 1, i - 1) == key) { v = substr($0, i + 1); f = 1 } }
+      END { if (f) { print v; exit 0 } exit 1 }') && { printf '%s\n' "$_rea_v"; return 0; }
+  fi
   _rea_f=${2:-$REA_CFG}
   [ -n "$_rea_f" ] && [ -f "$_rea_f" ] || return 0
   awk -v key="$1" '
@@ -213,6 +224,47 @@ rea_get_key() {
       val = v; found = 1
     }
     END { if (found) print val }' "$_rea_f"
+}
+
+# rea_one_run ARGS...: reads `--<key> value` and `--<key>=value` among the
+# launcher arguments of one run, for each key in REA_HELPER_KEYS (the flag
+# spells the key with - for _: display_mode is --display-mode), into
+# REA_ONE_RUN, which rea_get_key prefers over launcher.cfg for this run.
+# The arguments still go to the launcher unchanged. Flags in
+# REA_FLAG_SWITCHES take no value; any other --flag takes the next word.
+# The last one wins, as in the launchers' parser. A value with a newline
+# is ignored.
+rea_one_run() {
+  REA_ONE_RUN=
+  [ -n "$REA_HELPER_KEYS" ] || return 0
+  while [ "$#" -gt 0 ]; do
+    _rea_a=$1; shift
+    case $_rea_a in
+      --*=*) _rea_flag=${_rea_a%%=*} _rea_val=${_rea_a#*=} ;;
+      --*)
+        _rea_flag=$_rea_a _rea_val=
+        _rea_sw=
+        rea_noglob
+        for _rea_x in $REA_FLAG_SWITCHES; do [ "$_rea_x" = "$_rea_a" ] && _rea_sw=1; done
+        rea_glob
+        [ -n "$_rea_sw" ] && continue
+        [ "$#" -gt 0 ] || continue
+        _rea_val=$1; shift ;;
+      *) continue ;;
+    esac
+    _rea_key=$(printf '%s' "${_rea_flag#--}" | tr - _)
+    case $_rea_val in *'
+'*) continue ;; esac
+    rea_noglob
+    for _rea_k in $REA_HELPER_KEYS; do
+      [ "$_rea_k" = "$_rea_key" ] && REA_ONE_RUN="$REA_ONE_RUN$_rea_key=$_rea_val
+"
+    done
+    rea_glob
+  done
+  REA_ONE_RUN=${REA_ONE_RUN%'
+'}
+  return 0
 }
 
 # --- sizes ---------------------------------------------------------------------
@@ -744,6 +796,7 @@ rea_settings() {
 # arguments go to the launcher after REA_PLAY_ARGS.
 rea_start() {
   rea_require_exe || exit 1
+  rea_one_run "$@"
   rea_gpu_init
   [ -f "$REA_CFG" ] || rea_find_cfg   # the settings window may have made it
   REA_GAME_ENV=
@@ -785,6 +838,9 @@ rea_start() {
   rea_glob
   IFS=$_rea_ifs
   rea_launch "$@"
+  _rea_rc=$?
+  REA_ONE_RUN=
+  return "$_rea_rc"
 }
 
 # --- commands --------------------------------------------------------------------

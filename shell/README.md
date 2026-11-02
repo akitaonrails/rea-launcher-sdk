@@ -144,6 +144,25 @@ empty value (empty means "none").
 | `REA_GAME_SETTLE` | `3` | |
 | `REA_DIRECT_NOTE` | `starting without a gamescope of our own` | the message for a run without gamescope |
 
+### One-run flags
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `REA_HELPER_KEYS` † | empty | `launcher.cfg` keys the helper reads itself that a play run may override, e.g. `scaler resolution display_mode postfx dxvk` (CMR3). The flag is the key with `-` for `_` (`display_mode` → `--display-mode`) |
+| `REA_FLAG_SWITCHES` † | `--no-window --settings --linux --check` | launcher flags that take no value; every other `--flag` takes the next word |
+
+`x-play --play --scaler fsr --resolution 1280x720` passes the flags to the
+launcher unchanged (it applies them for one run, without saving them).
+`rea_start` also reads `--<key> value` and `--<key>=value` for each key in
+`REA_HELPER_KEYS` into `REA_ONE_RUN`. For that run `rea_get_key KEY` returns
+the flag's value over `launcher.cfg`: gamescope's size, filter and
+windowed skip, and any hook such as CMR3's postfx. The last flag wins, as in
+the launchers' parser. An invalid value falls back like an invalid file
+value. `launcher.cfg` is never written, and the next run reads it again.
+`rea_get_key KEY FILE`, with an explicit file, always reads the file. Only
+play runs (`--play`, `play`, `start`) take one-run flags; arguments to the
+settings window go to the window, which saves what the player picks.
+
 ### Size and gamescope
 
 | Variable | Default | Meaning |
@@ -341,6 +360,7 @@ only changes invalid input:
 | CMR3 `dll_overrides` | `REA_DLL_OVERRIDES` + `REA_WINEDBG_OFF` (`rea_dll_overrides`) |
 | CMR3 `prepare_prefix` | `rea_wine_no_crash_dialog` in `rea_hook_before_start` |
 | CMR3 `display_mode` | `REA_WINDOWED_KEY=display_mode` |
+| CMR3 `rea_hook_command` + `one_run_cfg` (one-run `--scaler/--postfx/--resolution/--display-mode/--dxvk`) | delete both; set `REA_HELPER_KEYS="scaler postfx resolution display_mode dxvk"`. `--play`/`play`/`start` then reach `rea_cmd_play` directly, and `one-run.cfg` is no longer written |
 | CMR3 `postfx_env`, `grade` | stay in cmr3-play, called from `rea_hook_before_start`. Replace the three `export CMR3_VK_*` lines with `rea_game_env VK_LAYER_PATH …`, `rea_game_env VK_INSTANCE_LAYERS …`, `rea_game_env VKBASALT_CONFIG_FILE …`. `$HERE` becomes `$REA_HERE`, `$STATE` becomes `$REA_STATE`, `$LAUNCHER` becomes `$REA_EXE` |
 | SRR `GAME_ALIVE` / `game_alive`, `SRR_PROC` | `REA_GAME_PROCS`, `rea_game_alive`, `REA_PROC` |
 | SRR `prefix_wine` | `rea_wine` |

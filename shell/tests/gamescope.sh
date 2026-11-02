@@ -157,6 +157,47 @@ rea_start > /dev/null
 check "SRR's play flags" "$(tail -2 "$T/args" | tr '\n' ' ')" "<--no-window> <--linux> "
 REA_PLAY_ARGS=--no-window
 
+echo "# one-run flags for the keys the helper reads (REA_HELPER_KEYS)"
+REA_HELPER_KEYS="scaler resolution display_mode postfx dxvk" REA_WINDOWED_KEY=display_mode
+printf 'resolution = 1920x1080\nscaler = linear\ndisplay_mode = fullscreen\n' > "$C"
+rm -f "$T/ran"; rea_start --scaler fsr --resolution 1280x720 > /dev/null
+contains "--scaler/--resolution override launcher.cfg for the run" "$(ran)" "gamescope -W 1280 -H 720 -w 1280 -h 720 -f -S fit -F fsr --"
+check "the flags still reach the launcher" "$(tail -4 "$T/args" | tr '\n' ' ')" "<--scaler> <fsr> <--resolution> <1280x720> "
+check "launcher.cfg is untouched" "$(cat "$C")" "resolution = 1920x1080
+scaler = linear
+display_mode = fullscreen"
+rm -f "$T/ran"; rea_start > /dev/null
+contains "the next run reads launcher.cfg again" "$(ran)" "-w 1920 -h 1080 -f -S fit -F linear --"
+check "nothing left over after a run" "${REA_ONE_RUN:-}" ""
+rm -f "$T/ran"; rea_start --display-mode windowed > /dev/null
+lacks "--display-mode (key display_mode) skips gamescope for the run" "$(ran)" "gamescope"
+rm -f "$T/ran"; rea_start --scaler=nearest --resolution=2560x1440 > /dev/null
+contains "--key=value spelling" "$(ran)" "-w 2560 -h 1440 -f -S fit -F nearest --"
+rm -f "$T/ran"; rea_start --no-window --scaler fsr --check --scaler pixel > /dev/null
+contains "switches take no value; the last flag wins" "$(ran)" "-F pixel --"
+rm -f "$T/ran"; rea_start --game 'C:\\x' --resolution 3840x2160 --runtime /r > /dev/null
+contains "other flags' values are skipped, not read as flags" "$(ran)" "-w 3840 -h 2160 "
+rm -f "$T/ran"; rea_start --resolution > /dev/null
+contains "a flag without its value changes nothing" "$(ran)" "-w 1920 -h 1080 "
+rm -f "$T/ran"; rea_start --fps 60 --resolution junk > /dev/null
+contains "an invalid one-run size is the default, as from the file" "$(ran)" "-w 1920 -h 1080 "
+rm -f "$T/ran"; rea_start --unrelated 1280x720 1280x720 > /dev/null
+contains "positional words are not values" "$(ran)" "-w 1920 -h 1080 "
+rea_hook_before_start() { rea_get_key postfx > "$T/postfx"; rea_get_key postfx "$C" > "$T/postfx-file"; }
+printf 'postfx = off\n' >> "$C"
+rea_start --postfx color > /dev/null
+check "hooks see the one-run value (CMR3 postfx)" "$(cat "$T/postfx")" color
+check "an explicit FILE is read as it is" "$(cat "$T/postfx-file")" off
+rea_hook_before_start() { :; }
+REA_HELPER_KEYS=
+rm -f "$T/ran"; rea_start --scaler fsr > /dev/null
+contains "no REA_HELPER_KEYS: flags only go to the launcher" "$(ran)" "-F linear --"
+REA_WINDOWED_KEY=
+rea_cmd_play_test() { REA_HELPER_KEYS=scaler; rm -f "$T/ran"; rea_main --play --scaler nis > /dev/null; }
+rea_cmd_play_test
+contains "through rea_main --play" "$(ran)" "-F nis --"
+REA_HELPER_KEYS=
+
 echo "# player values never glob"
 mkdir -p "$T/globdir"; : > "$T/globdir/AAA"; : > "$T/globdir/BBB"
 cd "$T/globdir"
