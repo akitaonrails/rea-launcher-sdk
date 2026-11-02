@@ -28,6 +28,13 @@
 
 ## Upgrading a launcher (avoid regressions)
 
+**Only when it pays.** Bump a launcher only when the new SDK version
+fixes something or adds a feature that launcher uses (security fixes
+always count). Read the CHANGELOG between the pinned tag and the new one
+and name the items that matter for this launcher in the bump commit; if
+there are none, skip the launcher and close its `sdk-update` pull
+request.
+
 1. **Baseline.** On the launcher's `main`: full check, `sdk/scripts/wine-test`,
    and the golden snapshots (`STANDARDS.md`, "Golden snapshots") all pass.
    If the launcher has no snapshots yet, add them *first*, at the old SDK
