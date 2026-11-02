@@ -10,9 +10,15 @@ on:
   workflow_call:
     inputs:
       runs-on:
-        description: Runner label.
+        description: Runner label (Screamer uses ubuntu-22.04 for an older glibc).
         type: string
         default: ubuntu-24.04
+      concurrency-key:
+        description: >-
+          Extra concurrency key; give each call a different one when a
+          workflow calls launcher-ci more than once, or they cancel each other.
+        type: string
+        default: ""
       rust-toolchain:
         description: rustup toolchain (e.g. stable, 1.95.0).
         type: string
@@ -25,6 +31,10 @@ on:
         description: Extra Ubuntu packages, space-separated.
         type: string
         default: gcc-mingw-w64-i686 lld zip unzip
+      apt-i386:
+        description: Run dpkg --add-architecture i386 first (for :i386 packages, as CMR3's vkBasalt build).
+        type: boolean
+        default: false
       submodules:
         description: actions/checkout submodules (false, true, recursive).
         type: string
@@ -34,11 +44,26 @@ on:
         type: string
         default: linux/*-play packaging/*.sh packaging/appimage/AppRun packaging/appimage/*.sh sdk/packaging/*.sh sdk/rea-play.sh
       shell-tests:
-        description: Globs of shell test scripts, each run with sh (dash).
+        description: >-
+          Globs of shell test scripts, space-separated, each run with sh
+          (dash on Ubuntu); a failing script fails the job. Globs that match
+          nothing are skipped.
         type: string
         default: linux/tests/*.sh packaging/tests/*.sh
+      shell-tests-skip:
+        description: >-
+          Shell patterns (space-separated) for test paths not to run, e.g.
+          end-to-end tests that need the game or a dev kit.
+        type: string
+        default: "*e2e*"
+      clippy-args:
+        description: Extra cargo clippy arguments (empty lints only the library and binaries).
+        type: string
+        default: --all-targets
       audit:
-        description: Run cargo audit and cargo deny check.
+        description: >-
+          Run cargo audit and cargo deny check. Needs a deny.toml that allows
+          the SDK's git source (start from the SDK's templates/deny.toml).
         type: boolean
         default: true
       sdk-check:
@@ -97,7 +122,7 @@ jobs:
     # Distinct from the caller's own concurrency group (sharing one would
     # deadlock); a newer push cancels an older run, never a tag build.
     concurrency:
-      group: rea-launcher-ci-${{ github.repository }}-${{ github.ref }}
+      group: rea-launcher-ci-${{ github.repository }}-${{ github.ref }}-${{ inputs.concurrency-key }}
       cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
     env:
       RUST_TARGET: ${{ inputs.rust-target }}
@@ -148,8 +173,10 @@ jobs:
         shell: sh
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
+          APT_I386: ${{ inputs.apt-i386 }}
         run: |
           case $APT_PACKAGES in *[!A-Za-z0-9.+:=\ -]*) echo "::error::unexpected characters in apt-packages"; exit 1 ;; esac
+          if [ "$APT_I386" = true ]; then sudo dpkg --add-architecture i386; fi
           sudo apt-get update
           # shellcheck disable=SC2086
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
@@ -173,6 +200,10 @@ jobs:
       - name: Dependency advisories, licences and sources
         if: inputs.audit
         run: |
+          if [ ! -f deny.toml ]; then
+            echo "::error::audit is on but there is no deny.toml: copy the SDK's templates/deny.toml (it allows the SDK git source), or pass audit: false"
+            exit 1
+          fi
           cargo install --locked cargo-audit@0.22.1 cargo-deny@0.19.8
           cargo audit
           cargo deny check
@@ -186,7 +217,8 @@ jobs:
           # Unquoted on purpose: split the list, expand each glob.
           for f in $GLOBS; do
             [ -f "$f" ] || continue
-            sh -n "$f" && echo "ok   $f"
+            sh -n "$f" || { echo "::error file=$f::sh -n failed"; exit 1; }
+            echo "ok   $f"
             n=$((n + 1))
           done
           echo "$n script(s) checked"
@@ -195,18 +227,33 @@ jobs:
         shell: sh
         env:
           GLOBS: ${{ inputs.shell-tests }}
+          SKIP_PATTERNS: ${{ inputs.shell-tests-skip }}
         run: |
           for t in $GLOBS; do
             [ -f "$t" ] || continue
+            skip=''
+            set -f
+            for pat in $SKIP_PATTERNS; do
+              # shellcheck disable=SC2254 # a pattern on purpose
+              case $t in $pat) skip=1 ;; esac
+            done
+            set +f
+            if [ -n "$skip" ]; then echo "skip $t"; continue; fi
             echo "::group::$t"
-            sh "$t"
+            sh "$t" || { echo "::endgroup::"; echo "::error file=$t::$t failed"; exit 1; }
             echo "::endgroup::"
           done
 
       - name: Lint (release target)
         shell: sh
+        env:
+          CLIPPY_ARGS: ${{ inputs.clippy-args }}
         run: |
-          set -- --release --workspace --all-targets --locked
+          case $CLIPPY_ARGS in *[!A-Za-z0-9_=,.:\ -]*) echo "::error::unexpected characters in clippy-args"; exit 1 ;; esac
+          set -f
+          # shellcheck disable=SC2086 # split the argument list on purpose
+          set -- --release --workspace --locked $CLIPPY_ARGS
+          set +f
           if [ -n "$RUST_TARGET" ]; then set -- "$@" --target "$RUST_TARGET"; fi
           cargo clippy "$@" -- -D warnings
 

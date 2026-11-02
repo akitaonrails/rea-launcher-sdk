@@ -58,6 +58,12 @@ V=$T/repo/sdk
 mkdir -p "$V"
 cp -R "$HERE/.." "$V/packaging"
 echo '# vendored play library' > "$V/rea-play.sh"
+# Without any library, and as an SDK checkout (library in shell/).
+BARE=$T/bare
+mkdir -p "$BARE"; cp -R "$HERE/.." "$BARE/packaging"
+CO=$T/checkout
+mkdir -p "$CO/shell"; cp -R "$HERE/.." "$CO/packaging"
+echo '# checkout play library' > "$CO/shell/rea-play.sh"
 printf 'png' > "$T/game-launcher.png"
 
 run() { sh "$BUILD" "$@" >"$T/out" 2>&1; }
@@ -108,6 +114,7 @@ mkdir -p "$N/linux" "$N/lib" "$N/resources"
 for f in NativeLauncher dosbox README.md THIRD_PARTY.md LICENSE-MIT LICENSE-APACHE lib/libSDL2.so resources/a.txt; do echo "$f" > "$N/$f"; done
 printf '#!/bin/sh\necho "l=$SCR_LAUNCHER db=$SCR_DOSBOX ld=$LD_LIBRARY_PATH"\n' > "$N/linux/native-play"
 printf '[Desktop Entry]\nType=Application\nName=Native\nExec=AppRun\nIcon=game-launcher\nCategories=Game;\n' > "$T/native.desktop"
+BUILD=$BARE/packaging/appimage-wine.sh
 if run --native --app native --exe NativeLauncher --env-prefix SCR --pins "$T/tools.pins" \
   --icon "$T/game-launcher.png" --desktop "$T/native.desktop" --payload dosbox --payload lib \
   --optional-payload resources --optional-payload not-there --env-path SCR_DOSBOX=dosbox "$N" "$T/out2"; then
@@ -116,7 +123,7 @@ else
   bad "native build succeeds: $(cat "$T/out")"
 fi
 B=$T/out2/NativeLauncher-x86_64.AppImage.d
-lacks "no play library when none is vendored" "$B/usr/lib/native/rea-play.sh"
+lacks "no play library when none exists and the helper needs none" "$B/usr/lib/native/rea-play.sh"
 lacks "no Wine in native mode" "$B/usr/lib/wine"
 lacks "no Wine docs in native mode" "$B/usr/share/doc/wine"
 [ -x "$B/usr/lib/native/NativeLauncher" ] && ok "native exe executable" || bad "native exe executable"
@@ -126,6 +133,29 @@ o=$(unset LD_LIBRARY_PATH; sh "$B/AppRun" 2>&1)
 check "native AppRun" "l=$B/usr/lib/native/NativeLauncher db=$B/usr/lib/native/dosbox ld=$B/usr/lib/native/lib" "$o"
 if grep -q 'WINE' "$B/AppRun"; then bad "no Wine lines in native AppRun"; else ok "no Wine lines in native AppRun"; fi
 check "desktop copied as given" "$(cat "$T/native.desktop")" "$(cat "$B/game-launcher.desktop")"
+
+# A helper that sources rea-play.sh never ships without it.
+cp "$N/linux/native-play" "$T/native-play.orig"
+printf '#!/bin/sh\n. "$(dirname "$0")/rea-play.sh"\n' > "$N/linux/native-play"
+if run --native --app native --exe NativeLauncher --env-prefix SCR --pins "$T/tools.pins" \
+  --icon "$T/game-launcher.png" --title N "$N" "$T/out4"; then
+  bad "helper needing rea-play.sh without a library fails (built)"
+elif grep -q 'sources rea-play.sh but none was found' "$T/out"; then
+  ok "helper needing rea-play.sh without a library fails"
+else
+  bad "helper needing rea-play.sh without a library fails: $(cat "$T/out")"
+fi
+# An SDK checkout supplies shell/rea-play.sh.
+BUILD=$CO/packaging/appimage-wine.sh
+if run --native --app native --exe NativeLauncher --env-prefix SCR --pins "$T/tools.pins" \
+  --icon "$T/game-launcher.png" --title N "$N" "$T/out5"; then
+  check "SDK checkout's shell/rea-play.sh beside the helper" "# checkout play library" \
+    "$(cat "$T/out5/NativeLauncher-x86_64.AppImage.d/usr/lib/native/rea-play.sh" 2>/dev/null)"
+else
+  bad "SDK checkout build: $(cat "$T/out")"
+fi
+cp "$T/native-play.orig" "$N/linux/native-play"
+BUILD=$HERE/../appimage-wine.sh
 
 # An explicit --play-lib wins.
 echo '# explicit' > "$T/explicit.sh"

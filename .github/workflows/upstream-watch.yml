@@ -8,6 +8,8 @@ name: upstream-watch
 #
 # Watch list, one per line (# comments): name owner/repo asset-name-prefix
 # where name is a pin in the pin file (sdk/packaging/pins.sh format).
+# Names without a pin, malformed lines and unreachable repositories are
+# skipped with a warning in the run summary, never an issue (as CMR3's).
 #
 # The calling job grants contents: read and issues: write; schedule it from
 # the launcher (on: schedule) as CMR3 does.
@@ -58,12 +60,14 @@ jobs:
           PIN_FILE=$PINS
           report=$RUNNER_TEMP/upstream-report.txt
           : > "$report"
+          # Skipped entries: a warning annotation and a summary line only.
+          skip() { echo "::warning::upstream-watch: $1"; echo "- skipped: $1" >> "$GITHUB_STEP_SUMMARY"; }
           awk '!/^[ \t]*(#|$)/' "$WATCH_LIST" > "$RUNNER_TEMP/watch.txt"
           while read -r name repo prefix; do
-            case $repo in */* ) ;; *) echo "$name: bad repository '$repo'" >> "$report"; continue ;; esac
-            case $repo in *[!A-Za-z0-9_./-]*) echo "$name: bad repository '$repo'" >> "$report"; continue ;; esac
-            pinned=$(pin_sha "$name") || { echo "$name: no pin in $PINS" >> "$report"; continue; }
-            latest=$(gh api "repos/$repo/releases/latest") || { echo "$name: cannot read the latest release of $repo" >> "$report"; continue; }
+            case $repo in */*) ;; *) skip "$name: bad repository '$repo'"; continue ;; esac
+            case $repo in *[!A-Za-z0-9_./-]*) skip "$name: bad repository '$repo'"; continue ;; esac
+            pinned=$(pin_sha "$name" 2>/dev/null) || { skip "$name: no pin in $PINS"; continue; }
+            latest=$(gh api "repos/$repo/releases/latest") || { skip "$name: cannot read the latest release of $repo"; continue; }
             tag=$(printf '%s' "$latest" | jq -r .tag_name)
             url=$(printf '%s' "$latest" | jq -r --arg p "$prefix" \
               '[.assets[] | select(.name | startswith($p)) | .browser_download_url][0] // empty')

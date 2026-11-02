@@ -76,7 +76,19 @@ done < "$T/list"
   echo "commit=$COMMIT"
 } > "$STAGE/VERSION"
 
+# A sync interrupted mid-swap leaves .sdk-sync.old.<pid> (the previous
+# sdk/) and maybe a partial .sdk-sync.new.<pid>.
+interrupted() {
+  for d in "$REPO"/.sdk-sync.old.*; do
+    if [ -f "$d/VERSION" ]; then printf '%s\n' "$d"; return 0; fi
+  done
+  return 1
+}
+
 if [ "$MODE" = check ]; then
+  if [ ! -d "$REPO/sdk" ] && interrupted >/dev/null; then
+    die "$REPO/sdk is missing after an interrupted sync; re-run scripts/sdk-sync $REPO"
+  fi
   [ -d "$REPO/sdk" ] || die "$REPO has no sdk/ (run scripts/sdk-sync $REPO)"
   (cd "$STAGE" && find . -type f | LC_ALL=C sort) > "$T/want"
   (cd "$REPO/sdk" && find . ! -type d | LC_ALL=C sort) > "$T/have"
@@ -103,6 +115,16 @@ if [ "$MODE" = check ]; then
   echo "sdk/ matches rea-launcher-sdk $TAG ($COMMIT)"
   exit 0
 fi
+
+# Recover from an interrupted swap: restore the previous sdk/, then drop
+# leftovers from earlier runs.
+if [ ! -e "$REPO/sdk" ] && old=$(interrupted); then
+  mv "$old" "$REPO/sdk"
+  echo "sdk-sync: restored $REPO/sdk from an interrupted sync" >&2
+fi
+for d in "$REPO"/.sdk-sync.new.* "$REPO"/.sdk-sync.old.*; do
+  if [ -e "$d" ]; then rm -rf "$d"; fi
+done
 
 # Sync: replace sdk/ as a whole, but never a folder this script didn't write.
 if [ -e "$REPO/sdk" ] && [ ! -f "$REPO/sdk/VERSION" ]; then

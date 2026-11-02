@@ -73,6 +73,22 @@ grep -q '^commit=.*-dirty$' "$L/sdk/VERSION" && ok "dirty SDK is stamped" || bad
 sh "$SYNC" --tag v1.2.3 "$L" >/dev/null 2>&1
 grep -qx 'tag=v1.2.3' "$L/sdk/VERSION" && ok "--tag is recorded" || bad "--tag is recorded"
 if sh "$SYNC" --tag 'v1;rm' "$L" >/dev/null 2>&1; then bad "unsafe tag refused"; else ok "unsafe tag refused"; fi
+# A sync killed mid-swap (sdk/ moved aside, new copy partial) recovers.
+mv "$L/sdk" "$L/.sdk-sync.old.111"
+mkdir -p "$L/.sdk-sync.new.111/packaging"; echo partial > "$L/.sdk-sync.new.111/packaging/pins.sh"
+if sh "$SYNC" --check "$L" >/dev/null 2>"$T/err"; then bad "check reports an interrupted sync"
+elif grep -q 'interrupted sync' "$T/err"; then ok "check reports an interrupted sync"
+else bad "check reports an interrupted sync: $(cat "$T/err")"; fi
+if sh "$SYNC" "$L" >/dev/null 2>"$T/err" && grep -q 'restored' "$T/err"; then ok "sync restores sdk/ after an interrupted swap"
+else bad "sync restores sdk/ after an interrupted swap: $(cat "$T/err")"; fi
+check_ok "recovered sdk/ has no drift"
+[ -z "$(ls -A "$L" | grep '^\.sdk-sync' || true)" ] && ok "stray swap folders removed" || bad "stray swap folders removed"
+# Leftovers next to an intact sdk/ are dropped, sdk/ kept.
+mkdir -p "$L/.sdk-sync.old.222" "$L/.sdk-sync.new.333"
+sh "$SYNC" "$L" >/dev/null 2>&1
+[ -f "$L/sdk/VERSION" ] && [ -z "$(ls -A "$L" | grep '^\.sdk-sync' || true)" ] \
+  && ok "leftovers beside an intact sdk/ cleaned" || bad "leftovers beside an intact sdk/ cleaned"
+
 # A foreign sdk/ folder is never replaced.
 F=$T/foreign; mkdir -p "$F/sdk"; echo mine > "$F/sdk/notes.txt"
 if sh "$SYNC" "$F" >/dev/null 2>&1; then bad "foreign sdk/ refused"; else ok "foreign sdk/ refused"; fi

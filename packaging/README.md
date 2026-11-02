@@ -74,9 +74,11 @@ sdk/packaging/appimage-wine.sh --app cmr4 --exe CMR4Launcher.exe \
 ```
 
 Layout: the launcher, `linux/<app>-play` with the SDK play library beside
-it (`usr/lib/<app>/rea-play.sh`, taken from the vendored `sdk/rea-play.sh`
-or `--play-lib FILE`), and every `--payload` path go to `usr/lib/<app>/` at the same
-relative paths; README, THIRD_PARTY, both licences, CHANGELOG,
+it (`usr/lib/<app>/rea-play.sh`: `--play-lib FILE`, else the vendored
+`sdk/rea-play.sh`, else `shell/rea-play.sh` when run from an SDK checkout),
+and every `--payload` path go to `usr/lib/<app>/` at the same relative
+paths. A helper that mentions `rea-play.sh` fails the build when no library
+is found, so an AppImage never ships without it; README, THIRD_PARTY, both licences, CHANGELOG,
 `linux/README.md` and every `--doc` go to `usr/share/doc/<app>/`; Wine to
 `usr/lib/wine` (development tools stripped) with its licence files in
 `usr/share/doc/wine`. AppRun exports `<PREFIX>_LAUNCHER`, `<PREFIX>_WAIT=1`,
@@ -114,6 +116,10 @@ components/cmr4close.dll
 
 Flags after a path: `x` (executable), `empty` (may be empty), `optional`.
 A path with `*` is a pattern. Anything not listed fails.
+
+A zip that ships the helper must ship the play library beside it: the
+package script copies `sdk/rea-play.sh` to `linux/rea-play.sh`, and the
+allowlist lists `linux/rea-play.sh`.
 
 ## A launcher's build.yml
 
@@ -168,23 +174,46 @@ jobs:
       artifact-pattern: CMR4Launcher-*
 ```
 
-Inputs of `launcher-ci.yml` (all optional): `runs-on`, `rust-toolchain`
-(stable), `rust-target` (i686-pc-windows-gnu; empty for a native build),
-`apt-packages`, `submodules`, `shell-syntax` and `shell-tests` (globs),
-`audit` (cargo-audit 0.22.1 + cargo-deny 0.19.8), `sdk-check`, `sdk-dir`,
-`imports-test`, `package-command`, `package-dir`, `package-allowlist`,
-`artifact-name`, `artifact-paths`. Commands run in bash with
+Inputs of `launcher-ci.yml` (all optional):
+
+| Input | Default | Notes |
+|---|---|---|
+| `runs-on` | `ubuntu-24.04` | Screamer: `ubuntu-22.04` (older glibc for its native binaries) |
+| `concurrency-key` | empty | set a distinct value per call when one workflow calls launcher-ci twice, or the calls cancel each other |
+| `rust-toolchain` | `stable` | |
+| `rust-target` | `i686-pc-windows-gnu` | empty builds for the host (Screamer) |
+| `clippy-args` | `--all-targets` | CMR3/SRR may pass `""` (library and binaries only) |
+| `apt-packages` | `gcc-mingw-w64-i686 lld zip unzip` | |
+| `apt-i386` | `false` | `true` runs `dpkg --add-architecture i386` first (CMR3's `:i386` packages) |
+| `submodules` | `false` | Screamer: `recursive` |
+| `shell-syntax` | `linux/*-play packaging/*.sh …` | globs checked with `sh -n`; any error fails |
+| `shell-tests` | `linux/tests/*.sh packaging/tests/*.sh` | globs; each match runs with `sh` (dash) and must exit 0; unmatched globs are skipped |
+| `shell-tests-skip` | `*e2e*` | patterns of tests not to run (CMR3's `e2e.sh` needs a dev kit) |
+| `audit` | `true` | cargo-audit 0.22.1 + cargo-deny 0.19.8; fails without a `deny.toml` |
+| `sdk-check`, `sdk-dir`, `sdk-repository` | `true`, `sdk`, this repo | drift check against `sdk/VERSION` |
+| `imports-test`, `package-command` | empty | bash commands |
+| `package-dir`, `package-allowlist` | empty | glob of package folders/zips and the allowlist |
+| `artifact-name`, `artifact-paths` | empty | upload |
+
+Commands run in bash with Commands run in bash with
 `REA_VERSION_NAME`, `REA_RELEASE_DIR`, `REA_CACHE` and `REA_SDK` set. SRR's
 import check, for example:
 `imports-test: SRR_LAUNCHER_EXE="$REA_RELEASE_DIR/SRRLauncher.exe" cargo test --locked --test imports -- --ignored`.
+Every check fails its step on error: `scripts/tests/workflows.sh` runs the
+shell steps as GitHub does (`sh -e`) against fixtures.
 
 `launcher-release.yml` takes `package` (the Cargo package the tag must
 match), `artifact-pattern`, and optionally `changelog`, `notes`
-(`changelog` or `generate`), `attest` and `sdk-dir`. Any extra job that
+(`changelog` or `generate`), `attest` and `sdk-dir`. It runs three jobs:
+`check` (tag, version, notes), `attest` (only when `attest` is true, and the
+only job with `id-token`/`attestations` write) and `release`
+(`contents: write`). Any extra job that
 uploads release files (Screamer's Windows and source archives) only needs
 an artifact name matching the pattern and a place in `needs:`.
 
-A scheduled pin watch (as CMR3's):
+A scheduled pin watch (as CMR3's). Names without a pin and unreachable
+repositories are warnings in the run summary; only a changed checksum (or a
+missing or undownloadable asset) opens an issue:
 
 ```yaml
 on:
@@ -198,6 +227,27 @@ jobs:
       pins: packaging/third-party.txt
       watch-list: packaging/upstream-watch.txt
 ```
+
+## Migrating a launcher
+
+1. Vendor the SDK: `scripts/sdk-sync <launcher>` and commit `sdk/`.
+2. **deny.toml:** copy `templates/deny.toml` to the launcher root (CMR3,
+   CMR4 and OutRun have none; SRR's and Screamer's reject the SDK's git
+   source through `unknown-git = "deny"`). The template allows
+   `https://github.com/akitaonrails/rea-launcher-sdk`. Without a
+   `deny.toml`, `launcher-ci` fails when `audit` is on.
+3. **Release permissions:** the job that calls `launcher-release.yml` must
+   grant `contents: write`, `id-token: write` and `attestations: write`,
+   **even with `attest: false`**. GitHub checks a called workflow's job
+   permissions when it loads it, before evaluating `if:`, so a missing
+   grant fails the whole release workflow at startup.
+4. Ship the play library: copy `sdk/rea-play.sh` beside the helper in the
+   zip (`linux/rea-play.sh`) and list it in the allowlist; the AppImage
+   builder places its own copy.
+5. Replace `packaging/appimage/build.sh` and `AppRun` with a call to
+   `sdk/packaging/appimage-wine.sh` (arguments in the table above), and the
+   wine licence files with the SDK's (`sdk/packaging/appimage/wine/`).
+6. Replace build.yml with the example above; keep game-specific jobs.
 
 ## Left in each launcher
 

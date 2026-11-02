@@ -27,7 +27,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install the 32-bit MinGW toolchain and LLD
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 lld
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 lld
       - name: Install Rust (with the 32-bit Windows target)
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
@@ -53,12 +55,14 @@ jobs:
         with:
           persist-credentials: false
       - name: Install dash, mawk and the packaging tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dash mawk curl xz-utils zip unzip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dash mawk busybox curl xz-utils zip unzip
       - name: Shell syntax
         run: |
-          for f in packaging/*.sh packaging/tests/*.sh scripts/sdk-sync scripts/tests/*.sh shell/*.sh shell/tests/*.sh; do
+          for f in packaging/*.sh packaging/tests/*.sh scripts/sdk-sync scripts/tests/*.sh shell/*.sh shell/example-play shell/tests/*.sh; do
             [ -f "$f" ] || continue
-            dash -n "$f"
+            dash -n "$f" || { echo "::error file=$f::dash -n failed"; exit 1; }
             echo "ok   $f"
           done
       - name: Tests (dash, mawk as awk)
@@ -67,12 +71,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           ln -sf "$(command -v mawk)" "$RUNNER_TEMP/bin/awk"
           export PATH="$RUNNER_TEMP/bin:$PATH"
-          for t in packaging/tests/*.sh scripts/tests/*.sh shell/tests/*.sh; do
-            [ -f "$t" ] || continue
+          for t in packaging/tests/*.sh scripts/tests/*.sh; do
             echo "::group::$t"
-            dash "$t"
+            dash "$t" || { echo "::endgroup::"; echo "::error file=$t::$t failed"; exit 1; }
             echo "::endgroup::"
           done
+          # The play library's runner: every suite under sh, dash and busybox
+          # (common.sh is its helper, not a test).
+          echo "::group::shell/tests/run-all.sh"
+          dash shell/tests/run-all.sh
+          echo "::endgroup::"
 
   deny:
     name: Dependency advisories, licences and sources

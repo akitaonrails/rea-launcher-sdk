@@ -5,8 +5,12 @@ name: launcher-release
 # SHA256SUMS, attests provenance and publishes the GitHub release with the
 # tag's CHANGELOG section as notes.
 #
-# The calling job must grant contents: write, id-token: write and
-# attestations: write, and run only for tags:
+# Jobs: check (tag and version), attest (only when `attest` is true; the
+# only job holding id-token and attestations write), release (contents:
+# write). The calling job must still grant contents: write, id-token: write
+# and attestations: write even with attest: false, because GitHub checks a
+# called workflow's job permissions when it loads it, before any `if:`.
+# Run it only for tags:
 #   if: startsWith(github.ref, 'refs/tags/v')
 
 on:
@@ -44,14 +48,10 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    name: Publish the release
+  check:
+    name: Check the tag
     runs-on: ${{ inputs.runs-on }}
-    timeout-minutes: 30
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
+    timeout-minutes: 15
     steps:
       - name: Only for version tags
         shell: sh
@@ -74,7 +74,7 @@ jobs:
           [ "$GITHUB_REF_NAME" = "v$version" ] \
             || { echo "::error::tag $GITHUB_REF_NAME does not match $PACKAGE $version"; exit 1; }
 
-      - name: Release notes
+      - name: Release notes exist
         shell: sh
         env:
           NOTES: ${{ inputs.notes }}
@@ -82,11 +82,55 @@ jobs:
           SDK_DIR: ${{ inputs.sdk-dir }}
         run: |
           case $NOTES in
-            changelog) sh "$SDK_DIR/packaging/release-notes.sh" "$GITHUB_REF_NAME" "$CHANGELOG" > "$RUNNER_TEMP/notes.md"
-                       cat "$RUNNER_TEMP/notes.md" ;;
+            changelog) sh "$SDK_DIR/packaging/release-notes.sh" "$GITHUB_REF_NAME" "$CHANGELOG" ;;
             generate) ;;
             *) echo "::error::notes must be changelog or generate"; exit 1 ;;
           esac
+
+  attest:
+    name: Attest build provenance
+    needs: check
+    if: inputs.attest
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ inputs.artifact-pattern }}
+          merge-multiple: true
+          path: dist
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+  release:
+    name: Publish the release
+    needs: [check, attest]
+    # Runs after a successful attestation, or when attestation is off.
+    if: ${{ !cancelled() && needs.check.result == 'success' && (needs.attest.result == 'success' || needs.attest.result == 'skipped') }}
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Release notes
+        shell: sh
+        env:
+          NOTES: ${{ inputs.notes }}
+          CHANGELOG: ${{ inputs.changelog }}
+          SDK_DIR: ${{ inputs.sdk-dir }}
+        run: |
+          if [ "$NOTES" = changelog ]; then
+            sh "$SDK_DIR/packaging/release-notes.sh" "$GITHUB_REF_NAME" "$CHANGELOG" > "$RUNNER_TEMP/notes.md"
+          fi
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -103,12 +147,6 @@ jobs:
           [ -f "$1" ] || { echo "::error::no artifacts downloaded"; exit 1; }
           sha256sum -- "$@" > SHA256SUMS
           cat SHA256SUMS
-
-      - name: Attest build provenance
-        if: inputs.attest
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/*
 
       - name: Create the GitHub release
         shell: sh

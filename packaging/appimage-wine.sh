@@ -23,9 +23,11 @@
 #   --optional-payload PATH   the same, skipped when missing; repeatable
 #   --doc PATH          extra package file or folder for usr/share/doc/<ID>/PATH; repeatable
 #   --env-path VAR=PATH AppRun also exports VAR="$LIB/PATH"; repeatable
-#   --play-lib FILE     play library copied beside the helper (default: the
-#                       vendored sdk/rea-play.sh, i.e. ../rea-play.sh from
-#                       this script, when it exists) [REA_PLAY_LIB]
+#   --play-lib FILE     play library copied beside the helper (default:
+#                       ../rea-play.sh from this script, the vendored
+#                       sdk/rea-play.sh; else ../shell/rea-play.sh, an SDK
+#                       checkout). A helper that names rea-play.sh fails the
+#                       build when none is found. [REA_PLAY_LIB]
 #   --native            no Wine: native launcher, lib/ on LD_LIBRARY_PATH [REA_MODE=native]
 #
 # The package must hold the exe, linux/<play>, README.md, THIRD_PARTY.md,
@@ -112,6 +114,8 @@ if [ -n "$PLAY_LIB" ]; then
   [ -f "$PLAY_LIB" ] || die "no play library $PLAY_LIB"
 elif [ -f "$HERE/../rea-play.sh" ]; then
   PLAY_LIB=$HERE/../rea-play.sh
+elif [ -f "$HERE/../shell/rea-play.sh" ]; then
+  PLAY_LIB=$HERE/../shell/rea-play.sh
 fi
 for tool in curl tar sha256sum; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is needed"
@@ -127,6 +131,10 @@ done
 for p in $PAYLOAD $DOCS; do
   [ -e "$PKG/$p" ] || die "package lacks $p: $PKG"
 done
+# Never ship a helper whose library is missing.
+if [ -z "$PLAY_LIB" ] && grep -q 'rea-play\.sh' "$PKG/linux/$PLAY"; then
+  die "linux/$PLAY sources rea-play.sh but none was found (run scripts/sdk-sync, or pass --play-lib)"
+fi
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rea-appimage.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
