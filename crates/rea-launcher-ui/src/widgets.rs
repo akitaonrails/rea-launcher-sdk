@@ -27,8 +27,8 @@
 use std::path::PathBuf;
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, CursorIcon, EventFilter, Key, Mesh, Painter, Rect,
-    Response, RichText, Role, Sense, Shape, Stroke, StrokeKind, TextureHandle, Ui, Vec2,
+    self, Align2, Color32, CornerRadius, CursorIcon, EventFilter, Key, Mesh, Modifiers, Painter,
+    Rect, Response, RichText, Role, Sense, Shape, Stroke, StrokeKind, TextureHandle, Ui, Vec2,
     WidgetInfo, pos2, vec2,
 };
 
@@ -397,6 +397,9 @@ pub struct LookCard<'a> {
     /// From [`fit_title`], so every card's title has the same size; 0 uses
     /// [`theme::CardMetrics::title`].
     pub title_size: f32,
+    /// Why it can't be chosen now: dimmed, ignores clicks, shows the reason
+    /// on hover and to screen readers.
+    pub disabled: Option<&'a str>,
 }
 
 /// The largest title size ([`theme::CardMetrics::title`] at most,
@@ -419,20 +422,23 @@ pub fn fit_title(ui: &Ui, titles: &[&str], width: f32) -> f32 {
 }
 
 /// The card frame shared by look and game cards: fill, border, focus ring.
-fn card_frame(ui: &Ui, rect: Rect, response: &Response, selected: bool) {
+fn card_frame(ui: &Ui, rect: Rect, response: &Response, selected: bool, enabled: bool) {
     let p = palette(ui);
     let focused = response.has_focus();
-    let fill = if selected {
+    let fill = if !enabled {
+        Color32::TRANSPARENT
+    } else if selected {
         p.panel
     } else if response.hovered() || focused {
         p.panel.gamma_multiply(0.6)
     } else {
         Color32::TRANSPARENT
     };
-    let stroke = if selected {
-        Stroke::new(2.0, p.select)
-    } else {
-        Stroke::new(1.0, p.line)
+    let stroke = match (enabled, selected) {
+        (false, true) => Stroke::new(2.0, p.select.gamma_multiply(0.5)),
+        (false, false) => Stroke::new(1.0, p.disabled_line),
+        (true, true) => Stroke::new(2.0, p.select),
+        (true, false) => Stroke::new(1.0, p.line),
     };
     let painter = ui.painter();
     painter.rect(
@@ -449,12 +455,19 @@ fn card_frame(ui: &Ui, rect: Rect, response: &Response, selected: bool) {
 
 /// A look card of `size`; `clicked()` when chosen (also by Space/A while
 /// focused, which is how the pad reaches it). Accessibility: a radio
-/// button named by its title, its note (and detail) as the description.
+/// button named by its title, its note (and detail) as the description,
+/// disabled with its reason when [`LookCard::disabled`].
 pub fn look_card(ui: &mut Ui, size: Vec2, card: &LookCard<'_>) -> Response {
     let p = palette(ui);
     let c = metrics(ui).card;
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    card_frame(ui, rect, &response, card.selected);
+    let enabled = card.disabled.is_none();
+    let (rect, response) = ui.allocate_exact_size(size, card_sense(enabled));
+    card_frame(ui, rect, &response, card.selected, enabled);
+    let (ink, muted) = if enabled {
+        (p.ink, p.muted)
+    } else {
+        (p.disabled_ink, p.disabled_ink)
+    };
     let painter = ui.painter();
     let title_size = if card.title_size > 0.0 {
         card.title_size
@@ -466,7 +479,11 @@ pub fn look_card(ui: &mut Ui, size: Vec2, card: &LookCard<'_>) -> Response {
         Align2::LEFT_TOP,
         card.title,
         condensed(title_size),
-        if card.selected { p.select } else { p.ink },
+        if card.selected && enabled {
+            p.select
+        } else {
+            ink
+        },
     );
     if let Some(badge) = card.badge {
         let galley = painter.layout_no_wrap(badge.to_owned(), semibold(c.badge), p.on_action);
@@ -483,26 +500,46 @@ pub fn look_card(ui: &mut Ui, size: Vec2, card: &LookCard<'_>) -> Response {
     let galley = painter.layout(
         card.note.to_owned(),
         body(c.note),
-        p.muted,
+        muted,
         size.x - 2.0 * c.pad,
     );
     painter.galley(
         rect.left_top() + vec2(c.pad, c.pad + c.note_top),
         galley,
-        p.muted,
+        muted,
     );
-    let description = match (card.badge, card.detail) {
+    let mut description = match (card.badge, card.detail) {
         (badge, Some(detail)) => format!("{}{}. {detail}", badge_prefix(badge), card.note),
         (badge, None) => format!("{}{}", badge_prefix(badge), card.note),
     };
+    if let Some(why) = card.disabled {
+        description = format!("{description}. {why}");
+    }
     accessible(
         &response,
-        WidgetInfo::selected(Role::RadioButton, true, card.selected, card.title),
+        WidgetInfo::selected(Role::RadioButton, enabled, card.selected, card.title),
         Some(&description),
     );
-    let response = response.on_hover_cursor(CursorIcon::PointingHand);
-    match card.detail {
-        Some(detail) => response.on_hover_text(detail),
+    finish_card(response, card.disabled.or(card.detail), enabled)
+}
+
+fn card_sense(enabled: bool) -> Sense {
+    if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    }
+}
+
+/// The hover text (reason or detail) and pointer of a card.
+fn finish_card(response: Response, hover: Option<&str>, enabled: bool) -> Response {
+    let response = if enabled {
+        response.on_hover_cursor(CursorIcon::PointingHand)
+    } else {
+        response
+    };
+    match hover {
+        Some(text) => response.on_hover_text(text),
         None => response,
     }
 }
@@ -521,6 +558,8 @@ pub struct GameCard<'a> {
     /// Whether the game was found: the dot is `select` when it was,
     /// `disabled_ink` (and the subtitle dimmed) when not.
     pub installed: bool,
+    /// Why it can't be chosen now (see [`LookCard::disabled`]).
+    pub disabled: Option<&'a str>,
 }
 
 /// A game card of `size`; `clicked()` when chosen. It stays choosable when
@@ -530,17 +569,23 @@ pub struct GameCard<'a> {
 pub fn game_card(ui: &mut Ui, size: Vec2, card: &GameCard<'_>) -> Response {
     let p = palette(ui);
     let c = metrics(ui).card;
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    card_frame(ui, rect, &response, card.selected);
+    let enabled = card.disabled.is_none();
+    let (rect, response) = ui.allocate_exact_size(size, card_sense(enabled));
+    card_frame(ui, rect, &response, card.selected, enabled);
     let painter = ui.painter();
+    let title = match (enabled, card.selected) {
+        (false, _) => p.disabled_ink,
+        (true, true) => p.select,
+        (true, false) => p.ink,
+    };
     painter.text(
         rect.left_top() + vec2(c.pad, c.pad - 2.0),
         Align2::LEFT_TOP,
         card.title,
         condensed(c.title),
-        if card.selected { p.select } else { p.ink },
+        title,
     );
-    let (dot, sub) = if card.installed {
+    let (dot, sub) = if card.installed && enabled {
         (p.select, p.muted)
     } else {
         (p.disabled_ink, p.disabled_ink)
@@ -558,12 +603,16 @@ pub fn game_card(ui: &mut Ui, size: Vec2, card: &GameCard<'_>) -> Response {
     } else {
         "not installed"
     };
+    let mut description = format!("{}; {state}", card.subtitle);
+    if let Some(why) = card.disabled {
+        description = format!("{description}. {why}");
+    }
     accessible(
         &response,
-        WidgetInfo::selected(Role::RadioButton, true, card.selected, card.title),
-        Some(&format!("{}; {state}", card.subtitle)),
+        WidgetInfo::selected(Role::RadioButton, enabled, card.selected, card.title),
+        Some(&description),
     );
-    response.on_hover_cursor(CursorIcon::PointingHand)
+    finish_card(response, card.disabled, enabled)
 }
 
 // ---------------------------------------------------------------- text
@@ -744,12 +793,15 @@ pub fn progress_bar(ui: &mut Ui, fraction: f32) -> Response {
 }
 
 /// A path field with a "Browse…" button; true when the text changed.
-/// `pick` opens the folder picker (`rea_launcher_win32::dialog::pick_folder`
-/// on Windows, zenity/kdialog natively on Linux) and runs only on click.
-/// Accessibility: the text field is named by `hint`.
+/// `label` names the field (the heading or field label shown with it),
+/// `hint` is the placeholder. `pick` opens the folder picker
+/// (`rea_launcher_win32::dialog::pick_folder` on Windows, zenity/kdialog
+/// natively on Linux) and runs only on click. Accessibility: the text
+/// field is named by `label`, with `hint` as its description.
 pub fn folder_field(
     ui: &mut Ui,
     value: &mut String,
+    label: &str,
     hint: &str,
     pick: impl FnOnce() -> Option<PathBuf>,
 ) -> bool {
@@ -763,8 +815,10 @@ pub fn folder_field(
             .desired_width(ui.available_width() - 100.0);
         let response = ui.add(edit);
         changed |= response.changed();
-        ui.ctx()
-            .accesskit_node_builder(response.id, |node| node.set_label(hint.to_owned()));
+        ui.ctx().accesskit_node_builder(response.id, |node| {
+            node.set_label(label.to_owned());
+            node.set_description(hint.to_owned());
+        });
         if outline_button(ui, "Browse…").clicked()
             && let Some(dir) = pick()
         {
@@ -784,13 +838,31 @@ fn tab_color(p: &Palette, current: bool, hovered: bool) -> Color32 {
 }
 
 /// The tab names, the current one in `ink` and underlined in `action`,
-/// then a divider. Tabs are clicked or changed with LB/RB, so they are not
-/// focus stops. True when a click changed `current`. Accessibility: each
-/// name is a tab, selected when current.
+/// then a divider. Tabs are clicked, changed with LB/RB on a pad, or with
+/// Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+PageDown / Ctrl+PageUp (wrapping);
+/// they are not Tab-key focus stops. True when `current` changed.
+/// Accessibility: a tab list of tabs, the current one selected; each tab
+/// takes the screen reader's click action.
 pub fn tabs_bar<T: PartialEq + Clone>(ui: &mut Ui, tabs: &[(T, &str)], current: &mut T) -> bool {
     let p = palette(ui);
     let mut changed = false;
-    ui.horizontal(|ui| {
+    // Keyboard: Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+PageDown / Ctrl+PageUp
+    // (CMR4), as LB/RB do on a pad.
+    let step = ui.input_mut(|input| {
+        // The Shift form first: Ctrl+Tab would also match it.
+        let back = input.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab)
+            || input.consume_key(Modifiers::CTRL, Key::PageUp);
+        let next = input.consume_key(Modifiers::CTRL, Key::Tab)
+            || input.consume_key(Modifiers::CTRL, Key::PageDown);
+        isize::from(next) - isize::from(back)
+    });
+    if step != 0 && !tabs.is_empty() {
+        let at = tabs.iter().position(|(tab, _)| tab == current).unwrap_or(0) as isize;
+        let next = (at + step).rem_euclid(tabs.len() as isize) as usize;
+        *current = tabs[next].0.clone();
+        changed = true;
+    }
+    let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 26.0;
         for (tab, name) in tabs {
             let on = *current == *tab;
@@ -824,6 +896,13 @@ pub fn tabs_bar<T: PartialEq + Clone>(ui: &mut Ui, tabs: &[(T, &str)], current: 
             }
         }
     });
+    // The tabs' container, so screen readers announce a tab list.
+    let list = ui.interact(
+        row.response.rect,
+        row.response.id.with("rea-tabs"),
+        Sense::hover(),
+    );
+    accessible(&list, WidgetInfo::new(Role::TabList), None);
     let y = ui.cursor().top() - 4.0;
     let rect = ui.max_rect();
     ui.painter()
@@ -876,7 +955,8 @@ pub fn play_plate(ui: &mut Ui, rect: Rect, label: &str, ready: bool) -> Response
 pub const PLAY_WIDTH: f32 = 170.0;
 
 /// The footer: `hint` wrapped on the left, the Play plate on the right.
-/// Returns the plate's response.
+/// Returns the plate's response. While not `ready` the hint is also the
+/// plate's accessible description (why Play is disabled).
 pub fn footer(ui: &mut Ui, rect: Rect, hint: &str, ready: bool) -> Response {
     let p = palette(ui);
     let plate = Rect::from_min_size(
@@ -891,7 +971,25 @@ pub fn footer(ui: &mut Ui, rect: Rect, hint: &str, ready: bool) -> Response {
     );
     let y = rect.center().y - galley.size().y / 2.0;
     ui.painter().galley(pos2(rect.left(), y), galley, p.muted);
-    play_plate(ui, plate, "Play", ready)
+    let play = play_plate(ui, plate, "Play", ready);
+    if !ready {
+        // A disabled Play says why to screen readers too (CMR4).
+        name_control(&play, None, Some(hint));
+    }
+    play
+}
+
+/// Gives any control an accessible name and/or description: a chip row's
+/// group label ("Frame rate") and what it does, a Play plate's reason.
+pub fn name_control(response: &Response, label: Option<&str>, description: Option<&str>) {
+    response.ctx.accesskit_node_builder(response.id, |node| {
+        if let Some(label) = label {
+            node.set_label(label.to_owned());
+        }
+        if let Some(description) = description.filter(|text| !text.is_empty()) {
+            node.set_description(description.to_owned());
+        }
+    });
 }
 
 /// A vertical scroll area for one tab's content, remembered per tab, so
@@ -1037,6 +1135,55 @@ pub fn hero_image(
         base,
         Fade::Down,
     );
+}
+
+/// How a [`photo_caption`] line is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptionStyle {
+    /// A name: semibold 19 pt, `ink`.
+    Title,
+    /// A line under it: 13 pt, `muted`.
+    Text,
+    /// The photo credit: 11 pt, `muted`.
+    Credit,
+}
+
+/// The caption in the photo strip's lower left (CMR4: name, years, credit;
+/// OR: three small lines), `lines` top to bottom. Accessibility: the strip
+/// is an image named by `alt` (what the photo shows), and the caption one
+/// label with every line.
+pub fn photo_caption(ui: &mut Ui, strip: Rect, alt: &str, lines: &[(&str, CaptionStyle)]) {
+    let p = palette(ui);
+    let image = ui.interact(strip, ui.scope_id().with("rea-photo"), Sense::hover());
+    accessible(&image, WidgetInfo::labeled(Role::Image, true, alt), None);
+    let x = strip.left() + 20.0;
+    let mut y = strip.bottom() - 20.0;
+    let mut top = y;
+    for &(text, style) in lines.iter().rev() {
+        let (font, color, step) = match style {
+            CaptionStyle::Title => (semibold(19.0), p.ink, 24.0),
+            CaptionStyle::Text => (body(size::NOTE), p.muted, 18.0),
+            CaptionStyle::Credit => (body(size::MIN_TEXT), p.muted, 16.0),
+        };
+        let drawn = ui
+            .painter()
+            .text(pos2(x, y), Align2::LEFT_BOTTOM, text, font, color);
+        top = drawn.top();
+        y -= step;
+    }
+    if !lines.is_empty() {
+        let rect = Rect::from_min_max(
+            pos2(x, top),
+            pos2(strip.right() - 8.0, strip.bottom() - 20.0),
+        );
+        let caption = ui.interact(rect, ui.scope_id().with("rea-caption"), Sense::hover());
+        let text: Vec<&str> = lines.iter().map(|(t, _)| *t).collect();
+        accessible(
+            &caption,
+            WidgetInfo::labeled(Role::Label, true, text.join(". ")),
+            None,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1337,6 +1484,7 @@ mod tests {
                         subtitle,
                         selected: installed,
                         installed,
+                        disabled: None,
                     },
                 );
             }

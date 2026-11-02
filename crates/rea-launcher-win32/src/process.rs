@@ -26,11 +26,18 @@ use std::ffi::{CStr, OsString};
 use std::path::{Path, PathBuf};
 use std::ptr::null;
 
-use windows_sys::Win32::Foundation::CloseHandle;
+use std::time::Duration;
+
+use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, WAIT_TIMEOUT};
+use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, GetExitCodeProcess, INFINITE,
     PROCESS_INFORMATION, STARTUPINFOW, WaitForSingleObject,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+};
+use windows_sys::core::BOOL;
 
 use crate::wide::{last_error, wide};
 
@@ -180,6 +187,64 @@ impl Running {
         self.0.dwThreadId
     }
 
+    /// Whether the process is still running.
+    pub fn is_alive(&self) -> bool {
+        // SAFETY: a zero-timeout wait on the owned process handle.
+        unsafe { WaitForSingleObject(self.0.hProcess, 0) == WAIT_TIMEOUT }
+    }
+
+    /// The exit code once the process has ended; `None` while it runs.
+    pub fn exit_code(&self) -> Option<u32> {
+        if self.is_alive() {
+            return None;
+        }
+        let mut code = 0u32;
+        // SAFETY: the owned process handle and a local output.
+        (unsafe { GetExitCodeProcess(self.0.hProcess, &mut code) } != 0).then_some(code)
+    }
+
+    /// Asks the process to quit the way a player would: `WM_CLOSE` to every
+    /// top-level window it owns. Waits up to `timeout`, then terminates it
+    /// as a last resort (exit code 1). Says which path ended it.
+    pub fn close_gracefully(&self, timeout: Duration) -> Result<Closed, String> {
+        if let Some(code) = self.exit_code() {
+            return Ok(Closed::AlreadyExited(code));
+        }
+        let windows = top_level_windows(self.pid());
+        for &hwnd in &windows {
+            // SAFETY: posting to a window handle; a stale one just fails.
+            unsafe {
+                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            }
+        }
+        let wait = if windows.is_empty() {
+            0
+        } else {
+            u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1)
+        };
+        // SAFETY: waits on the owned process handle.
+        if unsafe { WaitForSingleObject(self.0.hProcess, wait) } != WAIT_TIMEOUT {
+            return Ok(Closed::Closed {
+                windows: windows.len(),
+                code: self.exit_code().unwrap_or(0),
+            });
+        }
+        // SAFETY: the owned process handle; then a bounded wait for it.
+        unsafe {
+            if TerminateProcess(self.0.hProcess, 1) == 0 {
+                return Err(format!(
+                    "cannot end process {}: {}",
+                    self.pid(),
+                    last_error()
+                ));
+            }
+            WaitForSingleObject(self.0.hProcess, 5_000);
+        }
+        Ok(Closed::Terminated {
+            windows: windows.len(),
+        })
+    }
+
     /// Loads `dll` here and installs its `export` as a `WH_GETMESSAGE` hook
     /// on the child's main thread (Windows then loads the DLL into the
     /// child). CMR4 uses it to end a game that ignores `WM_CLOSE`. Keep the
@@ -239,6 +304,56 @@ impl Running {
     }
 }
 
+/// How [`Running::close_gracefully`] ended the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closed {
+    /// It had already exited, with this code.
+    AlreadyExited(u32),
+    /// It quit after `WM_CLOSE` to its `windows`, with this exit code.
+    Closed { windows: usize, code: u32 },
+    /// It ignored the request (or had no window) and was terminated.
+    Terminated { windows: usize },
+}
+
+/// The system's per-thread input-method windows, which every GUI thread
+/// owns and which are not the program's.
+const IME_CLASSES: [&str; 2] = ["IME", "MSCTFIME UI"];
+
+/// The visible or hidden top-level windows owned by process `pid`, without
+/// the system's input-method windows.
+pub fn top_level_windows(pid: u32) -> Vec<HWND> {
+    struct Search {
+        pid: u32,
+        found: Vec<HWND>,
+    }
+    unsafe extern "system" fn visit(hwnd: HWND, data: LPARAM) -> BOOL {
+        // SAFETY: `data` is the Search below, alive for the enumeration.
+        unsafe {
+            let search = &mut *(data as *mut Search);
+            let mut owner = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut owner);
+            if owner == search.pid {
+                let mut class = [0u16; 64];
+                let len = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
+                let class = String::from_utf16_lossy(&class[..len.max(0) as usize]);
+                if !IME_CLASSES.contains(&class.as_str()) {
+                    search.found.push(hwnd);
+                }
+            }
+        }
+        1
+    }
+    let mut search = Search {
+        pid,
+        found: Vec::new(),
+    };
+    // SAFETY: the callback only touches `search` during this call.
+    unsafe {
+        EnumWindows(Some(visit), (&raw mut search) as LPARAM);
+    }
+    search.found
+}
+
 /// An installed hook, removed on drop: bind it (`let _hook = …`), since
 /// `let _ = …` would remove it at once.
 #[derive(Debug)]
@@ -251,5 +366,84 @@ impl Drop for MessageHook {
         unsafe {
             windows_sys::Win32::UI::WindowsAndMessaging::UnhookWindowsHookEx(self.0);
         }
+    }
+}
+
+/// Run on Windows or under Wine (`scripts/wine-test`), with the
+/// `close_child` example as the child.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Headless Wine (no display, as `scripts/wine-test` runs) can only
+    /// create windows through its null graphics driver; select it in the
+    /// private test prefix when nothing chose a driver.
+    pub(crate) fn headless_wine_windows() {
+        let headless = ["DISPLAY", "WAYLAND_DISPLAY"]
+            .iter()
+            .all(|name| std::env::var_os(name).is_none());
+        if crate::wine::is_wine() && headless {
+            crate::reg::Key::create(crate::reg::Hive::CurrentUser, r"Software\Wine\Drivers")
+                .and_then(|key| key.set_string_if_missing("Graphics", "null"))
+                .unwrap();
+        }
+    }
+
+    fn child(mode: &str) -> Running {
+        headless_wine_windows();
+        let exe = std::env::current_exe().unwrap();
+        let examples = exe.parent().unwrap().parent().unwrap().join("examples");
+        let running = Launch::new(examples.join("close_child.exe"))
+            .arg(mode)
+            .spawn()
+            .unwrap();
+        if mode != "console" {
+            // Wait for its window.
+            for _ in 0..200 {
+                if !top_level_windows(running.pid()).is_empty() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+        running
+    }
+
+    #[test]
+    fn a_window_that_honours_close_is_closed() {
+        let game = child("window");
+        assert!(game.is_alive());
+        let closed = game.close_gracefully(Duration::from_secs(10)).unwrap();
+        assert!(
+            matches!(
+                closed,
+                Closed::Closed {
+                    windows: 1..,
+                    code: 0
+                }
+            ),
+            "{closed:?}"
+        );
+        assert!(!game.is_alive());
+        assert_eq!(
+            game.close_gracefully(Duration::ZERO).unwrap(),
+            Closed::AlreadyExited(0)
+        );
+    }
+
+    #[test]
+    fn a_deaf_window_or_no_window_is_terminated() {
+        let deaf = child("deaf");
+        let closed = deaf.close_gracefully(Duration::from_millis(300)).unwrap();
+        assert_eq!(closed, Closed::Terminated { windows: 1 });
+        assert_eq!(deaf.exit_code(), Some(1));
+
+        let console = child("console");
+        assert_eq!(
+            console.close_gracefully(Duration::from_secs(10)).unwrap(),
+            Closed::Terminated { windows: 0 }
+        );
+        assert!(!console.is_alive());
+        assert_eq!(console.wait().unwrap(), 1);
     }
 }

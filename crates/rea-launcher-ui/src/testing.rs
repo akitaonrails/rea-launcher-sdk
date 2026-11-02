@@ -36,16 +36,39 @@ use crate::theme::{self, Metrics, Palette};
 pub const SIZE: egui::Vec2 = crate::window::SIZE;
 
 /// A harness running `app` over `state` with the theme installed, after
-/// its first frames (so every widget is in the AccessKit tree).
+/// its first frames (so every widget is in the AccessKit tree), at the
+/// SDK's design [`SIZE`]. See [`harness_sized`] for a taller window.
 pub fn harness<'a, S>(
     palette: &Palette,
     metrics: &Metrics,
     state: S,
     app: impl FnMut(&mut Ui, &mut S) + 'a,
 ) -> Harness<'a, S> {
+    harness_sized(palette, metrics, SIZE, state, app)
+}
+
+/// [`harness`] at `size` (the launcher's own design size, e.g. OR's
+/// 880×760). Widgets below a scrolling tab's fold are in the AccessKit
+/// tree but a click lands outside the window: scroll to them first,
+///
+/// ```text
+/// let node = ui.get_by_label("Manual gearbox by default");
+/// node.scroll_to_me();
+/// ui.run();
+/// ui.get_by_label("Manual gearbox by default").click();
+/// ```
+///
+/// or give the harness a taller size so the whole tab fits.
+pub fn harness_sized<'a, S>(
+    palette: &Palette,
+    metrics: &Metrics,
+    size: egui::Vec2,
+    state: S,
+    app: impl FnMut(&mut Ui, &mut S) + 'a,
+) -> Harness<'a, S> {
     let (palette, metrics) = (*palette, *metrics);
     let mut harness = Harness::builder()
-        .with_size(SIZE)
+        .with_size(size)
         .with_theme(egui::Theme::Dark)
         .with_context_setup(move |ctx| theme::install_with(ctx, &palette, &metrics))
         .build_ui_state(app, state);
@@ -130,13 +153,20 @@ mod tests {
                     subtitle: "1995",
                     selected: form.game == game,
                     installed,
+                    disabled: None,
                 };
                 if widgets::game_card(ui, vec2(180.0, 64.0), &card).clicked() {
                     form.game = game;
                 }
             }
         });
-        widgets::folder_field(ui, &mut form.folder, "The game folder", || None);
+        widgets::folder_field(
+            ui,
+            &mut form.folder,
+            "Game folder",
+            "The folder with game.exe",
+            || None,
+        );
         let plate = egui::Rect::from_min_size(egui::pos2(600.0, 560.0), vec2(170.0, 52.0));
         if widgets::play_plate(ui, plate, "Play", form.fps == 120).clicked() {
             form.played += 1;
@@ -222,8 +252,11 @@ mod tests {
     #[test]
     fn folder_field_and_play_plate_are_named() {
         let mut ui = open();
-        let field = ui.get_by_label("The game folder");
-        assert_eq!(field.accesskit_node().role(), Role::TextInput);
+        let field = ui.get_by_role_and_label(Role::TextInput, "Game folder");
+        assert_eq!(
+            description(&field).as_deref(),
+            Some("The folder with game.exe")
+        );
         assert!(
             ui.query_by_role_and_label(Role::Button, "Browse…")
                 .is_some()
@@ -254,5 +287,144 @@ mod tests {
         ui.key_press(egui::Key::ArrowRight);
         ui.run();
         assert_eq!(*ui.state(), 90);
+    }
+
+    // ------------------------------------------------- v0.2.1 additions
+
+    #[derive(Debug, Default)]
+    struct Extra {
+        tab: u8,
+        fps: u32,
+        layout: u8,
+    }
+
+    fn extra(ui: &mut Ui, form: &mut Extra) {
+        widgets::tabs_bar(
+            ui,
+            &[(0u8, "Play"), (1, "Picture"), (2, "Controls")],
+            &mut form.tab,
+        );
+        let row = widgets::chips(ui, &[(60u32, "60"), (120, "120")], &mut form.fps, None);
+        widgets::name_control(&row, Some("Frame rate"), Some("The game's frame cap."));
+        ui.horizontal(|ui| {
+            for (layout, title, disabled) in [
+                (0u8, "Original", None),
+                (1, "Custom", Some("Needs gamepad axes on")),
+            ] {
+                let card = LookCard {
+                    title,
+                    note: "Buttons",
+                    selected: form.layout == layout,
+                    disabled,
+                    ..LookCard::default()
+                };
+                if widgets::look_card(ui, vec2(180.0, 90.0), &card).clicked() {
+                    form.layout = layout;
+                }
+            }
+            let card = GameCard {
+                title: "Screamer Rally",
+                subtitle: "1997",
+                disabled: Some("Not in this folder"),
+                ..GameCard::default()
+            };
+            widgets::game_card(ui, vec2(180.0, 64.0), &card);
+        });
+        let strip = egui::Rect::from_min_size(egui::pos2(0.0, 300.0), vec2(300.0, 300.0));
+        widgets::photo_caption(
+            ui,
+            strip,
+            "Colin McRae at a rally stage",
+            &[
+                ("Colin McRae", widgets::CaptionStyle::Title),
+                (
+                    "1968–2007, World Rally Champion 1995",
+                    widgets::CaptionStyle::Text,
+                ),
+                (
+                    "Photo: Carolyn Williams, CC BY 2.0",
+                    widgets::CaptionStyle::Credit,
+                ),
+            ],
+        );
+        let footer = egui::Rect::from_min_size(egui::pos2(320.0, 620.0), vec2(600.0, 52.0));
+        widgets::footer(ui, footer, "Play needs the game folder first.", false);
+    }
+
+    fn open_extra() -> Harness<'static, Extra> {
+        // Screamer's taller window: the footer sits below 640.
+        harness_sized(
+            &OR,
+            &OR_METRICS,
+            vec2(980.0, 700.0),
+            Extra::default(),
+            extra,
+        )
+    }
+
+    #[test]
+    fn keyboard_switches_tabs_and_tabs_form_a_list() {
+        let mut ui = open_extra();
+        assert!(ui.query_by_role(Role::TabList).is_some());
+        ui.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Tab);
+        ui.run();
+        assert_eq!(ui.state().tab, 1);
+        ui.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::PageDown);
+        ui.run();
+        assert_eq!(ui.state().tab, 2);
+        // Wraps forward, and back with Ctrl+Shift+Tab / Ctrl+PageUp.
+        ui.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Tab);
+        ui.run();
+        assert_eq!(ui.state().tab, 0);
+        ui.key_press_modifiers(
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            egui::Key::Tab,
+        );
+        ui.run();
+        assert_eq!(ui.state().tab, 2);
+        ui.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::PageUp);
+        ui.run();
+        assert_eq!(ui.state().tab, 1);
+        assert!(checked(&ui.get_by_role_and_label(Role::Tab, "Picture")));
+    }
+
+    #[test]
+    fn chip_groups_cards_captions_and_play_say_what_they_are() {
+        let mut ui = open_extra();
+        let group = ui.get_by_role_and_label(Role::RadioGroup, "Frame rate");
+        assert_eq!(
+            description(&group).as_deref(),
+            Some("The game's frame cap.")
+        );
+
+        let custom = ui.get_by_label("Custom");
+        assert!(disabled(&custom));
+        assert_eq!(
+            description(&custom).as_deref(),
+            Some("Buttons. Needs gamepad axes on")
+        );
+        custom.click();
+        ui.run();
+        assert_eq!(ui.state().layout, 0, "a disabled card ignores clicks");
+        let rally = ui.get_by_label("Screamer Rally");
+        assert!(disabled(&rally));
+        assert!(description(&rally).unwrap().ends_with("Not in this folder"));
+
+        assert!(
+            ui.query_by_role_and_label(Role::Image, "Colin McRae at a rally stage")
+                .is_some()
+        );
+        assert!(
+            ui.query_by_label_contains("Photo: Carolyn Williams, CC BY 2.0")
+                .is_some()
+        );
+
+        // Below the design height: reachable in the taller harness.
+        let play = ui.get_by_role_and_label(Role::Button, "Play");
+        assert!(disabled(&play));
+        assert_eq!(
+            description(&play).as_deref(),
+            Some("Play needs the game folder first.")
+        );
     }
 }

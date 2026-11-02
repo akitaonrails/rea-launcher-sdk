@@ -6,11 +6,11 @@ look with each game's colours, art and tabs left to the launcher.
 | Module | What |
 |---|---|
 | `theme` | `Palette` (colour roles: base, panel, line, ink, muted, action, select, error, disabled, focus, selection; `tint` for a const translucent colour), `Metrics` (sizes and style choices, below), `install`/`install_with`, `palette`/`metrics`, `contrast`, `contrast_problems(&Palette, &Metrics)` / `Palette::pairs`, Barlow fonts (`body`, `semibold`, `condensed`, `decal`) |
-| `widgets` | `chips`/`chips_with`/`chips_sized` (disabled reasons, `ChipSize::Compact`, one focus stop stepped with ←/→), `toggle`, `look_card` + `fit_title`, `game_card`, `outline_button`, `primary_button`, `progress_bar`, `folder_field`, `heading`/`field`/`note`/`error_note`, `heading_focused`/`field_focused`/`focus_bar` (SCR's row focus), `tabs_bar`, `play_plate`/`footer`, `tab_body`, `gradient`, `stripes`, `decode_jpeg`/`load_jpeg`/`hero_image` |
+| `widgets` | `chips`/`chips_with`/`chips_sized` (disabled reasons, `ChipSize::Compact`, one focus stop stepped with ←/→), `toggle`, `look_card` + `fit_title`, `game_card`, `outline_button`, `primary_button`, `progress_bar`, `folder_field`, `heading`/`field`/`note`/`error_note`, `heading_focused`/`field_focused`/`focus_bar` (SCR's row focus), `tabs_bar`, `play_plate`/`footer`, `tab_body`, `gradient`, `stripes`, `decode_jpeg`/`load_jpeg`/`hero_image`/`photo_caption`, `name_control` |
 | `window` | `WindowFit` (final size at creation under Wine with Wine's DPI divided out; opt-in `with_native_fit` DPI fit + recentre off Wine; `screen()` in pixels), `window_zoom`, `creation_zoom`, `SIZE`, `Layout` |
-| `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_path_row(…, pick)`: one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
+| `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_row_with(…, RowOptions { disabled, steps })` / `spec_path_row(…, pick)` (an `unset_label` option adds an "As the game" chip): one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
 | `download` | `download_row(ui, &Download { label, size, state })` → `Option<DownloadAction>` (Start / Cancel / Remove); `DownloadState` (Missing{partial}, Connecting, Downloading{done,total,rate}, Verifying, Unpacking, Installed, Failed(msg)), `DownloadState::from_phase(Option<&Phase>, installed, partial)` + `with_rate`; `describe`, `size_text`, `time_left` |
-| `testing` (feature) | `harness(&Palette, &Metrics, state, ui)` on `egui_kittest`, `checked`/`disabled`/`description`/`value`, re-exported `Queryable` |
+| `testing` (feature) | `harness(&Palette, &Metrics, state, ui)`, `harness_sized(…, size, …)` (scroll with `node.scroll_to_me()` below the fold) on `egui_kittest`, `checked`/`disabled`/`description`/`value`, re-exported `Queryable` |
 | `pad` | `inject` and `key_for`, plus `Nav`/`PadNav` re-exported from `rea_launcher::pad` (edge detection on XInput button masks; the bits are `rea_launcher::pad::DPAD_UP` …). `inject`: d-pad → Tab/Shift+Tab/arrows, A → Space; Start, LB/RB and B come back to the launcher |
 
 `eframe` and `egui` are re-exported (`rea_launcher_ui::egui`), so a
@@ -100,7 +100,10 @@ Every widget reports its role, name, state and disabled reason to
 AccessKit: chips are radio buttons in a radio group (the group's value is
 the chosen label), toggles are switches, look and game cards radio buttons
 with the note as description, tabs are tabs, the Play plate a button
-disabled until ready, `folder_field`'s text field is named by its hint.
+disabled until ready (the footer hint says why), `folder_field`'s text
+field is named by its label with the hint as description, the photo
+strip is an image named by its alt text and its caption a label. Tabs
+switch with Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+PageDown / PageUp.
 
 Launcher GUI tests use the `testing` feature (dev-dependency only):
 

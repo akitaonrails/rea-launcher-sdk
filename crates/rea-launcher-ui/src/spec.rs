@@ -13,7 +13,15 @@
 //! rea_launcher::cfg::spec::assert_parity(SPECS, &spec::rendered_keys(&ui.ctx));
 //! ```
 //!
+//! A removed row (`OptionSpec::removed`) draws nothing and is not recorded;
+//! a window that draws rows from the table iterates
+//! `rea_launcher::cfg::spec::active(specs)`. A refused value names what
+//! the row takes (`OptionSpec::needs`, or its `with_needs` text).
+//!
 //! Controls by kind: `Toggle` → [`widgets::toggle`]; `Choice` → chips;
+//! a `Toggle` or `Choice` with an unset label (`OptionSpec::unset_label`,
+//! e.g. "As the game") → chips with that choice first, which writes the
+//! empty text (the launcher then clears the key from `launcher.cfg`);
 //! `Range` → a slider; `Size` and `Text` → a text field (a `Size` that the
 //! row refuses shows what it needs); `Path` → [`widgets::folder_field`]
 //! with [`spec_path_row`], a text field with [`spec_row`]. The label is the
@@ -62,10 +70,31 @@ pub fn toggle_text(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
 
+/// How a row is drawn beyond what its [`OptionSpec`] says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RowOptions<'a> {
+    /// Why the option can't be changed now: the control is disabled and
+    /// shows the reason on hover and to screen readers (as chips do).
+    pub disabled: Option<&'a str>,
+    /// For a `Range`: chips with these `(value, label)` steps instead of a
+    /// slider (OR's draw distance: `(0, "Game's own"), (4, "4"), (8, "8")`).
+    pub steps: Option<&'a [(u32, &'a str)]>,
+}
+
 /// One option's row; `changed()` when `value` changed. See the module
 /// docs for the control each kind gets.
 pub fn spec_row(ui: &mut Ui, spec: &OptionSpec, value: &mut String) -> Response {
-    row(ui, spec, value, None)
+    row(ui, spec, value, RowOptions::default(), None)
+}
+
+/// [`spec_row`] with [`RowOptions`] (a disabled reason, Range steps).
+pub fn spec_row_with(
+    ui: &mut Ui,
+    spec: &OptionSpec,
+    value: &mut String,
+    options: RowOptions<'_>,
+) -> Response {
+    row(ui, spec, value, options, None)
 }
 
 /// [`spec_row`] for a `Path` option, with a Browse button that runs `pick`.
@@ -75,41 +104,53 @@ pub fn spec_path_row(
     value: &mut String,
     pick: impl FnOnce() -> Option<PathBuf>,
 ) -> Response {
-    row(ui, spec, value, Some(Box::new(pick)))
+    row(ui, spec, value, RowOptions::default(), Some(Box::new(pick)))
 }
 
 type Pick<'a> = Box<dyn FnOnce() -> Option<PathBuf> + 'a>;
 
-fn row(ui: &mut Ui, spec: &OptionSpec, value: &mut String, pick: Option<Pick<'_>>) -> Response {
+fn row(
+    ui: &mut Ui,
+    spec: &OptionSpec,
+    value: &mut String,
+    options: RowOptions<'_>,
+    pick: Option<Pick<'_>>,
+) -> Response {
+    // A removed key (`OptionSpec::removed`) has no control: draw nothing.
+    if spec.removed.is_some() {
+        return ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
+    }
     mark_rendered(ui.ctx(), spec.key);
+    let disabled = options.disabled;
     let before = value.clone();
     let mut control: Option<Response> = None;
     let mut inner = ui.vertical(|ui| {
         match spec.kind {
-            Kind::Toggle => {
+            Kind::Toggle if spec.unset.is_none() => {
                 let mut on = matches!(spec.parse(value), Ok(Value::Toggle(true)));
-                let response = widgets::toggle(ui, &mut on, spec.label, None);
+                let response = widgets::toggle(ui, &mut on, spec.label, disabled);
                 if response.changed() {
                     *value = toggle_text(on).to_owned();
                 }
                 control = Some(response);
             }
-            Kind::Choice(table) => {
+            Kind::Toggle | Kind::Choice(_) => {
                 ui.horizontal_top(|ui| {
                     widgets::field(ui, spec.label);
-                    let mut current = match spec.parse(value) {
+                    let options = choices(spec);
+                    // `None` is unset (the empty text).
+                    let mut current: Option<&'static str> = match spec.parse(value) {
                         Ok(Value::Choice(choice)) => Some(choice),
+                        Ok(Value::Toggle(on)) => Some(toggle_text(on)),
                         _ => None,
                     };
-                    let chips: Vec<Chip<'_, Option<&'static str>>> = table
+                    let chips: Vec<Chip<'_, Option<&'static str>>> = options
                         .iter()
-                        .map(|(v, label)| Chip::new(Some(*v), label))
+                        .map(|(v, label)| Chip::new(*v, label).disabled(disabled))
                         .collect();
                     let response = widgets::chips_with(ui, &chips, &mut current);
-                    if response.changed()
-                        && let Some(choice) = current
-                    {
-                        *value = choice.to_owned();
+                    if response.changed() {
+                        *value = current.unwrap_or_default().to_owned();
                     }
                     control = Some(response);
                 });
@@ -117,29 +158,59 @@ fn row(ui: &mut Ui, spec: &OptionSpec, value: &mut String, pick: Option<Pick<'_>
             Kind::Range { min, max } => {
                 ui.horizontal_top(|ui| {
                     widgets::field(ui, spec.label);
-                    let mut number = match spec.parse(value) {
-                        Ok(Value::Number(n)) => n,
-                        _ => min,
+                    let parsed = match spec.parse(value) {
+                        Ok(Value::Number(n)) => Some(n),
+                        _ => None,
                     };
-                    let response = ui.add(egui::Slider::new(&mut number, min..=max));
-                    if response.changed() {
-                        *value = number.to_string();
-                    }
+                    let response = match options.steps {
+                        Some(steps) => {
+                            let mut current = parsed;
+                            let chips: Vec<Chip<'_, Option<u32>>> = steps
+                                .iter()
+                                .map(|(v, label)| Chip::new(Some(*v), label).disabled(disabled))
+                                .collect();
+                            let response = widgets::chips_with(ui, &chips, &mut current);
+                            if response.changed()
+                                && let Some(n) = current
+                            {
+                                *value = n.to_string();
+                            }
+                            response
+                        }
+                        None => {
+                            let mut number = parsed.unwrap_or(min);
+                            let response = ui.add_enabled(
+                                disabled.is_none(),
+                                egui::Slider::new(&mut number, min..=max),
+                            );
+                            if response.changed() {
+                                *value = number.to_string();
+                            }
+                            response
+                        }
+                    };
                     control = Some(response);
                 });
             }
             Kind::Size { .. } | Kind::Text => {
                 ui.horizontal_top(|ui| {
                     widgets::field(ui, spec.label);
-                    control = Some(text_field(ui, spec, value, 320.0));
+                    control = Some(text_field(ui, spec, value, 320.0, disabled.is_none()));
                 });
             }
             Kind::Path => match pick {
                 Some(pick) => {
                     widgets::field(ui, spec.label);
                     ui.horizontal(|ui| {
-                        control = Some(text_field(ui, spec, value, ui.available_width() - 100.0));
-                        if widgets::outline_button(ui, "Browse…").clicked()
+                        control = Some(text_field(
+                            ui,
+                            spec,
+                            value,
+                            ui.available_width() - 100.0,
+                            disabled.is_none(),
+                        ));
+                        if disabled.is_none()
+                            && widgets::outline_button(ui, "Browse…").clicked()
                             && let Some(dir) = pick()
                         {
                             *value = dir.display().to_string();
@@ -149,7 +220,8 @@ fn row(ui: &mut Ui, spec: &OptionSpec, value: &mut String, pick: Option<Pick<'_>
                 None => {
                     ui.horizontal_top(|ui| {
                         widgets::field(ui, spec.label);
-                        control = Some(text_field(ui, spec, value, ui.available_width()));
+                        let width = ui.available_width();
+                        control = Some(text_field(ui, spec, value, width, disabled.is_none()));
                     });
                 }
             },
@@ -162,13 +234,19 @@ fn row(ui: &mut Ui, spec: &OptionSpec, value: &mut String, pick: Option<Pick<'_>
         }
     });
     if let Some(control) = &control {
-        let (label, description) = (spec.label, spec.description);
-        ui.ctx().accesskit_node_builder(control.id, |node| {
-            node.set_label(label.to_owned());
-            if !description.is_empty() {
-                node.set_description(description.to_owned());
-            }
-        });
+        // The row's description, and why it is disabled when it is.
+        let description = match (disabled, spec.description) {
+            (Some(why), "") => why.to_owned(),
+            (Some(why), what) => format!("{what} {why}"),
+            (None, what) => what.to_owned(),
+        };
+        widgets::name_control(control, Some(spec.label), Some(&description));
+        if let Some(why) = disabled
+            && !matches!(spec.kind, Kind::Toggle | Kind::Choice(_))
+            && options.steps.is_none()
+        {
+            control.clone().on_disabled_hover_text(why);
+        }
     }
     if *value != before {
         inner.response.mark_changed();
@@ -176,14 +254,34 @@ fn row(ui: &mut Ui, spec: &OptionSpec, value: &mut String, pick: Option<Pick<'_>
     inner.response
 }
 
-fn text_field(ui: &mut Ui, spec: &OptionSpec, value: &mut String, width: f32) -> Response {
+/// The chips a `Toggle` or `Choice` row offers: the unset choice first
+/// (value `None`, written as an empty text) when the row has one, then
+/// On/Off or the table.
+pub fn choices(spec: &OptionSpec) -> Vec<(Option<&'static str>, &'static str)> {
+    let mut options: Vec<(Option<&'static str>, &'static str)> =
+        spec.unset.map(|label| (None, label)).into_iter().collect();
+    match spec.kind {
+        Kind::Toggle => options.extend([(Some("on"), "On"), (Some("off"), "Off")]),
+        Kind::Choice(table) => options.extend(table.iter().map(|(v, label)| (Some(*v), *label))),
+        _ => {}
+    }
+    options
+}
+
+fn text_field(
+    ui: &mut Ui,
+    spec: &OptionSpec,
+    value: &mut String,
+    width: f32,
+    enabled: bool,
+) -> Response {
     let p = theme::palette(ui.ctx());
     let edit = egui::TextEdit::singleline(value)
         .hint_text(RichText::new(spec.placeholder()).color(p.muted))
         .font(body(theme::size::LABEL))
         .margin(egui::vec2(10.0, 8.0))
         .desired_width(width.min(ui.available_width()));
-    ui.add(edit)
+    ui.add_enabled(enabled, edit)
 }
 
 #[cfg(test)]
@@ -301,5 +399,146 @@ mod tests {
         core_spec::assert_parity(SPECS, &rendered_keys(&ui.ctx));
         clear_rendered(&ui.ctx);
         assert!(rendered_keys(&ui.ctx).is_empty());
+    }
+
+    const UNSET_SPECS: &[OptionSpec] = &[
+        OptionSpec::new("shadows", Kind::Toggle, "Shadows", "").unset_label("As the game"),
+        OptionSpec::new("display_mode", Kind::Choice(MODES), "Display", "")
+            .unset_label("As the game"),
+        OptionSpec::new(
+            "draw_distance",
+            Kind::Range { min: 0, max: 8 },
+            "Distance",
+            "",
+        ),
+    ];
+
+    const STEPS: &[(u32, &str)] = &[(0, "Game's own"), (4, "4"), (8, "8")];
+
+    struct Unset {
+        values: Vec<String>,
+        locked: bool,
+    }
+
+    fn unset_window(ui: &mut Ui, form: &mut Unset) {
+        spec_row(ui, &UNSET_SPECS[0], &mut form.values[0]);
+        let disabled = form.locked.then_some("Needs DXVK");
+        spec_row_with(
+            ui,
+            &UNSET_SPECS[1],
+            &mut form.values[1],
+            RowOptions {
+                disabled,
+                ..RowOptions::default()
+            },
+        );
+        spec_row_with(
+            ui,
+            &UNSET_SPECS[2],
+            &mut form.values[2],
+            RowOptions {
+                steps: Some(STEPS),
+                ..RowOptions::default()
+            },
+        );
+    }
+
+    #[test]
+    fn removed_rows_draw_nothing_and_say_what_values_need() {
+        const REMOVED: OptionSpec = OptionSpec::removed("widescreen", "the patch is automatic");
+        const FPS: OptionSpec =
+            OptionSpec::new("fps", Kind::Range { min: 10, max: 240 }, "FPS", "")
+                .with_needs("10–240 or unlimited");
+        let mut ui = testing::harness(
+            &Palette::default(),
+            &Metrics::DEFAULT,
+            (String::from("on"), String::from("999")),
+            |ui, (old, fps): &mut (String, String)| {
+                for spec in core_spec::active(&[REMOVED, FPS]) {
+                    let value = if spec.key == "fps" {
+                        &mut *fps
+                    } else {
+                        &mut *old
+                    };
+                    spec_row(ui, spec, value);
+                }
+                spec_row(ui, &REMOVED, old);
+            },
+        );
+        assert_eq!(rendered_keys(&ui.ctx), ["fps"]);
+        assert!(
+            ui.query_by_label_contains("FPS: needs 10–240 or unlimited")
+                .is_some()
+        );
+        ui.run();
+    }
+
+    #[test]
+    fn unset_is_a_choice_that_clears_the_value() {
+        assert_eq!(
+            choices(&UNSET_SPECS[0]),
+            [
+                (None, "As the game"),
+                (Some("on"), "On"),
+                (Some("off"), "Off")
+            ]
+        );
+        assert_eq!(choices(&SPECS[1])[0], (Some("fullscreen"), "Fullscreen"));
+        let mut ui = testing::harness(
+            &Palette::default(),
+            &Metrics::DEFAULT,
+            Unset {
+                values: vec![String::new(), "window".into(), "4".into()],
+                locked: false,
+            },
+            unset_window,
+        );
+        // Empty text: "As the game" is chosen in the tri-state row.
+        let shadows = ui.get_by_role_and_label(Role::RadioGroup, "Shadows");
+        assert_eq!(testing::value(&shadows).as_deref(), Some("As the game"));
+        let rows: Vec<_> = ui.get_all_by_label("As the game").collect();
+        assert_eq!(rows.len(), 2);
+        ui.get_all_by_label("On").next().unwrap().click();
+        ui.run();
+        assert_eq!(ui.state().values[0], "on");
+        // Back to unset: the key is cleared.
+        ui.get_all_by_label("As the game").nth(1).unwrap().click();
+        ui.run();
+        assert_eq!(ui.state().values[1], "");
+    }
+
+    #[test]
+    fn rows_can_be_disabled_and_ranges_drawn_as_steps() {
+        let mut ui = testing::harness(
+            &Palette::default(),
+            &Metrics::DEFAULT,
+            Unset {
+                values: vec![String::new(), "window".into(), "4".into()],
+                locked: true,
+            },
+            unset_window,
+        );
+        let display = ui.get_by_role_and_label(Role::RadioGroup, "Display");
+        assert_eq!(
+            testing::description(&display).as_deref(),
+            Some("Needs DXVK")
+        );
+        let window = ui.get_by_label("Window");
+        assert!(testing::disabled(&window));
+        ui.get_by_label("Fullscreen").click();
+        ui.run();
+        assert_eq!(
+            ui.state().values[1],
+            "window",
+            "disabled rows ignore clicks"
+        );
+
+        // The range is chips, not a slider.
+        assert!(ui.query_by_role(Role::Slider).is_none());
+        let distance = ui.get_by_role_and_label(Role::RadioGroup, "Distance");
+        assert_eq!(testing::value(&distance).as_deref(), Some("4"));
+        ui.get_by_label("Game's own").click();
+        ui.run();
+        assert_eq!(ui.state().values[2], "0");
     }
 }

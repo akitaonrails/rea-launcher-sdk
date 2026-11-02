@@ -1,0 +1,29 @@
+[package]
+name = "rea-launcher-close-hook"
+description = "A WH_GETMESSAGE hook DLL that makes old games honour Alt+F4 and window close, configured per game without recompiling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "rea_close_hook"
+# The DLL the launcher ships; the rlib lets the launcher validate the
+# configuration with the same parser.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[dev-dependencies]
+rea-launcher-win32 = { path = "../rea-launcher-win32" }

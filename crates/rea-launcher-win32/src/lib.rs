@@ -23,6 +23,7 @@ pub mod disk;
 pub mod display;
 #[cfg(windows)]
 pub mod gpu;
+pub mod instance;
 #[cfg(windows)]
 pub mod process;
 #[cfg(windows)]
