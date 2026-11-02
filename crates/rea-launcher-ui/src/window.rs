@@ -9,13 +9,19 @@
 //!   egui-winit creates a *logical* size, which Wine multiplies by its own
 //!   DPI scale, so that scale is divided out: pass
 //!   `rea_launcher_win32::display::wine_dpi_scale()` as `wine_scale`.
-//! - **On Windows** (and natively on Linux) the window starts at 1x and the
-//!   first frame fits it to the DPI-aware scale, then recentres it.
+//! - **On Windows** (and natively on Linux) the window is drawn at 1x and
+//!   left to the system's DPI scaling, unless the launcher opts in with
+//!   [`WindowFit::with_native_fit`]: then the first frame fits it to the
+//!   screen at the DPI-aware scale and recentres it (CMR3, CMR4, OR, SCR;
+//!   SRR never scaled on Windows).
+//!
+//! [`WindowFit::screen`] gives the screen size in pixels once known, for
+//! Steam Deck detection or resolution chips.
 //!
 //! ```no_run
 //! # use rea_launcher_ui::window::{WindowFit, SIZE};
 //! # let (wine, screen, wine_scale) = (false, None, 1.0);
-//! let mut fit = WindowFit::new(SIZE, wine, screen, wine_scale);
+//! let mut fit = WindowFit::new(SIZE, wine, screen, wine_scale).with_native_fit(true);
 //! let options = fit.native_options("Colin McRae Rally 04");
 //! // in App::ui, every frame (it acts once):
 //! # let ctx = eframe::egui::Context::default();
@@ -70,6 +76,7 @@ pub struct WindowFit {
     wine: bool,
     screen: Option<(u32, u32)>,
     zoom: f32,
+    native_fit: bool,
     fitted: bool,
     /// Off Wine: the resize waits until egui's zoom has taken effect.
     resize_pending: bool,
@@ -86,9 +93,25 @@ impl WindowFit {
             wine,
             screen,
             zoom: creation_zoom(design, wine, screen, wine_scale),
+            native_fit: false,
             fitted: false,
             resize_pending: false,
         }
+    }
+
+    /// Off Wine, fit the window to the screen on the first frame (resize
+    /// and recentre); off by default, so the system's DPI scaling alone
+    /// sizes it. Under Wine the creation size already fits.
+    pub fn with_native_fit(mut self, fit: bool) -> WindowFit {
+        self.native_fit = fit;
+        self
+    }
+
+    /// The screen size in physical pixels: the one passed to
+    /// [`WindowFit::new`], else egui's monitor size once the first frame
+    /// has run. `None` before that, or when nothing reports a size.
+    pub fn screen(&self) -> Option<(u32, u32)> {
+        self.screen
     }
 
     /// The current zoom (final after the first frame).
@@ -119,10 +142,11 @@ impl WindowFit {
         }
     }
 
-    /// Call at the top of every frame. The first frame sets egui's zoom;
-    /// off Wine it also picks the DPI-aware zoom, and once that zoom is in
-    /// effect (egui applies it from the next pass) resizes the window and
-    /// recentres it. Then it does nothing.
+    /// Call at the top of every frame. The first frame measures the screen
+    /// when it wasn't given and sets egui's zoom; off Wine with
+    /// [`WindowFit::with_native_fit`] it picks the DPI-aware zoom, and once
+    /// that zoom is in effect (egui applies it from the next pass) resizes
+    /// the window and recentres it. Then it does nothing.
     ///
     /// The resize is sent in *points at the active zoom*: egui-winit turns
     /// `InnerSize(s)` into `s × native × zoom` pixels, so sending
@@ -132,13 +156,15 @@ impl WindowFit {
     pub fn first_frame(&mut self, ctx: &egui::Context) {
         if !self.fitted {
             self.fitted = true;
-            if !self.wine {
-                let native = ctx.native_pixels_per_point().unwrap_or(1.0);
-                let screen = self.screen.or_else(|| {
-                    ctx.input(|input| input.viewport().monitor_size)
-                        .map(|size| physical(size, native))
-                });
-                self.zoom = window_zoom(self.design, screen, native);
+            let native = ctx.native_pixels_per_point().unwrap_or(1.0);
+            if self.screen.is_none() {
+                self.screen = ctx
+                    .input(|input| input.viewport().monitor_size)
+                    .map(|size| physical(size, native))
+                    .filter(|&(w, h)| w > 0 && h > 0);
+            }
+            if !self.wine && self.native_fit {
+                self.zoom = window_zoom(self.design, self.screen, native);
                 self.resize_pending = self.zoom != ctx.zoom_factor();
             }
             if self.zoom != ctx.zoom_factor() {
@@ -317,7 +343,7 @@ mod tests {
     #[test]
     fn first_frame_zooms_then_resizes_once() {
         let ctx = egui::Context::default();
-        let mut fit = WindowFit::new(SIZE, false, Some((3840, 2160)), 1.0);
+        let mut fit = WindowFit::new(SIZE, false, Some((3840, 2160)), 1.0).with_native_fit(true);
         let first = run(&ctx, &mut fit);
         assert_eq!(fit.zoom(), 1.5);
         assert!(
@@ -350,6 +376,40 @@ mod tests {
             );
         }
         assert_eq!(ctx.zoom_factor(), 1.5);
+    }
+
+    #[test]
+    fn without_native_fit_the_system_scales_and_the_screen_is_measured() {
+        let ctx = egui::Context::default();
+        let mut fit = WindowFit::new(SIZE, false, None, 1.0);
+        assert_eq!(fit.screen(), None);
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .monitor_size = Some(vec2(1280.0, 800.0));
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(input.clone(), |ui| fit.first_frame(ui.ctx()));
+            output.textures_delta.clear();
+            let commands = output
+                .viewport_output
+                .remove(&egui::ViewportId::ROOT)
+                .map(|viewport| viewport.commands)
+                .unwrap_or_default();
+            assert!(
+                !commands
+                    .iter()
+                    .any(|c| matches!(c, egui::ViewportCommand::InnerSize(_)))
+            );
+        }
+        assert_eq!(fit.zoom(), 1.0);
+        assert_eq!(ctx.zoom_factor(), 1.0);
+        // A Steam Deck: points × native scale (1 here) in pixels.
+        assert_eq!(fit.screen(), Some((1280, 800)));
+        // A given screen is kept.
+        let given = WindowFit::new(SIZE, true, Some((3840, 2160)), 1.0);
+        assert_eq!(given.screen(), Some((3840, 2160)));
     }
 
     #[test]

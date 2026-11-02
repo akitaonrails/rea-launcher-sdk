@@ -123,7 +123,8 @@ mod windows {
     /// Where [`Key::machine_or_virtual_store`] opened the key.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Place {
-        /// `HKLM` (32-bit view under `SOFTWARE`).
+        /// `HKLM`, in its 32-bit view for `SOFTWARE` paths (the game keys
+        /// [`Key::machine_or_virtual_store`] is for).
         Machine,
         /// `HKCU\Software\Classes\VirtualStore\MACHINE\…` (no elevation on
         /// Windows; the 32-bit game reads it transparently).
@@ -131,9 +132,11 @@ mod windows {
     }
 
     impl Place {
+        /// The label the launchers log (CMR4's): where the game's values
+        /// went.
         pub fn describe(self) -> &'static str {
             match self {
-                Place::Machine => "HKLM",
+                Place::Machine => "HKLM 32-bit view",
                 Place::VirtualStore => "HKCU VirtualStore",
             }
         }
@@ -447,6 +450,56 @@ mod windows {
         let mut wow64 = 0;
         // SAFETY: the pseudo-handle needs no closing; the output is local.
         unsafe { IsWow64Process(GetCurrentProcess(), &mut wow64) != 0 && wow64 != 0 }
+    }
+}
+
+/// Run on Windows or under Wine (`scripts/wine-test`).
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn places_are_labelled_as_the_launchers_log_them() {
+        assert_eq!(Place::Machine.describe(), "HKLM 32-bit view");
+        assert_eq!(Place::VirtualStore.describe(), "HKCU VirtualStore");
+    }
+
+    #[test]
+    fn reading_never_creates_keys() {
+        let path = r"Software\rea-launcher-sdk-test\never-created";
+        assert!(Key::open_read(Hive::CurrentUser, path).unwrap().is_none());
+        let values = Key::read_machine(r"SOFTWARE\rea-launcher-sdk-test\missing").unwrap();
+        assert!(!values.exists());
+        assert_eq!(values.dword("Width").unwrap(), None);
+        // Still absent after the reads.
+        assert!(Key::open_read(Hive::CurrentUser, path).unwrap().is_none());
+    }
+
+    #[test]
+    fn written_values_read_back_and_seed_only_when_missing() {
+        // A fresh key each run: the test prefix keeps what earlier runs wrote.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = format!(
+            r"Software\rea-launcher-sdk-test\values-{}-{stamp}",
+            std::process::id()
+        );
+        let path = path.as_str();
+        let key = Key::create(Hive::CurrentUser, path).unwrap();
+        key.set_dword("Width", 1920).unwrap();
+        key.set_string("Path", r"C:\Games\Rally").unwrap();
+        assert!(!key.set_dword_if_missing("Width", 640).unwrap());
+        assert!(key.set_string_if_missing("Lang", "E").unwrap());
+        let read = Key::open_read(Hive::CurrentUser, path).unwrap().unwrap();
+        assert_eq!(read.dword("Width").unwrap(), Some(1920));
+        assert_eq!(
+            read.string("Path").unwrap().as_deref(),
+            Some(r"C:\Games\Rally")
+        );
+        assert_eq!(read.string("Lang").unwrap().as_deref(), Some("E"));
+        assert!(read.dword("Path").is_err(), "a string is not a DWORD");
     }
 }
 

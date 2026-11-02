@@ -10,6 +10,8 @@
 //! The launchers are 32-bit (`i686-pc-windows-gnu`) and usually run under
 //! Wine, so every helper is written to behave the same there.
 
+pub mod console;
+pub mod http;
 mod latest;
 pub mod reg;
 

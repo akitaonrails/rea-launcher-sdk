@@ -1,33 +1,56 @@
-//! The launchers' widgets, drawn in the installed [`Palette`].
+//! The launchers' widgets, drawn in the installed [`Palette`] and
+//! [`Metrics`].
 //!
 //! Where each one comes from:
-//! - [`chips`]/[`chips_with`]: SCR's per-chip disabled reasons + SRR's
-//!   "keep the saved value outlined while disabled", made one focus stop
-//!   whose value ←/→ (the pad's left/right) step, as SCR's pad did.
-//! - [`toggle`]: OR's (returns its `Response`) with CMR3's label wrap and
-//!   SCR's disabled reason.
+//! - [`chips`]/[`chips_with`]/[`chips_sized`]: SCR's per-chip disabled
+//!   reasons and compact size + SRR's "keep the saved value outlined while
+//!   disabled", made one focus stop whose value ←/→ (the pad's left/right)
+//!   step, as SCR's pad did.
+//! - [`toggle`]: OR's (returns its `Response`) with CMR3's label wrap
+//!   ([`Metrics::toggle_wrap`]) and SCR's disabled reason.
 //! - [`look_card`]/[`fit_title`]: CMR4's focus ring and detail tooltip, OR's
-//!   title fitting.
+//!   title fitting; [`game_card`]: SCR's trilogy picker.
+//! - [`field_focused`], [`heading_focused`], [`focus_bar`]: SCR's
+//!   row-focus model.
 //! - [`primary_button`], [`progress_bar`]: OR. [`outline_button`],
 //!   [`folder_field`], [`heading`], [`field`], [`tabs_bar`],
-//!   [`play_plate`]/[`footer`], [`gradient`], [`stripes`]: identical in all
+//!   [`play_plate`]/[`footer`], [`gradient`], [`stripes`]: the same in all
 //!   five; the colours follow OR's split (action vs selection).
 //! - [`decode_jpeg`]/[`hero_image`]: the portrait strip, CMR4 (left crop)
 //!   and OR (centre crop).
 //!
-//! Every focusable widget draws a focus ring, so pad navigation is visible.
+//! Every focusable widget draws a focus ring, so pad navigation is
+//! visible, and every widget reports its role, label, state and (when
+//! disabled) the reason to AccessKit, so screen readers and the
+//! [`crate::testing`] harness can find it.
 
 use std::path::PathBuf;
 
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, CursorIcon, EventFilter, Key, Mesh, Painter, Rect,
-    Response, RichText, Sense, Shape, Stroke, StrokeKind, TextureHandle, Ui, Vec2, pos2, vec2,
+    Response, RichText, Role, Sense, Shape, Stroke, StrokeKind, TextureHandle, Ui, Vec2,
+    WidgetInfo, pos2, vec2,
 };
 
-use crate::theme::{self, Palette, body, condensed, decal, semibold};
+use crate::theme::{self, ButtonText, Metrics, Palette, body, condensed, decal, semibold, size};
 
 fn palette(ui: &Ui) -> Palette {
     theme::palette(ui.ctx())
+}
+
+fn metrics(ui: &Ui) -> Metrics {
+    theme::metrics(ui.ctx())
+}
+
+/// Reports `info` for `response` to AccessKit, with an optional
+/// description (a disabled reason, a card's note).
+fn accessible(response: &Response, info: WidgetInfo, description: Option<&str>) {
+    response.widget_info(|| info.clone());
+    if let Some(description) = description.filter(|text| !text.is_empty()) {
+        response.ctx.accesskit_node_builder(response.id, |node| {
+            node.set_description(description.to_owned());
+        });
+    }
 }
 
 /// Outlines `rect` in the focus colour, just outside it.
@@ -47,7 +70,8 @@ pub fn focus_ring(painter: &Painter, rect: Rect, color: Color32) {
 pub struct Chip<'a, T> {
     pub value: T,
     pub label: &'a str,
-    /// Why it cannot be chosen now (shown on hover); `None` when it can.
+    /// Why it cannot be chosen now (shown on hover, and to screen readers);
+    /// `None` when it can.
     pub disabled: Option<&'a str>,
 }
 
@@ -113,6 +137,15 @@ pub fn step_choice(enabled: &[bool], current: Option<usize>, by: isize) -> Optio
     Some(at as usize)
 }
 
+/// Chip padding: [`Metrics::chip_pad`]/[`Metrics::chip_gap`] or the compact
+/// pair (SCR's button-mapping rows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChipSize {
+    #[default]
+    Normal,
+    Compact,
+}
+
 /// A row of choices, all with the same `disabled` reason (or none). See
 /// [`chips_with`].
 pub fn chips<T: PartialEq + Clone, S: AsRef<str>>(
@@ -133,20 +166,40 @@ pub fn chips<T: PartialEq + Clone, S: AsRef<str>>(
 /// forward, so a pad never has to visit every chip. Clicks pick a chip.
 /// Disabled chips ignore clicks and show their reason on hover. The row's
 /// response is `changed()` when the value changed.
+///
+/// Accessibility: the row is a radio group whose value is the chosen
+/// label; each chip is a radio button (checked when chosen, disabled with
+/// its reason as the description).
 pub fn chips_with<T: PartialEq + Clone>(
     ui: &mut Ui,
     options: &[Chip<'_, T>],
     current: &mut T,
 ) -> Response {
+    chips_sized(ui, options, current, ChipSize::Normal)
+}
+
+/// [`chips_with`] at a [`ChipSize`].
+pub fn chips_sized<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    options: &[Chip<'_, T>],
+    current: &mut T,
+    size: ChipSize,
+) -> Response {
     let p = palette(ui);
+    let m = metrics(ui);
+    let (pad, gap) = match size {
+        ChipSize::Normal => (m.chip_pad, m.chip_gap),
+        ChipSize::Compact => (m.compact_chip_pad, m.compact_chip_gap),
+    };
     let id = ui.next_auto_id().with("rea-chips");
     let mut changed = false;
     let row = ui
         .horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.x = gap;
             for chip in options {
                 let enabled = chip.disabled.is_none();
-                let state = chip_state(*current == chip.value, enabled);
+                let selected = *current == chip.value;
+                let state = chip_state(selected, enabled);
                 let (text, fill, border) = match state {
                     ChipState::Selected => (p.on_select, p.select, p.select),
                     ChipState::Idle => (p.ink, Color32::TRANSPARENT, p.line),
@@ -158,14 +211,14 @@ pub fn chips_with<T: PartialEq + Clone>(
                     ChipState::Disabled => (p.disabled_ink, Color32::TRANSPARENT, p.disabled_line),
                 };
                 let font = if state == ChipState::Selected {
-                    semibold(14.0)
+                    semibold(size::CHIP)
                 } else {
-                    body(14.0)
+                    body(size::CHIP)
                 };
                 let galley = ui
                     .painter()
                     .layout_no_wrap(chip.label.to_owned(), font, text);
-                let size = vec2(galley.size().x + 24.0, 30.0);
+                let size = vec2(galley.size().x + pad, 30.0);
                 // Chips are not focus stops themselves: the row is.
                 let sense = if enabled {
                     Sense::CLICK
@@ -174,7 +227,7 @@ pub fn chips_with<T: PartialEq + Clone>(
                 };
                 let (rect, response) = ui.allocate_exact_size(size, sense);
                 let fill = if state == ChipState::Idle && response.hovered() {
-                    p.line
+                    p.panel
                 } else {
                     fill
                 };
@@ -187,10 +240,14 @@ pub fn chips_with<T: PartialEq + Clone>(
                 );
                 ui.painter()
                     .galley(rect.center() - galley.size() / 2.0, galley, text);
+                accessible(
+                    &response,
+                    WidgetInfo::selected(Role::RadioButton, enabled, selected, chip.label),
+                    chip.disabled,
+                );
                 if let Some(reason) = chip.disabled {
                     response.on_hover_text(reason);
-                } else if response.on_hover_cursor(CursorIcon::PointingHand).clicked()
-                    && *current != chip.value
+                } else if response.on_hover_cursor(CursorIcon::PointingHand).clicked() && !selected
                 {
                     *current = chip.value.clone();
                     changed = true;
@@ -238,22 +295,39 @@ pub fn chips_with<T: PartialEq + Clone>(
     if changed {
         response.mark_changed();
     }
+    let chosen = options
+        .iter()
+        .find(|chip| chip.value == *current)
+        .map(|chip| chip.label);
+    response.widget_info(|| WidgetInfo {
+        enabled: focusable,
+        ..WidgetInfo::new(Role::RadioGroup)
+    });
+    if let Some(chosen) = chosen {
+        ui.ctx()
+            .accesskit_node_builder(id, |node| node.set_value(chosen.to_owned()));
+    }
     response
 }
 
 // ---------------------------------------------------------------- toggle
 
 /// A switch: knob left and outlined is off, knob right on `select` is on.
-/// Long labels wrap to the width left (CMR3). With a `disabled` reason it
-/// ignores clicks and shows the reason on hover.
+/// Long labels wrap to the width left when [`Metrics::toggle_wrap`]. With a
+/// `disabled` reason it ignores clicks and shows the reason on hover.
+/// Accessibility: a switch named by its label.
 pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str, disabled: Option<&str>) -> Response {
     let p = palette(ui);
     let enabled = disabled.is_none();
     let label = if enabled { p.ink } else { p.disabled_ink };
-    let wrap = (ui.available_width() - 58.0).max(100.0);
-    let galley = ui
-        .painter()
-        .layout(text.to_owned(), body(15.0), label, wrap);
+    let galley = if metrics(ui).toggle_wrap {
+        let wrap = (ui.available_width() - 58.0).max(100.0);
+        ui.painter()
+            .layout(text.to_owned(), body(size::LABEL), label, wrap)
+    } else {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), body(size::LABEL), label)
+    };
     let size = vec2(46.0 + 12.0 + galley.size().x, 30.0_f32.max(galley.size().y));
     let (rect, mut response) = ui.allocate_exact_size(
         size,
@@ -296,6 +370,11 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str, disabled: Option<&str>) ->
     if response.has_focus() {
         focus_ring(painter, track, p.focus);
     }
+    accessible(
+        &response,
+        WidgetInfo::selected(Role::Switch, enabled, *on, text),
+        disabled,
+    );
     match disabled {
         Some(reason) => response.on_hover_text(reason),
         None => response.on_hover_cursor(CursorIcon::PointingHand),
@@ -315,12 +394,13 @@ pub struct LookCard<'a> {
     pub selected: bool,
     /// A badge on the top edge (e.g. "Recommended").
     pub badge: Option<&'a str>,
-    /// From [`fit_title`], so every card's title has the same size; 0 = 22.
+    /// From [`fit_title`], so every card's title has the same size; 0 uses
+    /// [`theme::CardMetrics::title`].
     pub title_size: f32,
 }
 
-/// The largest title size (22 at most, 12 at least) at which every one of
-/// `titles` fits `width` (OR).
+/// The largest title size ([`theme::CardMetrics::title`] at most,
+/// [`size::FIT_TITLE_MIN`] at least) at which every one of `titles` fits `width` (OR).
 pub fn fit_title(ui: &Ui, titles: &[&str], width: f32) -> f32 {
     let fits = |size: f32| {
         titles.iter().all(|title| {
@@ -331,32 +411,30 @@ pub fn fit_title(ui: &Ui, titles: &[&str], width: f32) -> f32 {
                 <= width
         })
     };
-    let mut size = 22.0;
-    while size > 12.0 && !fits(size) {
+    let mut size = metrics(ui).card.title;
+    while size > size::FIT_TITLE_MIN && !fits(size) {
         size -= 0.5;
     }
     size
 }
 
-/// A look card of `size`; `clicked()` when chosen (also by Space/A while
-/// focused, which is how the pad reaches it).
-pub fn look_card(ui: &mut Ui, size: Vec2, card: &LookCard<'_>) -> Response {
+/// The card frame shared by look and game cards: fill, border, focus ring.
+fn card_frame(ui: &Ui, rect: Rect, response: &Response, selected: bool) {
     let p = palette(ui);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let focused = response.has_focus();
-    let painter = ui.painter();
-    let fill = if card.selected {
+    let fill = if selected {
         p.panel
     } else if response.hovered() || focused {
         p.panel.gamma_multiply(0.6)
     } else {
         Color32::TRANSPARENT
     };
-    let stroke = if card.selected {
+    let stroke = if selected {
         Stroke::new(2.0, p.select)
     } else {
         Stroke::new(1.0, p.line)
     };
+    let painter = ui.painter();
     painter.rect(
         rect,
         CornerRadius::same(8),
@@ -367,38 +445,61 @@ pub fn look_card(ui: &mut Ui, size: Vec2, card: &LookCard<'_>) -> Response {
     if focused {
         focus_ring(painter, rect, p.focus);
     }
-    let pad = 12.0;
+}
+
+/// A look card of `size`; `clicked()` when chosen (also by Space/A while
+/// focused, which is how the pad reaches it). Accessibility: a radio
+/// button named by its title, its note (and detail) as the description.
+pub fn look_card(ui: &mut Ui, size: Vec2, card: &LookCard<'_>) -> Response {
+    let p = palette(ui);
+    let c = metrics(ui).card;
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    card_frame(ui, rect, &response, card.selected);
+    let painter = ui.painter();
     let title_size = if card.title_size > 0.0 {
         card.title_size
     } else {
-        22.0
+        c.title
     };
     painter.text(
-        rect.left_top() + vec2(pad, pad - 2.0),
+        rect.left_top() + vec2(c.pad, c.pad - 2.0),
         Align2::LEFT_TOP,
         card.title,
         condensed(title_size),
         if card.selected { p.select } else { p.ink },
     );
     if let Some(badge) = card.badge {
-        let galley = painter.layout_no_wrap(badge.to_owned(), semibold(12.0), p.on_action);
+        let galley = painter.layout_no_wrap(badge.to_owned(), semibold(c.badge), p.on_action);
         let tab = Rect::from_min_size(
             pos2(
-                rect.right() - pad - galley.size().x - 12.0,
-                rect.top() - 9.0,
+                rect.right() - c.pad - galley.size().x - 2.0 * c.badge_pad,
+                rect.top() - c.badge_rise,
             ),
-            galley.size() + vec2(12.0, 2.0),
+            galley.size() + vec2(2.0 * c.badge_pad, 2.0),
         );
         painter.rect_filled(tab, CornerRadius::same(4), p.action);
-        painter.galley(tab.min + vec2(6.0, 1.0), galley, p.on_action);
+        painter.galley(tab.min + vec2(c.badge_pad, 1.0), galley, p.on_action);
     }
     let galley = painter.layout(
         card.note.to_owned(),
-        body(13.0),
+        body(c.note),
         p.muted,
-        size.x - 2.0 * pad,
+        size.x - 2.0 * c.pad,
     );
-    painter.galley(rect.left_top() + vec2(pad, pad + 30.0), galley, p.muted);
+    painter.galley(
+        rect.left_top() + vec2(c.pad, c.pad + c.note_top),
+        galley,
+        p.muted,
+    );
+    let description = match (card.badge, card.detail) {
+        (badge, Some(detail)) => format!("{}{}. {detail}", badge_prefix(badge), card.note),
+        (badge, None) => format!("{}{}", badge_prefix(badge), card.note),
+    };
+    accessible(
+        &response,
+        WidgetInfo::selected(Role::RadioButton, true, card.selected, card.title),
+        Some(&description),
+    );
     let response = response.on_hover_cursor(CursorIcon::PointingHand);
     match card.detail {
         Some(detail) => response.on_hover_text(detail),
@@ -406,55 +507,164 @@ pub fn look_card(ui: &mut Ui, size: Vec2, card: &LookCard<'_>) -> Response {
     }
 }
 
+fn badge_prefix(badge: Option<&str>) -> String {
+    badge.map(|badge| format!("{badge}. ")).unwrap_or_default()
+}
+
+/// One game in a multi-game launcher (SCR's trilogy picker).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GameCard<'a> {
+    pub title: &'a str,
+    /// The line under the title (year, edition, "Not in folder").
+    pub subtitle: &'a str,
+    pub selected: bool,
+    /// Whether the game was found: the dot is `select` when it was,
+    /// `disabled_ink` (and the subtitle dimmed) when not.
+    pub installed: bool,
+}
+
+/// A game card of `size`; `clicked()` when chosen. It stays choosable when
+/// the game is not installed (the subtitle says why it can't play).
+/// Accessibility: a radio button named by the title, the subtitle and
+/// "installed"/"not installed" as the description.
+pub fn game_card(ui: &mut Ui, size: Vec2, card: &GameCard<'_>) -> Response {
+    let p = palette(ui);
+    let c = metrics(ui).card;
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    card_frame(ui, rect, &response, card.selected);
+    let painter = ui.painter();
+    painter.text(
+        rect.left_top() + vec2(c.pad, c.pad - 2.0),
+        Align2::LEFT_TOP,
+        card.title,
+        condensed(c.title),
+        if card.selected { p.select } else { p.ink },
+    );
+    let (dot, sub) = if card.installed {
+        (p.select, p.muted)
+    } else {
+        (p.disabled_ink, p.disabled_ink)
+    };
+    painter.circle_filled(pos2(rect.right() - c.pad, rect.top() + 18.0), 4.0, dot);
+    painter.text(
+        rect.left_top() + vec2(c.pad, c.pad + 24.0),
+        Align2::LEFT_TOP,
+        card.subtitle,
+        body(c.note),
+        sub,
+    );
+    let state = if card.installed {
+        "installed"
+    } else {
+        "not installed"
+    };
+    accessible(
+        &response,
+        WidgetInfo::selected(Role::RadioButton, true, card.selected, card.title),
+        Some(&format!("{}; {state}", card.subtitle)),
+    );
+    response.on_hover_cursor(CursorIcon::PointingHand)
+}
+
 // ---------------------------------------------------------------- text
 
 /// A section heading: small semibold in `muted`.
 pub fn heading(ui: &mut Ui, text: &str) -> Response {
+    heading_focused(ui, text, false)
+}
+
+/// [`heading`], in `focus` while its row has the pad's focus (SCR).
+pub fn heading_focused(ui: &mut Ui, text: &str, focused: bool) -> Response {
     let p = palette(ui);
-    ui.label(RichText::new(text).font(semibold(14.0)).color(p.muted))
+    let color = if focused { p.focus } else { p.muted };
+    ui.label(
+        RichText::new(text)
+            .font(semibold(size::HEADING))
+            .color(color),
+    )
 }
 
 /// A note under a control: 13 pt, `muted`.
 pub fn note(ui: &mut Ui, text: &str) -> Response {
     let p = palette(ui);
-    ui.label(RichText::new(text).font(body(13.0)).color(p.muted))
+    ui.label(RichText::new(text).font(body(size::NOTE)).color(p.muted))
 }
 
 /// An error line: 13 pt, `error`.
 pub fn error_note(ui: &mut Ui, text: &str) -> Response {
     let p = palette(ui);
-    ui.label(RichText::new(text).font(body(13.0)).color(p.error))
+    ui.label(RichText::new(text).font(body(size::NOTE)).color(p.error))
 }
 
-/// Width of a [`field`] label.
-pub const FIELD_WIDTH: f32 = 118.0;
+/// The default width of a [`field`] label ([`Metrics::field_width`]).
+pub const FIELD_WIDTH: f32 = Metrics::DEFAULT.field_width;
 
-/// A row's label, as tall as a chip. Put rows in `ui.horizontal_top` so
-/// the label and its chips start on the same line.
-pub fn field(ui: &mut Ui, text: &str) {
+/// A row's label, [`Metrics::field_width`] wide and as tall as a chip. Put
+/// rows in `ui.horizontal_top` so the label and its chips start on the
+/// same line. Accessibility: a text label.
+pub fn field(ui: &mut Ui, text: &str) -> Response {
+    field_focused(ui, text, false)
+}
+
+/// [`field`], in `focus` while its row has the pad's focus (SCR).
+pub fn field_focused(ui: &mut Ui, text: &str, focused: bool) -> Response {
     let p = palette(ui);
-    let (rect, _) = ui.allocate_exact_size(vec2(FIELD_WIDTH, 30.0), Sense::hover());
+    let width = metrics(ui).field_width;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 30.0), Sense::hover());
     ui.painter().text(
         rect.left_center(),
         Align2::LEFT_CENTER,
         text,
-        body(15.0),
-        p.ink,
+        body(size::LABEL),
+        if focused { p.focus } else { p.ink },
     );
+    accessible(
+        &response,
+        WidgetInfo::labeled(Role::Label, true, text),
+        None,
+    );
+    response
+}
+
+/// A bar left of `rect` in `focus` when `focused`: SCR's mark for the row
+/// the pad is on.
+pub fn focus_bar(ui: &Ui, rect: Rect, focused: bool) {
+    if focused {
+        let bar = Rect::from_min_size(
+            pos2(rect.left() - 8.0, rect.top() + 2.0),
+            vec2(3.0, (rect.height() - 4.0).max(8.0)),
+        );
+        ui.painter()
+            .rect_filled(bar, CornerRadius::same(1), palette(ui).focus);
+    }
 }
 
 // ---------------------------------------------------------------- buttons
 
-/// A secondary button: `action` outline, `ink` text (action is never text).
+/// The text colour of an outline button.
+fn button_text(p: &Palette, m: &Metrics, hovered: bool) -> Color32 {
+    match (hovered, m.button_text) {
+        // The hover fill is `panel`; ink always reads on it.
+        (true, _) | (false, ButtonText::Ink) => p.ink,
+        (false, ButtonText::Action) => p.action,
+    }
+}
+
+/// A secondary button: `action` outline, text per
+/// [`Metrics::button_text`] (ink while hovered). Accessibility: a button.
 pub fn outline_button(ui: &mut Ui, text: &str) -> Response {
     let p = palette(ui);
-    let galley = ui
+    let m = metrics(ui);
+    let width = ui
         .painter()
-        .layout_no_wrap(text.to_owned(), semibold(15.0), p.ink);
-    let size = vec2((galley.size().x + 24.0).max(92.0), 34.0);
+        .layout_no_wrap(text.to_owned(), semibold(size::BUTTON), p.ink)
+        .size()
+        .x;
+    let size = vec2((width + 24.0).max(92.0), 34.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let fill = if response.hovered() {
-        p.line
+    let hovered = response.hovered();
+    let fill = if hovered {
+        p.panel
     } else {
         Color32::TRANSPARENT
     };
@@ -465,11 +675,21 @@ pub fn outline_button(ui: &mut Ui, text: &str) -> Response {
         Stroke::new(1.5, p.action),
         StrokeKind::Inside,
     );
-    ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, p.ink);
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        text,
+        semibold(size::BUTTON),
+        button_text(&p, &m, hovered),
+    );
     if response.has_focus() {
         focus_ring(ui.painter(), rect, p.focus);
     }
+    accessible(
+        &response,
+        WidgetInfo::labeled(Role::Button, true, text),
+        None,
+    );
     response.on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -478,7 +698,7 @@ pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
     let p = palette(ui);
     let galley = ui
         .painter()
-        .layout_no_wrap(text.to_owned(), semibold(15.0), p.on_action);
+        .layout_no_wrap(text.to_owned(), semibold(size::BUTTON), p.on_action);
     let (rect, response) =
         ui.allocate_exact_size(vec2(galley.size().x + 36.0, 34.0), Sense::click());
     let fill = if response.hovered() {
@@ -492,28 +712,41 @@ pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
     if response.has_focus() {
         focus_ring(ui.painter(), rect, p.focus);
     }
+    accessible(
+        &response,
+        WidgetInfo::labeled(Role::Button, true, text),
+        None,
+    );
     response.on_hover_cursor(CursorIcon::PointingHand)
 }
 
 /// A thin bar filled from the left with `action`; `fraction` is clamped.
+/// Accessibility: a progress indicator with the fraction as its value.
 pub fn progress_bar(ui: &mut Ui, fraction: f32) -> Response {
     let p = palette(ui);
+    let fraction = fraction.clamp(0.0, 1.0);
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(vec2(width, 10.0), Sense::hover());
     ui.painter()
         .rect_filled(rect, CornerRadius::same(5), p.line);
-    let done = Rect::from_min_size(
-        rect.min,
-        vec2(width * fraction.clamp(0.0, 1.0), rect.height()),
-    );
+    let done = Rect::from_min_size(rect.min, vec2(width * fraction, rect.height()));
     ui.painter()
         .rect_filled(done, CornerRadius::same(5), p.action);
+    accessible(
+        &response,
+        WidgetInfo {
+            value: Some(f64::from(fraction)),
+            ..WidgetInfo::new(Role::ProgressIndicator)
+        },
+        None,
+    );
     response
 }
 
 /// A path field with a "Browse…" button; true when the text changed.
 /// `pick` opens the folder picker (`rea_launcher_win32::dialog::pick_folder`
 /// on Windows, zenity/kdialog natively on Linux) and runs only on click.
+/// Accessibility: the text field is named by `hint`.
 pub fn folder_field(
     ui: &mut Ui,
     value: &mut String,
@@ -525,10 +758,13 @@ pub fn folder_field(
     ui.horizontal(|ui| {
         let edit = egui::TextEdit::singleline(value)
             .hint_text(RichText::new(hint).color(p.muted))
-            .font(body(15.0))
+            .font(body(size::LABEL))
             .margin(vec2(10.0, 8.0))
             .desired_width(ui.available_width() - 100.0);
-        changed |= ui.add(edit).changed();
+        let response = ui.add(edit);
+        changed |= response.changed();
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_label(hint.to_owned()));
         if outline_button(ui, "Browse…").clicked()
             && let Some(dir) = pick()
         {
@@ -541,9 +777,16 @@ pub fn folder_field(
 
 // ---------------------------------------------------------------- tabs, footer
 
-/// The tab names, the current one underlined in `action`, then a divider.
-/// Tabs are clicked or changed with LB/RB, so they are not focus stops.
-/// True when a click changed `current`.
+/// The colour of a tab's name: `ink` for the current or hovered tab,
+/// `muted` otherwise.
+fn tab_color(p: &Palette, current: bool, hovered: bool) -> Color32 {
+    if current || hovered { p.ink } else { p.muted }
+}
+
+/// The tab names, the current one in `ink` and underlined in `action`,
+/// then a divider. Tabs are clicked or changed with LB/RB, so they are not
+/// focus stops. True when a click changed `current`. Accessibility: each
+/// name is a tab, selected when current.
 pub fn tabs_bar<T: PartialEq + Clone>(ui: &mut Ui, tabs: &[(T, &str)], current: &mut T) -> bool {
     let p = palette(ui);
     let mut changed = false;
@@ -551,16 +794,17 @@ pub fn tabs_bar<T: PartialEq + Clone>(ui: &mut Ui, tabs: &[(T, &str)], current: 
         ui.spacing_mut().item_spacing.x = 26.0;
         for (tab, name) in tabs {
             let on = *current == *tab;
-            let galley = ui
+            let size = ui
                 .painter()
-                .layout_no_wrap((*name).to_owned(), condensed(22.0), p.muted);
-            let (rect, response) =
-                ui.allocate_exact_size(galley.size() + vec2(0.0, 8.0), Sense::CLICK);
-            let color = if on || response.hovered() {
-                p.ink
-            } else {
-                p.muted
-            };
+                .layout_no_wrap((*name).to_owned(), condensed(size::TAB), p.muted)
+                .size();
+            let (rect, response) = ui.allocate_exact_size(size + vec2(0.0, 8.0), Sense::CLICK);
+            // Laid out in its final colour: a galley's own colour wins
+            // over the painter's fallback.
+            let color = tab_color(&p, on, response.hovered());
+            let galley =
+                ui.painter()
+                    .layout_no_wrap((*name).to_owned(), condensed(size::TAB), color);
             ui.painter().galley(rect.min, galley, color);
             if on {
                 let bar = Rect::from_min_size(
@@ -569,6 +813,11 @@ pub fn tabs_bar<T: PartialEq + Clone>(ui: &mut Ui, tabs: &[(T, &str)], current: 
                 );
                 ui.painter().rect_filled(bar, 0.0, p.action);
             }
+            accessible(
+                &response,
+                WidgetInfo::selected(Role::Tab, true, on, *name),
+                None,
+            );
             if response.on_hover_cursor(CursorIcon::PointingHand).clicked() && !on {
                 *current = tab.clone();
                 changed = true;
@@ -582,13 +831,14 @@ pub fn tabs_bar<T: PartialEq + Clone>(ui: &mut Ui, tabs: &[(T, &str)], current: 
     changed
 }
 
-/// The slanted Play plate filling `rect`: `action` when `ready`, `line`
+/// The slanted Play plate filling `rect`: `action` when `ready`, `panel`
 /// and muted text when not. Not a focus stop (Start/Enter play).
+/// Accessibility: a button named `label`, disabled when not ready.
 pub fn play_plate(ui: &mut Ui, rect: Rect, label: &str, ready: bool) -> Response {
     let p = palette(ui);
     let response = ui.interact(rect, ui.scope_id().with("rea-play"), Sense::CLICK);
     let fill = match (ready, response.hovered()) {
-        (false, _) => p.line,
+        (false, _) => p.panel,
         (true, true) => p.action_hover,
         (true, false) => p.action,
     };
@@ -607,8 +857,13 @@ pub fn play_plate(ui: &mut Ui, rect: Rect, label: &str, ready: bool) -> Response
         rect.center(),
         Align2::CENTER_CENTER,
         label,
-        decal(30.0),
+        decal(size::PLAY),
         if ready { p.on_action } else { p.muted },
+    );
+    accessible(
+        &response,
+        WidgetInfo::labeled(Role::Button, ready, label),
+        None,
     );
     if ready {
         response.on_hover_cursor(CursorIcon::PointingHand)
@@ -630,7 +885,7 @@ pub fn footer(ui: &mut Ui, rect: Rect, hint: &str, ready: bool) -> Response {
     );
     let galley = ui.painter().layout(
         hint.to_owned(),
-        body(13.0),
+        body(size::NOTE),
         p.muted,
         plate.left() - rect.left() - 20.0,
     );
@@ -919,5 +1174,187 @@ mod tests {
         );
         assert_eq!(value, 1);
         assert!(on, "Tab skipped the disabled row and reached the toggle");
+    }
+
+    /// The text drawn in one frame of `add`, with its colours and rects.
+    fn texts(
+        palette: &Palette,
+        metrics: &Metrics,
+        mut add: impl FnMut(&mut Ui),
+    ) -> Vec<(String, Color32, Rect)> {
+        let ctx = egui::Context::default();
+        theme::install_with(&ctx, palette, metrics);
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        // The first frame loads the fonts.
+        ctx.run_ui(input(), &mut add).textures_delta.clear();
+        let mut output = ctx.run_ui(input(), &mut add);
+        output.textures_delta.clear();
+        output
+            .shapes
+            .into_iter()
+            .filter_map(|clipped| match clipped.shape {
+                Shape::Text(text) => Some((
+                    text.galley.job.text.clone(),
+                    text.galley.job.sections[0].format.color,
+                    text.visual_bounding_rect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn color_of(texts: &[(String, Color32, Rect)], text: &str) -> Color32 {
+        texts
+            .iter()
+            .find(|(t, ..)| t == text)
+            .unwrap_or_else(|| panic!("{text} not drawn in {texts:?}"))
+            .1
+    }
+
+    fn rect_of(texts: &[(String, Color32, Rect)], text: &str) -> Rect {
+        texts.iter().find(|(t, ..)| t == text).unwrap().2
+    }
+
+    #[test]
+    fn the_current_tab_is_ink_the_others_muted() {
+        let p = crate::theme::tests::OR;
+        let texts = texts(&p, &Metrics::DEFAULT, |ui| {
+            let mut tab = 1u8;
+            tabs_bar(ui, &[(0u8, "Play"), (1, "Picture")], &mut tab);
+        });
+        assert_eq!(color_of(&texts, "Picture"), p.ink);
+        assert_eq!(color_of(&texts, "Play"), p.muted);
+    }
+
+    #[test]
+    fn button_text_follows_the_metrics() {
+        let p = crate::theme::tests::OR;
+        let action = texts(&p, &Metrics::DEFAULT, |ui| {
+            outline_button(ui, "Browse…");
+        });
+        assert_eq!(color_of(&action, "Browse…"), p.action);
+        let ink = texts(&p, &crate::theme::tests::OR_METRICS, |ui| {
+            outline_button(ui, "Browse…");
+        });
+        assert_eq!(color_of(&ink, "Browse…"), p.ink);
+        // Hovered, the text is ink on the line fill whatever the setting.
+        assert_eq!(button_text(&p, &Metrics::DEFAULT, true), p.ink);
+    }
+
+    #[test]
+    fn metrics_size_chips_fields_and_cards() {
+        let p = Palette::default();
+        let draw = |m: Metrics| {
+            texts(&p, &m, |ui| {
+                ui.horizontal(|ui| {
+                    field(ui, "Label");
+                    let mut v = 1u8;
+                    chips(ui, &[(1u8, "A"), (2, "B")], &mut v, None);
+                });
+                let mut v = 1u8;
+                chips_sized(
+                    ui,
+                    &[Chip::new(1u8, "C"), Chip::new(2, "D")],
+                    &mut v,
+                    ChipSize::Compact,
+                );
+                look_card(
+                    ui,
+                    vec2(200.0, 100.0),
+                    &LookCard {
+                        title: "Title",
+                        note: "Note",
+                        ..LookCard::default()
+                    },
+                );
+            })
+        };
+        let sdk = draw(Metrics::DEFAULT);
+        let scr = draw(crate::theme::tests::SCR_METRICS);
+        // SCR's field label is 10 points wider; its chips 2 points
+        // narrower, so the centred "A" lands 10 - 1 points further right
+        // and B 2 points closer to A.
+        let a = rect_of(&scr, "A").left() - rect_of(&sdk, "A").left();
+        assert!((a - 9.0).abs() < 0.5, "{a}");
+        let gap = |t: &[(String, Color32, Rect)]| rect_of(t, "B").left() - rect_of(t, "A").left();
+        assert!((gap(&sdk) - gap(&scr) - 2.0).abs() < 0.5);
+        // Compact chips sit closer: 14 + 5 instead of 24 + 6.
+        let compact = rect_of(&sdk, "D").left() - rect_of(&sdk, "C").left();
+        assert!(compact < gap(&sdk) - 8.0, "{compact} vs {}", gap(&sdk));
+        // Card typography: SCR's title is smaller and its note higher.
+        assert!(rect_of(&scr, "Title").height() < rect_of(&sdk, "Title").height());
+        let note =
+            |t: &[(String, Color32, Rect)]| rect_of(t, "Note").top() - rect_of(t, "Title").top();
+        assert!(note(&scr) < note(&sdk));
+    }
+
+    #[test]
+    fn toggle_labels_wrap_only_when_asked() {
+        let long = "A very long switch label that cannot fit into a narrow column at all";
+        let lines = |m: Metrics| {
+            let ctx = egui::Context::default();
+            theme::install_with(&ctx, &Palette::default(), &m);
+            let mut height = 0.0;
+            for _ in 0..2 {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 600.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut on = false;
+                        height = toggle(ui, &mut on, long, None).rect.height();
+                    },
+                )
+                .textures_delta
+                .clear();
+            }
+            height
+        };
+        assert!(lines(Metrics::DEFAULT) > 30.0, "wraps to several lines");
+        assert_eq!(
+            lines(Metrics {
+                toggle_wrap: false,
+                ..Metrics::DEFAULT
+            }),
+            30.0
+        );
+    }
+
+    #[test]
+    fn game_card_dims_a_missing_game() {
+        let p = crate::theme::tests::OR;
+        let texts = texts(&p, &Metrics::DEFAULT, |ui| {
+            for (title, subtitle, installed) in [("One", "1995", true), ("Two", "1996", false)] {
+                game_card(
+                    ui,
+                    vec2(180.0, 64.0),
+                    &GameCard {
+                        title,
+                        subtitle,
+                        selected: installed,
+                        installed,
+                    },
+                );
+            }
+        });
+        assert_eq!(color_of(&texts, "One"), p.select);
+        assert_eq!(color_of(&texts, "1995"), p.muted);
+        assert_eq!(color_of(&texts, "Two"), p.ink);
+        assert_eq!(color_of(&texts, "1996"), p.disabled_ink);
+    }
+
+    #[test]
+    fn focused_labels_use_the_focus_colour() {
+        let p = crate::theme::tests::OR;
+        let texts = texts(&p, &Metrics::DEFAULT, |ui| {
+            field_focused(ui, "On", true);
+            field_focused(ui, "Off", false);
+        });
+        assert_eq!(color_of(&texts, "On"), p.focus);
+        assert_eq!(color_of(&texts, "Off"), p.ink);
     }
 }

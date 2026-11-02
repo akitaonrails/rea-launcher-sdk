@@ -11,6 +11,16 @@ repository.workspace = true
 rea-launcher.workspace = true
 eframe.workspace = true
 jpeg-decoder.workspace = true
+egui_kittest = { workspace = true, optional = true }
+
+[dev-dependencies]
+egui_kittest.workspace = true
+
+[features]
+# `rea_launcher_ui::testing`: headless GUI test helpers (egui_kittest,
+# AccessKit queries and clicks, no GPU). Enable it in a launcher's
+# dev-dependencies: `rea-launcher-ui = { ..., features = ["testing"] }`.
+testing = ["dep:egui_kittest"]
 
 # winit needs a windowing backend to build on Linux (host tests, and SCR's
 # native Linux launcher). Windows builds are unaffected.
