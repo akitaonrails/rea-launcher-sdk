@@ -231,6 +231,12 @@ that: if a step could be done by the launcher, the launcher does it.
   the launcher at work, not game files to play); keep images under ~1 MB
   (JPEG), host videos outside the repository, list them in
   `THIRD_PARTY.md`.
+- **Screenshots follow the window.** Any change to the settings window's
+  look or layout retakes the README screenshots in the same piece of work:
+  headless, the window under Wine (or natively) on a private virtual
+  display the agent starts and stops itself, pointed at a real game install
+  (read-only) so the Play tab shows a detected edition, saved as JPEG
+  ≤ ~1 MB under `docs/images/` with the names the README uses.
 - **README showcase.** A "problems this launcher solves" list, screenshots of
   the window, a slot for the owner's gameplay video, credits.
 
@@ -508,6 +514,12 @@ an SDK **Migration** item, never be regenerated blindly.
     report it.
   (From distrobox-gaming's AGENTS.md, which keeps these rules for the
   owner's machine.)
+- **Secrets stay out of test output.** The user's environment may hold
+  credentials (cloud keys, tokens). Start test processes with a scrubbed
+  environment (`env -i` plus only what the test needs), never write or
+  print `env`, `printenv` or `/proc/*/environ` contents — to find a task
+  process by environment, test for one variable without printing values —
+  and before finishing, scan scratch output for key patterns (paths only).
 - **The real game stays outside the repository** and outside ordinary host
   tests. Env-gated tests (`<GAME>_GAME_DIR=... cargo test -- --ignored`)
   may use it.
