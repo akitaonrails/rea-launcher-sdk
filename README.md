@@ -57,6 +57,28 @@ Each crate and folder has its own README with the API and examples.
 - The SDK provides mechanisms; a game opts in. Nothing that changes how a
   game behaves becomes a default here until that game has verified it.
 
+## Development machine
+
+Install these on the machine you develop on (any Linux; package names for
+Arch / Debian-Ubuntu):
+
+| Tool | Why | Arch | Debian/Ubuntu |
+|---|---|---|---|
+| Rust (rustup) + targets `i686-pc-windows-gnu`, `x86_64-pc-windows-gnu` | build | `rustup` | `rustup` |
+| MinGW-w64 cross compilers | link the Windows builds | `mingw-w64-gcc` | `gcc-mingw-w64-i686 gcc-mingw-w64-x86-64` |
+| LLD | the i686 link (GNU ld mis-links windows-sys imports) | `lld` | `lld` |
+| Wine (with 32-bit support) | run Windows-target tests (`scripts/wine-test`) and the launchers | `wine` | `wine wine32:i386` |
+| gamescope | headless real-game runs, the Linux helpers | `gamescope` | `gamescope` |
+| dash, mawk, shellcheck | shell tests as CI runs them | `dash mawk shellcheck` | `dash mawk shellcheck` |
+| cargo-deny, cargo-audit | dependency checks | `cargo install --locked cargo-deny cargo-audit` | same |
+
+```sh
+rustup target add i686-pc-windows-gnu x86_64-pc-windows-gnu
+```
+
+A container (e.g. a distrobox) with these tools works just as well; run the
+commands inside it.
+
 ## Checks
 
 ```sh
@@ -66,6 +88,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --target i686-pc-windows-gnu --workspace --all-targets -- -D warnings
 sh shell/tests/run-all.sh
 for t in packaging/tests/*.sh scripts/tests/*.sh; do sh "$t"; done
+scripts/wine-test --locked --workspace   # Windows-target tests under Wine, headless
 ```
+
+Tests run headless: nothing should open a window on your desktop
+(`docs/STANDARDS.md`, "Testing").
 
 Licensed under MIT or Apache-2.0, at your option.

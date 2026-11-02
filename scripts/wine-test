@@ -1,0 +1,37 @@
+#!/bin/sh
+# Runs `cargo test` for the 32-bit Windows target under Wine, headless.
+#
+#   scripts/wine-test [cargo test args...]      e.g. scripts/wine-test --workspace
+#
+# Needs the i686 MinGW toolchain, lld and Wine on PATH (see README,
+# "Development machine"). No window ever opens: the display variables are
+# cleared and Wine's crash dialog is switched off in a private test prefix.
+# A failed assertion aborts the whole test binary under Wine, so after a
+# failure the script reruns each test of that binary alone to name them all.
+set -eu
+prefix=${REA_WINE_TEST_PREFIX:-${XDG_CACHE_HOME:-$HOME/.cache}/rea-wine-test}
+export WINEPREFIX="$prefix" WINEDEBUG=-all WINEDLLOVERRIDES="winemenubuilder.exe=d"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/wine}"
+export CARGO_TARGET_I686_PC_WINDOWS_GNU_RUNNER=wine
+unset DISPLAY WAYLAND_DISPLAY
+if [ ! -f "$prefix/.rea-headless" ]; then
+    mkdir -p "$prefix"
+    wineboot -i >/dev/null 2>&1 || true
+    wine reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f >/dev/null 2>&1
+    wineserver -w
+    : >"$prefix/.rea-headless"
+fi
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+if cargo test --target i686-pc-windows-gnu "$@" -- --test-threads=1 >"$log" 2>&1; then
+    grep -E '^test result' "$log"
+    exit 0
+fi
+grep -E '^test result|^error' "$log" || tail -20 "$log"
+# Name every failing test of the binaries that aborted.
+grep -o '`wine [^`]*\.exe' "$log" | sed 's/^`wine //' | sort -u | while read -r exe; do
+    wine "$exe" --list 2>/dev/null | sed -n 's/: test\r\{0,1\}$//p' | while read -r t; do
+        wine "$exe" --exact "$t" --test-threads=1 >/dev/null 2>&1 || echo "FAIL $t"
+    done
+done
+exit 1
