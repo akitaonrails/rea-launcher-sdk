@@ -10,7 +10,7 @@ they have in common.
 |---|---|
 | [rea-colin-mcrae-3](https://github.com/akitaonrails/rea-colin-mcrae-3) | Colin McRae Rally 3 |
 | [rea-colin-mcrae-4](https://github.com/akitaonrails/rea-colin-mcrae-4) | Colin McRae Rally 04 |
-| rea-screamer | Screamer trilogy (DOS, via dosbox-staging) |
+| [rea-screamer-trilogy](https://github.com/akitaonrails/rea-screamer-trilogy) | Screamer trilogy (DOS, via dosbox-staging) |
 | [rea-sega-rally-revo](https://github.com/akitaonrails/rea-sega-rally-revo) | Sega Rally Revo |
 | [rea-outrun-2006](https://github.com/akitaonrails/rea-outrun-2006) | OutRun 2006: Coast 2 Coast |
 

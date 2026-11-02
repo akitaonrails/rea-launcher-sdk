@@ -7,7 +7,7 @@ extracting this SDK:
 |---|---|---|---|
 | CMR3 | `rea-colin-mcrae-3` | Colin McRae Rally 3 (2003) | Win32 exe; SilentPatch, Xidi, DXVK; Wine/Proton on Linux |
 | CMR4 | `rea-colin-mcrae-4` | Colin McRae Rally 04 | Win32 exe; dgVoodoo2, Xidi, DXVK; byte patch; close-hook DLL |
-| SCR | `rea-screamer` | Screamer trilogy (DOS) | native Linux + Windows; patched dosbox-staging + hooks |
+| SCR | `rea-screamer` (GitHub: rea-screamer-trilogy) | Screamer trilogy (DOS) | native Linux + Windows; patched dosbox-staging + hooks |
 | SRR | `rea-sega-rally-revo` | Sega Rally Revo (2007) | Win32 exe; byte patches; DXVK |
 | OR | `rea-outrun-2006` | OutRun 2006 C2C | Win32 exe; OutRun2006Tweaks; DXVK; HD pack download |
 
