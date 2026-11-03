@@ -129,6 +129,27 @@ ledger.take_out("dinput8.dll", &[xidi])?;
 # Ok(()) }
 ```
 
+After a component update, a runtime from before the ledger may still hold
+the old version's file. `known_with_earlier` adds it to `known` when its
+SHA-256 is one an earlier release installed, so the update replaces it
+instead of refusing it as the player's:
+
+```rust
+# use rea_launcher::ledger::Ledger;
+# fn main() -> std::io::Result<()> {
+# let (game, rt) = (std::env::temp_dir().join("rea-doc-eg"), std::env::temp_dir().join("rea-doc-er"));
+# std::fs::create_dir_all(&game)?; std::fs::create_dir_all(&rt)?;
+# let xidi5: &[u8] = b"xidi 5";
+/// Xidi 4.3.1's Win32 dinput8.dll, installed by releases up to 0.3.0.
+const EARLIER: &[&str] = &["dedbf4aa0d1cc3b0c036feb1a089d181345c03ef07a118886b66654f04395efd"];
+let mut ledger = Ledger::load(&game, &rt, ".cmr3-launcher-components");
+let known = ledger.known_with_earlier("dinput8.dll", vec![xidi5.to_vec()], EARLIER)?;
+let known: Vec<&[u8]> = known.iter().map(Vec::as_slice).collect();
+ledger.install("dinput8.dll", xidi5, &known)?;
+# std::fs::remove_dir_all(game)?; std::fs::remove_dir_all(rt)?;
+# Ok(()) }
+```
+
 ### ini
 
 `ini::set_owned` / `ini::release` with an `ini::Owned` record (saved

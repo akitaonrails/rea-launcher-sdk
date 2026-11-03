@@ -142,6 +142,32 @@ impl Ledger {
         }
     }
 
+    /// `current` plus the runtime's own `rel` when its SHA-256 is one of
+    /// `earlier` (lowercase hex): what to pass as `known` after a component
+    /// update. A runtime from before the ledger may hold a file an earlier
+    /// release installed; once the bundle carries the new version, only its
+    /// digest still says it is ours (CMR3's Xidi 4.3.1 -> 5.0.0). List the
+    /// digests of every file earlier releases installed, never the game's
+    /// own or a player's.
+    pub fn known_with_earlier(
+        &self,
+        rel: &str,
+        mut current: Vec<Vec<u8>>,
+        earlier: &[&str],
+    ) -> io::Result<Vec<Vec<u8>>> {
+        plain(rel)?;
+        match fs::read(self.runtime_path(rel)) {
+            Ok(bytes) => {
+                if earlier.contains(&hex(&sha256(&bytes)).as_str()) {
+                    current.push(bytes);
+                }
+                Ok(current)
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(current),
+            Err(e) => Err(e),
+        }
+    }
+
     /// The runtime's `rel`, in whatever case it exists (Wine would load a
     /// `D3D9.DLL` for `d3d9.dll`, so a second spelling is never added).
     fn runtime_path(&self, rel: &str) -> PathBuf {
@@ -310,6 +336,39 @@ mod tests {
             Outcome::Absent
         );
         assert_eq!(ledger.take_out("never.dll", &[]).unwrap(), Outcome::Absent);
+        for d in [game, rt] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn an_earlier_releases_file_is_ours_by_digest_after_an_update() {
+        let (game, rt) = setup("ledger-earlier");
+        // Xidi 4 installed before the ledger; the bundle now holds Xidi 5.
+        fs::write(rt.join("DINPUT8.DLL"), b"xidi 4").unwrap();
+        let old = hex(&sha256(b"xidi 4"));
+        let mut ledger = Ledger::load(&game, &rt, NAME);
+        let known = ledger
+            .known_with_earlier("dinput8.dll", vec![b"xidi 5".to_vec()], &[old.as_str()])
+            .unwrap();
+        assert_eq!(known, [b"xidi 5".to_vec(), b"xidi 4".to_vec()]);
+        let known: Vec<&[u8]> = known.iter().map(Vec::as_slice).collect();
+        assert_eq!(
+            ledger.install("dinput8.dll", b"xidi 5", &known).unwrap(),
+            Outcome::Installed
+        );
+        assert_eq!(fs::read(rt.join("DINPUT8.DLL")).unwrap(), b"xidi 5");
+        // A player's file, or none, adds nothing.
+        fs::write(rt.join("d3d9.dll"), b"player's").unwrap();
+        for rel in ["d3d9.dll", "none.dll"] {
+            assert!(
+                ledger
+                    .known_with_earlier(rel, vec![], &[old.as_str()])
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert!(ledger.known_with_earlier("../x", vec![], &[]).is_err());
         for d in [game, rt] {
             fs::remove_dir_all(d).unwrap();
         }
