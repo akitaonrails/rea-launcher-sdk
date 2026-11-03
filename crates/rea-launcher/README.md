@@ -13,7 +13,7 @@ made that copy the reference.
 |---|---|
 | `fsx` | Whole-file swaps (temp + rename) that never write through a hard link; stale temp cleanup |
 | `paths` | `resolve`, the runtime/game overlap check, `native`, `\\?\` stripping |
-| `runtime` | The private runtime copy: list, plan, sync, restore, manifest |
+| `runtime` | The private runtime copy: list, plan, sync (with progress), restore, manifest |
 | `saves` | Save mirroring by recorded state, for one file or a folder |
 | `ledger` | SHA-256 record of the components the launcher installed |
 | `ini` | Section-aware INI editing that keeps comments, case, CRLF, BOM, bytes |
@@ -293,6 +293,13 @@ fn help() {
 - CRLF and LF compare equal; a failure names the first differing line and
   says when only version numbers differ.
 
+### Copy progress (runtime)
+
+`runtime::sync_with_progress` calls back with `Progress { files_done,
+files_total, bytes_done, bytes_total }` once the plan is known and after
+each file; `ProgressCounter` hands it from the worker thread to the
+window. No second thread measuring the runtime (DiRT Rally's 40 GB copy).
+
 ## One table for the window and the command line
 
 The rule: every window option has a flag and a `launcher.cfg` key, every
@@ -473,6 +480,9 @@ Behaviour not listed here is the same.
   keep the documented variable) in place of a local `check()`; drop the
   local `.replace(env!("CARGO_PKG_VERSION"), "<version>")`. Stored
   snapshots that hold the version literally now fail: write `<version>`.
+- **v0.4.0:** a launcher that measured its runtime copy from a second
+  thread (DiRT Rally `copy.rs`) calls `runtime::sync_with_progress` with a
+  `ProgressCounter` instead. `runtime::sync` is unchanged.
 - **Temp files** are `.name.rea-new` (CMR3 used `.name.cmr3-new`, CMR4
   `.name.cmr4-new`, OR `name.tmp`, SRR `name.srr-tmp`). Remove old
   leftovers once with `fsx::remove_stale_temps(runtime, &[".cmr3-new"])`;
