@@ -12,8 +12,8 @@ state parsing and button bits (`rea_launcher::pad`) — live in the portable
 |---|---|---|
 | `wine` | `is_wine` (export + env fallback), `seed_winebus`, `app_dll_overrides`/`remove_app_dll_overrides(exe, &[(dll, DllMode)])` → `Applied { written, ours, matching, player }`, ownership recorded under `owned_key(exe)`; pure `DllMode`, `app_defaults_key`, `owned_key`, `step` → `Step`, `removable` (`plan` kept for old callers) | CMR4 / OR / SRR / DiRT |
 | `reg` | pure: `Error`, `seed_missing`, `virtual_store_path`, `uses_32_bit_view`; RAII `Key`: `open_read` and `Key::read_machine` (read-only, never create; VirtualStore value first, as the game sees it); `dword`/`string`/`has`/`set_*`/`*_if_missing`/`seed_dwords`; `Key::machine_or_virtual_store` (HKLM — 32-bit view under `SOFTWARE` only — or HKCU VirtualStore on access denied; `Place::describe` gives the launchers' log labels "HKLM 32-bit view" / "HKCU VirtualStore") | CMR4 |
-| `process` | `Launch` builder (args, cwd, env, hidden) → `Running` (`wait`, `is_alive`, `exit_code`, `close_gracefully(timeout)` → `Closed::{AlreadyExited, Closed, Terminated}`, `message_hook` for a close-hook DLL such as `rea-launcher-close-hook`; `#[must_use]` hook); `top_level_windows(pid)` | CMR4 + CMR3 |
-| `instance` | `single(name) -> Result<Guard, AlreadyRunning>` (named mutex in `Local\`), `AlreadyRunning::bring_to_front(Window::Title/Class)`, `is_window_found`, `mutex_name` | new |
+| `process` | `Launch` builder (args, cwd, env, hidden) → `Running` (`wait`, `is_alive`, `exit_code`, `close_gracefully(timeout)` → `Closed::{AlreadyExited, Closed, Terminated}`, `message_hook` for a close-hook DLL such as `rea-launcher-close-hook`; `#[must_use]` hook); `top_level_windows(pid)`; `image_path(pid)`; `find_running(image)` (Toolhelp32 + `QueryFullProcessImageNameW`: the pids running that exact exe) | CMR4 + CMR3 + OR |
+| `instance` | `single(name) -> Result<Guard, AlreadyRunning>` (named mutex in `Local\`), `AlreadyRunning::second_start(action, window)` → `SecondStart::{Focused, Busy, WindowOpen}` (`exit_code`: 0 or `ALREADY_RUNNING` = 5, `message(game)`, `log_line`; pure `SecondStart::decide`), `bring_to_front`/`is_window_found(Window::Own/Title/Class/ClassTitle)`; pure `is_own_window`, `same_image`, `mutex_name` | SRR + DiRT + CMR4 + Screamer |
 | `xinput` | cached lookup; `pads` (as `rea_launcher::pad::Pad`), `buttons`, `connected`, `set_rumble`/`test_rumble`/`stop_rumble` (latest call wins), `ids` (USB vid/pid) | CMR4 + SRR/OR |
 | `display` | `monitors` (physical modes, as `rea_launcher::display::Monitor`), `displays` (+ refresh rate, `\\.\DISPLAYn` device, adapter name), `adapters` (GPU names, attached/primary), `screen_size`, `mode_supported`, `wine_dpi_scale` (Wine only; 1.0 and untouched DPI awareness on Windows) | CMR4 + SCR + SRR + OR |
 | `gpu` | `prefer_fast_gpu` (`GpuPreference=2;`), `prefer_glx` (Wine `UseEGL=N`) | all four |
@@ -67,13 +67,17 @@ applies it to this process. Don't use `console::output` for player-facing
 messages: it treats Wine's redirected stdout as a terminal someone reads,
 which hid CMR3's and CMR4's play-time errors in v0.3.0.
 
-**One instance and action flags.** A second start with an action flag
-(`--download-*`, `--check`) while a launcher is open must not exit 0 with
-nothing done: report it (`Mode::Command`) and exit non-zero (3). A plain
-second start brings the window forward (`AlreadyRunning::bring_to_front`);
-when no launcher window exists (`is_window_found` is false) it is the game
-that runs, and the player is told so (`Mode::Play`). See the `instance`
-module docs.
+**One instance and action flags.** On `Err(running)` from
+`instance::single`, call `running.second_start(action, Window::Own(TITLE))`:
+a plain start brings the launcher's window forward and exits 0
+(`SecondStart::Focused`); with no window it is the game that runs, and the
+player is told so and the run exits `ALREADY_RUNNING` (`Busy`); an action
+flag (`--download-*`, `--setup`) never brings the window forward and never
+exits 0 (`WindowOpen`/`Busy`). Use `Window::Own`: eframe windows all share
+winit's class, and a title alone also matches an Explorer folder or the
+game's window. **Before Play**, check `process::find_running(&runtime_exe)`:
+a launcher killed while the game ran released the mutex, and a second game
+must not start from the same runtime copy. See the `instance` module docs.
 
 ## Wine DLL overrides: the registry, not the environment block
 
@@ -182,3 +186,14 @@ What changes for a launcher moving to this version of the crate.
   `native,builtin` falls back to Wine's builtin, which is what "off"
   meant). A launcher that constructs `Applied` by hand adds `matching`.
   Log `matching` next to `ours`.
+- **`instance`** — replace a local second-start module (SRR's and DiRT's
+  `instance.rs` `Second`, CMR4's `SecondStart`, Screamer's and CMR4's
+  window lookups in `win32.rs`) with `AlreadyRunning::second_start(action,
+  Window::Own(TITLE))`, `SecondStart::exit_code()` (0 or 5) and
+  `message(game)` (or keep the launcher's own wording). Before Play,
+  refuse with `SecondStart::Busy` when `process::find_running(&runtime_exe)`
+  is not empty. `Window` has two new variants (`Own`, `ClassTitle`): a
+  `match` on it needs arms for them. Exit codes: SRR and DiRT already use
+  5; CMR4 exits 1 for a refused second start and CMR2005 0 — moving to the
+  helper makes them 5 (tell the Linux helper: 5 means "another launcher
+  holds this prefix").
