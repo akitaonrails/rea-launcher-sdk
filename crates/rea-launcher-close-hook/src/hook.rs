@@ -20,8 +20,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GA_ROOT, GetAncestor, GetClassNameW, GetForegroundWindow,
-    GetWindowThreadProcessId, HC_ACTION, MSG, PM_REMOVE, PostMessageW, PostQuitMessage, WM_KEYDOWN,
-    WM_KEYUP, WM_NULL, WM_QUIT,
+    GetWindowThreadProcessId, HC_ACTION, IsWindowVisible, MSG, PM_REMOVE, PostMessageW,
+    PostQuitMessage, WM_KEYDOWN, WM_KEYUP, WM_NULL, WM_QUIT,
 };
 
 use crate::{Chord, Config, Step, Strategy, msg};
@@ -163,8 +163,8 @@ fn key_down(vk: usize) -> bool {
 }
 
 /// `alt_f4_state`: the game's window in front (this process's, of the
-/// configured class) and a new Alt+F4 press; that window. Alt+F4 pressed
-/// in another program never counts.
+/// configured class, visible) and a new Alt+F4 press; that window. Alt+F4
+/// pressed in another program never counts.
 fn alt_f4_pressed(config: &Config) -> Option<HWND> {
     static CHORD: Mutex<Chord> = Mutex::new(Chord { held: false });
     let (alt, f4) = (key_down(msg::VK_MENU), key_down(msg::VK_F4));
@@ -174,7 +174,11 @@ fn alt_f4_pressed(config: &Config) -> Option<HWND> {
     }
     // SAFETY: plain window queries.
     let front = unsafe { GetForegroundWindow() };
-    if front.is_null() {
+    // A hidden window is never what the player looks at, even when the
+    // system calls it the foreground window (older Wine with the null
+    // driver does, for a process's only window).
+    // SAFETY: a plain window query.
+    if front.is_null() || unsafe { IsWindowVisible(front) } == 0 {
         return None;
     }
     let mut pid = 0u32;
