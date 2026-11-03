@@ -14,10 +14,10 @@
 //!   desktop, also from a terminal.
 //! - Either way the text is printed to stderr, which the play helper and
 //!   the AppImage send to the log; with no desktop and no terminal that is
-//!   all ([`Audience::LogOnly`]).
+//!   all ([`NativeAudience::LogOnly`]).
 //!
 //! "A terminal is attached": stdin or stderr is a terminal. "A desktop":
-//! `DISPLAY` or `WAYLAND_DISPLAY` is set. [`audience`] is the pure table;
+//! `DISPLAY` or `WAYLAND_DISPLAY` is set. [`native_audience`] is the pure table;
 //! [`fatal`] applies it in this process.
 //!
 //! ```no_run
@@ -96,7 +96,7 @@ impl Native {
 
 /// Who gets one message, beyond stderr and the log (which always do).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Audience {
+pub enum NativeAudience {
     /// The person at the terminal: printing is enough.
     Terminal,
     /// A message window ([`show`]), as well as the printed text.
@@ -106,19 +106,19 @@ pub enum Audience {
 }
 
 /// The decision table of the module docs.
-pub fn audience(mode: Mode, native: Native) -> Audience {
+pub fn native_audience(mode: Mode, native: Native) -> NativeAudience {
     let (interactive, command) = match mode {
         Mode::Command { interactive } => (interactive, true),
         Mode::Play { interactive } => (interactive, false),
     };
     if command && native.terminal() {
-        Audience::Terminal
+        NativeAudience::Terminal
     } else if interactive && native.display {
-        Audience::Window
+        NativeAudience::Window
     } else if native.terminal() {
-        Audience::Terminal
+        NativeAudience::Terminal
     } else {
-        Audience::LogOnly
+        NativeAudience::LogOnly
     }
 }
 
@@ -288,13 +288,18 @@ pub fn pad_closes(nav: Nav) -> bool {
 /// The message window's size, in points.
 pub const WINDOW_SIZE: egui::Vec2 = vec2(560.0, 300.0);
 
-/// Prints `message` to stderr and, when [`audience`] says so for this
+/// Prints `message` to stderr and, when [`native_audience`] says so for this
 /// process ([`Native::here`]), shows it in a window ([`show`]) and waits
 /// for the player to close it. Returns who got it.
-pub fn fatal(palette: &Palette, metrics: &Metrics, message: &Message<'_>, mode: Mode) -> Audience {
+pub fn fatal(
+    palette: &Palette,
+    metrics: &Metrics,
+    message: &Message<'_>,
+    mode: Mode,
+) -> NativeAudience {
     eprintln!("{}", message.printed());
-    let audience = audience(mode, Native::here());
-    if audience == Audience::Window
+    let audience = native_audience(mode, Native::here());
+    if audience == NativeAudience::Window
         && let Err(error) = show(palette, metrics, message)
     {
         eprintln!("(the message window could not open: {error})");
@@ -433,39 +438,51 @@ mod tests {
         let play = Mode::Play { interactive: true };
         let help = Mode::Command { interactive: true };
         // The DiRT Rally case: an AppImage double-clicked on a desktop.
-        assert_eq!(audience(play, native(false, false, true)), Audience::Window);
-        assert_eq!(audience(help, native(false, false, true)), Audience::Window);
-        // From a terminal: play-time errors still get the window...
-        assert_eq!(audience(play, native(true, true, true)), Audience::Window);
-        // ...commands only print.
-        assert_eq!(audience(help, native(true, true, true)), Audience::Terminal);
         assert_eq!(
-            audience(help, native(true, false, true)),
-            Audience::Terminal
+            native_audience(play, native(false, false, true)),
+            NativeAudience::Window
+        );
+        assert_eq!(
+            native_audience(help, native(false, false, true)),
+            NativeAudience::Window
+        );
+        // From a terminal: play-time errors still get the window...
+        assert_eq!(
+            native_audience(play, native(true, true, true)),
+            NativeAudience::Window
+        );
+        // ...commands only print.
+        assert_eq!(
+            native_audience(help, native(true, true, true)),
+            NativeAudience::Terminal
+        );
+        assert_eq!(
+            native_audience(help, native(true, false, true)),
+            NativeAudience::Terminal
         );
         // Over ssh (no desktop): the terminal.
         assert_eq!(
-            audience(play, native(true, true, false)),
-            Audience::Terminal
+            native_audience(play, native(true, true, false)),
+            NativeAudience::Terminal
         );
         // The play helper's log, no desktop, or a script: the log only.
         assert_eq!(
-            audience(play, native(false, false, false)),
-            Audience::LogOnly
+            native_audience(play, native(false, false, false)),
+            NativeAudience::LogOnly
         );
         let script = Mode::Play { interactive: false };
         assert_eq!(
-            audience(script, native(false, false, true)),
-            Audience::LogOnly
+            native_audience(script, native(false, false, true)),
+            NativeAudience::LogOnly
         );
         assert_eq!(
-            audience(script, native(false, true, true)),
-            Audience::Terminal
+            native_audience(script, native(false, true, true)),
+            NativeAudience::Terminal
         );
         let check = Mode::Command { interactive: false };
         assert_eq!(
-            audience(check, native(false, false, true)),
-            Audience::LogOnly
+            native_audience(check, native(false, false, true)),
+            NativeAudience::LogOnly
         );
     }
 
