@@ -1,0 +1,7 @@
+name: watch-upstream
+on:
+  schedule: [{cron: "23 4 * * 1"}]
+jobs:
+  watch:
+    permissions: {contents: read, issues: write}
+    uses: akitaonrails/rea-launcher-sdk/.github/workflows/upstream-watch.yml@v0.4.0

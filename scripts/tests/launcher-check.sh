@@ -92,7 +92,7 @@ fresh; replace "$L/crates/fx-launcher/src/main.rs" 'use rea_launcher_win32::repo
 replace "$L/crates/fx-launcher/src/main.rs" 'report::audience(Run::from_args(&[] as &[&str], &[]))' '0'
 expect "no SDK audience at all" error audience
 fresh; printf 'tag=v0.3.3\ncommit=0123456789abcdef0123456789abcdef01234567\n' > "$L/sdk/VERSION"
-for f in Cargo.toml .github/workflows/build.yml .github/workflows/sdk-update.yml; do replace "$L/$f" v0.4.0 v0.3.3; replace "$L/$f" v0.4.0 v0.3.3; done
+for f in Cargo.toml .github/workflows/build.yml .github/workflows/sdk-update.yml .github/workflows/watch-upstream.yml; do replace "$L/$f" v0.4.0 v0.3.3; replace "$L/$f" v0.4.0 v0.3.3; done
 printf '\nfn interactive() -> bool {\n    !no_window()\n}\n' >> "$L/crates/fx-launcher/src/main.rs"
 expect "before the SDK has the helper, the same mistake only warns" warn audience
 printf '%s\n' "$out" | grep -q 'an error once the launcher is on SDK v0.4.0' \
@@ -211,6 +211,42 @@ fresh; printf 'name: Bug report\nbody: []\n' > "$L/.github/ISSUE_TEMPLATE/bug-re
 expect "bug report without a What worked checklist" warn issue-bug-report
 fresh; rm "$L/.github/workflows/sdk-update.yml"
 expect "no weekly SDK update" warn sdk-update
+
+# --- release notes, third-party pins ----------------------------------------------------------------
+fresh; printf '      notes: generate\n' >> "$L/.github/workflows/build.yml"
+expect "notes: generate (CMR4 v0.4.0 had only GitHub's commit list)" error release-notes
+fresh; replace "$L/packaging/third-party.txt" 'https://github.com/upstream/fixer/releases/download/v1.0/fixer-1.0.zip' 'https://github.com/upstream/fixer/archive/0123abcd.tar.gz'
+expect "a watched pin of a commit archive (CMR3's vkBasalt)" error watch-pins
+fresh; printf 'other upstream/other other-\n' >> "$L/packaging/upstream-watch.txt"
+expect "a watched name with no pin" error watch-pins
+fresh; printf 'xidi https://github.com/samuelgr/Xidi/releases/download/v4.3.1/Xidi-v4.3.1.zip %064d\n' 0 >> "$L/packaging/third-party.txt"
+expect "a pinned GitHub release nobody watches (CMR4's Xidi)" warn unwatched-pins
+fresh; rm "$L/.github/workflows/watch-upstream.yml"
+expect "pins without a watch workflow" warn unwatched-pins
+
+# --- secrets: process listings ---------------------------------------------------------------------
+for line in 'ps -eo pid,stat,args | grep wineserver' 'ps aux | grep -i rally' 'ps -ef' 'ps -o pid=,cmd= -p "$pid"' \
+  'pgrep -af wineserver' 'env | sort' 'x=$(printenv)' 'cat "/proc/$pid/cmdline"' 'tr "\0" "\n" < /proc/$p/environ'; do
+  fresh; printf '%s\n' "$line" >> "$L/linux/tests/e2e.sh"
+  expect "prints other processes' command lines or environments: $line" error process-listing
+done
+fresh; printf '%s\n' '# ps aux is never used here' 'pgrep -x wineserver' 'ps -o pid,stat,comm' 'env -i PATH=/usr/bin:/bin sh -c true' \
+  'v=$(tr "\0" "\n" < "/proc/$p/environ" | sed -n "s/^WINEPREFIX=//p")' 'printf "X=1\0" > "$T/proc/4242/environ"' >> "$L/linux/tests/e2e.sh"
+mkdir -p "$L/.work/old" "$L/vendor/dosbox/scripts"
+printf 'pgrep -a wine\n' > "$L/.work/old/harness.sh"; printf 'env\n' > "$L/vendor/dosbox/scripts/log-env.sh"
+run "$L"
+printf '%s\n' "$out" | grep -q 'process-listing' && bad "safe listings, task scratch and vendored code pass: $out" \
+  || ok "pgrep -x, ps comm, env -i, a value read from environ, a fake environ, .work/ and vendor/ pass"
+
+# --- real-game tests ------------------------------------------------------------------------------------
+fresh; drop_line "$L/linux/tests/e2e.sh" 'FX_E2E'
+expect "a real-game test with no opt-in (CMR3's e2e.sh, 2026-11-02)" error real-game-gated
+fresh; replace "$L/linux/tests/e2e.sh" 'gamescope --backend headless' 'gamescope -W 3840 -H 2160'
+expect "a real-game test with a visible gamescope" error real-game-gated
+fresh; printf '#!/bin/sh\n# a stand-in gamescope\ngamescope() { :; }\ngamescope -W 640 -- true\n' > "$L/linux/tests/unit.sh"
+run "$L"
+printf '%s\n' "$out" | grep -q 'real-game-gated' && bad "a test with fakes only is not a real-game test: $out" \
+  || ok "a test with a stand-in gamescope and no real game passes"
 
 # --- DRM and waivers -------------------------------------------------------------------------------
 fresh; printf -- '- **Editions:** the pre-activated v1.1 executable.\n' >> "$L/AGENTS.md"

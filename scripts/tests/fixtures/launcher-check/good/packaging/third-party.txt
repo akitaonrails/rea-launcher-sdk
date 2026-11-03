@@ -1,0 +1,2 @@
+# name url sha256
+fixer https://github.com/upstream/fixer/releases/download/v1.0/fixer-1.0.zip 0000000000000000000000000000000000000000000000000000000000000000
