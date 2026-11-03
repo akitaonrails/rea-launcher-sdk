@@ -109,6 +109,19 @@ echo "# wip" >> "$S/packaging/pins.sh"
 sh "$SYNC" "$L" >/dev/null 2>&1
 grep -q '^commit=.*-dirty$' "$L/sdk/VERSION" && ok "dirty SDK is stamped" || bad "dirty SDK is stamped"
 (cd "$S" && git checkout -q -- packaging/pins.sh)
+# The SDK checkout is at the recorded commit but has uncommitted changes
+# (an SDK developer mid-change): --check still compares with the recorded
+# version, not the dirty work tree.
+sh "$SYNC" "$L" >/dev/null 2>&1
+grep -qx "commit=$(git -C "$S" rev-parse HEAD)" "$L/sdk/VERSION" || bad "setup: clean stamp at HEAD"
+echo "# wip in the SDK" >> "$S/packaging/release-notes.sh"
+check_ok "dirty SDK checkout at the recorded commit: no drift against that commit"
+grep -q 'comparing with SDK .*the version in sdk/VERSION' "$T/err" && ok "...and it says it compared with the recorded version" || bad "dirty at HEAD: $(cat "$T/err")"
+echo "# local hack" >> "$L/sdk/packaging/smoke-package.sh"
+check_drift "dirty SDK checkout: a launcher edit is still drift" "changed: sdk/packaging/smoke-package.sh"
+if grep -q 'release-notes' "$T/err"; then bad "dirty SDK checkout: its own wip is not reported"; else ok "dirty SDK checkout: its own wip is not reported"; fi
+(cd "$S" && git checkout -q -- packaging/release-notes.sh)
+sh "$SYNC" "$L" >/dev/null 2>&1
 # --tag overrides describe.
 sh "$SYNC" --tag v1.2.3 "$L" >/dev/null 2>&1
 grep -qx 'tag=v1.2.3' "$L/sdk/VERSION" && ok "--tag is recorded" || bad "--tag is recorded"
