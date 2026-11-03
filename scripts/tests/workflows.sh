@@ -186,6 +186,36 @@ check_n "imports (packages): the others are still checked" 4
 (cd "$P" && pkg_env 'dist/Game-*/' && RUST_TARGET=x86_64-unknown-linux-gnu && sh -e "$S") >/dev/null 2>&1
 check_n "imports (packages): not for a native target" 0
 
+# Secret scan: the launcher-ci step against a fake gitleaks, and its pin in
+# step with scripts/prepush-scan.
+pin() { sed -n "s/^$1=//p" "$HERE/../prepush-scan"; }
+grep -q "GITLEAKS_VERSION: $(pin GITLEAKS_VERSION)\$" "$WF/launcher-ci.yml" && ok "secret scan: same gitleaks version as prepush-scan" || bad "secret scan: version differs from prepush-scan"
+grep -q "GITLEAKS_SHA256: $(pin GITLEAKS_SHA256_x86_64)\$" "$WF/launcher-ci.yml" && ok "secret scan: same SHA-256 as prepush-scan" || bad "secret scan: SHA-256 differs from prepush-scan"
+grep -q 'bREA_\[A-Z0-9_\]\*KEY=' "$WF/launcher-ci.yml" && grep -q 'bREA_\[A-Z0-9_\]\*KEY=' "$HERE/../prepush-scan" && ok "secret scan: same allowlist" || bad "secret scan: allowlists differ"
+grep -q 'sh scripts/prepush-scan --all' "$WF/ci.yml" && ok "secret scan: the SDK's ci.yml runs prepush-scan --all" || bad "secret scan: ci.yml"
+G=$T/gl
+mkdir -p "$G/bin" "$G/w" "$G/rt"
+cat > "$G/bin/gitleaks" <<'FAKE'
+#!/bin/sh
+echo "$*" >> "$GL_LOG"
+while [ $# -gt 0 ]; do [ "$1" = --report-path ] && r=$2; shift; done
+echo "Secret: $GL_SECRET"
+if [ -n "${GL_FIND:-}" ]; then printf 'github-pat|4|abcdef0123456789|conf.rs\ngithub-pat|4||%s/scan/tree/conf.rs\n' "$RUNNER_TEMP" > "$r"; else : > "$r"; fi
+FAKE
+chmod +x "$G/bin/gitleaks"
+(cd "$G/w" && git init -q && echo x > f && git -c user.name=t -c user.email=t@e commit -qm x --allow-empty && git add f && git -c user.name=t -c user.email=t@e commit -qm f) >/dev/null 2>&1
+S=$(step launcher-ci.yml "Scan the history and the tree (paths and commit ids only)") || exit 1
+scan() { (cd "$G/w" && rm -rf "$G/rt/scan" && PATH="$G/bin:$PATH" RUNNER_TEMP="$G/rt" GL_LOG="$G/log" GL_SECRET=hunter2-not-real sh -e "$S") > "$T/out" 2>&1; }
+if scan; then ok "secret scan: nothing found passes"; else bad "secret scan: clean: $(cat "$T/out")"; fi
+grep -q -- '--redact' "$G/log" && grep -q '^git ' "$G/log" && grep -q '^dir ' "$G/log" && ok "secret scan: history and tree, redacted" || bad "secret scan: modes: $(cat "$G/log")"
+grep -q -- "-c $G/rt/scan/gitleaks.toml" "$G/log" && ok "secret scan: the SDK allowlist without a .gitleaks.toml" || bad "secret scan: config: $(cat "$G/log")"
+if GL_FIND=1 scan; then bad "secret scan: a finding fails"; else ok "secret scan: a finding fails"; fi
+grep -q '::error file=conf.rs,line=4::possible secret (commit abcdef012345, rule github-pat)' "$T/out" && ok "secret scan: annotation with path and commit" || bad "secret scan: annotation: $(cat "$T/out")"
+grep -q '::error file=conf.rs,line=4::possible secret (tree at HEAD' "$T/out" && ok "secret scan: tree paths are the repo's" || bad "secret scan: tree path: $(cat "$T/out")"
+grep -q hunter2 "$T/out" && bad "secret scan: gitleaks' output was shown" || ok "secret scan: gitleaks' own output is never shown"
+echo '[extend]' > "$G/w/.gitleaks.toml"; : > "$G/log"; scan
+grep -q -- "-c $G/w/.gitleaks.toml" "$G/log" && ok "secret scan: a repository's .gitleaks.toml wins" || bad "secret scan: repo config: $(cat "$G/log")"
+
 # No status-swallowing "check && echo" anywhere in the workflows.
 if grep -n '&& echo' "$WF"/*.yml; then bad "no '&& echo' checks in workflows"; else ok "no '&& echo' checks in workflows"; fi
 

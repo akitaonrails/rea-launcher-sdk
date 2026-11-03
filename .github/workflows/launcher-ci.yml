@@ -76,6 +76,16 @@ on:
           the SDK's git source (start from the SDK's templates/deny.toml).
         type: boolean
         default: true
+      secret-scan:
+        description: >-
+          Scan the whole history and the tree for committed secrets with the
+          pinned gitleaks (a separate job). Findings show the file, line,
+          commit and rule, never the matched text. A repository's
+          .gitleaks.toml / .gitleaksignore apply; without a .gitleaks.toml
+          the SDK's allowlist (play-script *_KEY settings) is used, as in
+          sdk/scripts/prepush-scan.
+        type: boolean
+        default: true
       sdk-check:
         description: Fail when sdk/ drifted from the SDK version in sdk/VERSION.
         type: boolean
@@ -144,6 +154,67 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  secrets:
+    name: Secret scan (gitleaks, pinned)
+    if: inputs.secret-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # Keep in step with scripts/prepush-scan (scripts/tests/workflows.sh checks).
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: ${{ inputs.submodules }}
+          persist-credentials: false
+      - name: Install gitleaks (pinned, SHA-256 checked)
+        shell: sh
+        run: |
+          dir=$RUNNER_TEMP/gitleaks
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/gitleaks.tgz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "$GITLEAKS_SHA256  $dir/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$dir/gitleaks.tgz" -C "$dir" gitleaks
+          echo "$dir" >> "$GITHUB_PATH"
+      - name: Scan the history and the tree (paths and commit ids only)
+        shell: sh
+        run: |
+          t=$RUNNER_TEMP/scan
+          mkdir -p "$t/tree"
+          if [ -f .gitleaks.toml ]; then
+            cfg=$PWD/.gitleaks.toml
+          else
+            # The SDK's allowlist, as in scripts/prepush-scan.
+            cfg=$t/gitleaks.toml
+            printf '%s\n' '[extend]' 'useDefault = true' '' '[[allowlists]]' \
+              'description = "rea-play.sh settings named *_KEY, not secrets"' \
+              'regexTarget = "line"' "regexes = ['''\\bREA_[A-Z0-9_]*KEY=''']" > "$cfg"
+          fi
+          # rule|line|commit|file per finding; never .Secret or .Match.
+          printf '%s\n' '{{- range . }}{{ .RuleID }}|{{ .StartLine }}|{{ .Commit }}|{{ .File }}' '{{ end -}}' > "$t/template"
+          git archive --format=tar HEAD | tar -xf - -C "$t/tree"
+          : > "$t/found"
+          for mode in git dir; do
+            target=$PWD
+            if [ "$mode" = dir ]; then target=$t/tree; fi
+            # gitleaks' own output could quote a finding: it goes nowhere.
+            gitleaks "$mode" -c "$cfg" --no-banner --no-color --log-level error --redact --exit-code 0 \
+              --gitleaks-ignore-path "$PWD" --report-format template --report-template "$t/template" \
+              --report-path "$t/report" "$target" > "$t/log" 2>&1 \
+              || { echo "::error::gitleaks $mode failed"; exit 1; }
+            cat "$t/report" >> "$t/found"
+          done
+          if [ ! -s "$t/found" ]; then echo "no secrets found"; exit 0; fi
+          sort -u "$t/found" | while IFS='|' read -r rule line commit file; do
+            where="commit $(printf '%.12s' "$commit")"
+            if [ -z "$commit" ]; then where="tree at HEAD"; file=${file##*/scan/tree/}; fi
+            echo "::error file=$file,line=$line::possible secret ($where, rule $rule): remove and rotate it, or allow a false positive in .gitleaksignore"
+          done
+          exit 1
+
   build:
     name: Check, build and package
     runs-on: ${{ inputs.runs-on }}

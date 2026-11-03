@@ -60,7 +60,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends dash mawk busybox curl xz-utils zip unzip
       - name: Shell syntax
         run: |
-          for f in packaging/*.sh packaging/tests/*.sh scripts/sdk-sync scripts/sdk-bump scripts/clean scripts/wine-test scripts/dev-check scripts/tests/*.sh shell/*.sh shell/example-play shell/tests/*.sh; do
+          for f in packaging/*.sh packaging/tests/*.sh scripts/sdk-sync scripts/sdk-bump scripts/clean scripts/wine-test scripts/dev-check scripts/prepush-scan scripts/tests/*.sh shell/*.sh shell/example-play shell/tests/*.sh; do
             [ -f "$f" ] || continue
             dash -n "$f" || { echo "::error file=$f::dash -n failed"; exit 1; }
             echo "ok   $f"
@@ -183,6 +183,21 @@ jobs:
       - name: Windows-target tests under Wine (headless, the vendored wine-test)
         working-directory: ${{ runner.temp }}/rea-example
         run: sh sdk/scripts/wine-test --workspace
+
+  secrets:
+    # Every push and PR: the whole history and the tree, with the pinned
+    # gitleaks (scripts/prepush-scan, the same scan as before a push).
+    # Findings are printed as paths and commit ids, never the match.
+    name: Secret scan (gitleaks, pinned)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan the history and the tree
+        run: sh scripts/prepush-scan --all
 
   deny:
     name: Dependency advisories, licences and sources
