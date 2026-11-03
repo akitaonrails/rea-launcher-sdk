@@ -80,6 +80,15 @@ on:
         description: Fail when sdk/ drifted from the SDK version in sdk/VERSION.
         type: boolean
         default: true
+      conformance:
+        description: >-
+          Run sdk/scripts/launcher-check, the family's rules (golden
+          snapshots, the SDK audience and instance guard, drafts for our own
+          fixes, README sections, SDK pins, lld...). Errors fail the job,
+          warnings are annotations. An owner-approved exception is a line in
+          the launcher's .rea-check-waivers, never false here.
+        type: boolean
+        default: true
       sdk-dir:
         description: Where sdk-sync vendored the SDK.
         type: string
@@ -197,6 +206,14 @@ jobs:
           [ "$got" = "$SDK_COMMIT" ] || { echo "::error::SDK $SDK_TAG is $got now, $SDK_DIR/VERSION says $SDK_COMMIT"; exit 1; }
           sh .rea-sdk/scripts/sdk-sync --check --tag "$SDK_TAG" .
           rm -rf .rea-sdk
+
+      - name: Family rules (launcher-check)
+        if: inputs.conformance
+        shell: sh
+        run: |
+          [ -f "$SDK_DIR/scripts/launcher-check" ] \
+            || { echo "::error::no $SDK_DIR/scripts/launcher-check: re-run scripts/sdk-sync from rea-launcher-sdk v0.4.0 or later"; exit 1; }
+          sh "$SDK_DIR/scripts/launcher-check" --github .
 
       - name: Install build tools
         shell: sh
