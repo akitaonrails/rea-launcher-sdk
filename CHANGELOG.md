@@ -20,14 +20,13 @@ v0.4.1 (v0.4.0's Migration section applies).
 
 ### Fixed
 
-- The close hook's `close_on = alt_f4_state` ignores a hidden foreground
-  window: older Wine with the null driver calls a process's only, hidden
-  window the foreground one, and Alt+F4 pressed elsewhere ended the game.
-
-- The close hook's in-front `alt_f4_state` test prints SKIPPED with the
-  reason where Wine can't bring a window to the front or let `SendInput`
-  reach `GetAsyncKeyState` (Ubuntu's Wine on CI runners), instead of
-  failing; it still runs in the gaming box.
+- The close hook's `close_on = alt_f4_state` also requires the game's
+  window to be visible before it acts: a hidden window is never what the
+  player looks at, whatever the system reports as the foreground window.
+- The close hook's Alt+F4 test no longer fails on Ubuntu's Wine (CI
+  runners), which ends the hidden stand-in game by itself with exit 0;
+  the test checks that the hook didn't act (its exit code), and the
+  in-front case says SKIPPED with the reason where that Wine can't run it.
 - The SDK's scaffold job runs `launcher-check` on the scaffold as
   generated, before its SDK dependencies point at the checkout.
 

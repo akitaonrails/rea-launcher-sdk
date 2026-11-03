@@ -174,9 +174,8 @@ fn alt_f4_pressed(config: &Config) -> Option<HWND> {
     }
     // SAFETY: plain window queries.
     let front = unsafe { GetForegroundWindow() };
-    // A hidden window is never what the player looks at, even when the
-    // system calls it the foreground window (older Wine with the null
-    // driver does, for a process's only window).
+    // A hidden window is never what the player looks at, whatever the
+    // system reports as the foreground window.
     // SAFETY: a plain window query.
     if front.is_null() || unsafe { IsWindowVisible(front) } == 0 {
         return None;
