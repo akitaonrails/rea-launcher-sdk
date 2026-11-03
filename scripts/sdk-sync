@@ -81,7 +81,7 @@ fi
 files() {
   (
     cd "$SDK"
-    for f in shell/rea-play.sh scripts/wine-test scripts/sdk-bump scripts/clean scripts/prepush-scan packaging/*.sh packaging/appimage/AppRun.in \
+    for f in shell/rea-play.sh scripts/wine-test scripts/sdk-bump scripts/clean scripts/prepush-scan scripts/release packaging/*.sh packaging/appimage/AppRun.in \
       packaging/appimage/tools.pins packaging/appimage/wine/COPYING.LIB \
       packaging/appimage/wine/LICENSE packaging/appimage/wine/SOURCE.txt \
       docs/STANDARDS.md docs/playbooks/*.md; do

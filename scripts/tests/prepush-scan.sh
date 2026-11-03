@@ -18,7 +18,7 @@ export GIT_CONFIG_NOSYSTEM=1 REA_NO_FETCH=1
 SECRET=$(printf 'ghp_%s%s' 'Zq8xW3rT7yU1iO5pA9sD2fG6hJ4kL0' 'mN3bV7')
 
 repo() { # name: a repository with one clean commit and a remote branch
-  rm -rf "$T/$1" "$T/$1.git"
+  rm -rf "${T:?}/${1:?}" "$T/$1.git"
   mkdir -p "$T/$1"
   (
     cd "$T/$1" && git init -q &&
