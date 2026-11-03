@@ -38,7 +38,7 @@
 
 use std::ffi::OsStr;
 
-use eframe::egui::{self, Key, Rect, RichText, Ui, vec2};
+use eframe::egui::{self, Key, Rect, RichText, Role, Ui, vec2};
 
 use crate::pad::{self, Nav, PadNav};
 use crate::theme::{self, Metrics, Palette, body, condensed, size};
@@ -210,11 +210,12 @@ pub fn message_ui(ui: &mut Ui, message: &Message<'_>, state: &mut MessageState) 
         egui::pos2(full.right(), full.bottom() - footer_height - 16.0),
     );
     ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
-        ui.label(
+        let title = ui.label(
             RichText::new(message.title)
                 .font(condensed(26.0))
                 .color(p.ink),
         );
+        title.widget_info(|| egui::WidgetInfo::labeled(Role::Heading, true, message.title));
         ui.add_space(4.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, true])
@@ -233,7 +234,12 @@ pub fn message_ui(ui: &mut Ui, message: &Message<'_>, state: &mut MessageState) 
                     );
                 }
                 if state.copied {
-                    widgets::note(ui, "Copied. Paste it into a bug report or a message.");
+                    let copied =
+                        widgets::note(ui, "Copied. Paste it into a bug report or a message.");
+                    // Announced when it appears.
+                    ui.ctx().accesskit_node_builder(copied.id, |node| {
+                        node.set_live(egui::accesskit::Live::Polite);
+                    });
                 }
             });
     });
@@ -248,11 +254,15 @@ pub fn message_ui(ui: &mut Ui, message: &Message<'_>, state: &mut MessageState) 
                 state.copied = true;
                 action = Some(Action::Copied);
             }
-            if let Some(link) = message.link
-                && widgets::outline_button(ui, link.label).clicked()
-            {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(link.url));
-                action = Some(Action::OpenedLink);
+            if let Some(link) = message.link {
+                let open = widgets::outline_button(ui, link.label);
+                // It opens a page: a link to screen readers.
+                ui.ctx()
+                    .accesskit_node_builder(open.id, |node| node.set_role(Role::Link));
+                if open.clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(link.url));
+                    action = Some(Action::OpenedLink);
+                }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let ok = widgets::primary_button(ui, "OK");
@@ -408,8 +418,7 @@ impl eframe::App for MessageApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{self, Queryable};
-    use egui::Role;
+    use crate::testing::{self, NodeT, Queryable};
 
     const fn native(stdin: bool, stderr: bool, display: bool) -> Native {
         Native {
@@ -526,7 +535,10 @@ mod tests {
     #[test]
     fn the_window_shows_the_text_the_page_and_its_buttons() {
         let mut ui = open(MESSAGE);
-        assert!(ui.query_by_label("DiRT Rally").is_some());
+        assert!(
+            ui.query_by_role_and_label(Role::Heading, "DiRT Rally")
+                .is_some()
+        );
         assert!(ui.query_by_label(MESSAGE.text).is_some());
         assert!(
             ui.query_by_label(&format!("Report the edition: {URL}"))
@@ -541,8 +553,12 @@ mod tests {
         });
         assert!(copied);
         ui.run();
-        assert!(ui.query_by_label_contains("Copied.").is_some());
-        ui.get_by_role_and_label(Role::Button, "Report the edition")
+        let copied = ui.get_by_label_contains("Copied.");
+        assert_eq!(
+            copied.accesskit_node().live(),
+            egui::accesskit::Live::Polite
+        );
+        ui.get_by_role_and_label(Role::Link, "Report the edition")
             .click();
         ui.step();
         let opened = ui.output().platform_output.commands.iter().any(
