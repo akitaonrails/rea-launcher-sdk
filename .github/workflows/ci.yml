@@ -132,6 +132,11 @@ jobs:
           scripts/new-launcher --id exr --prefix EXR --game "Example Rally" \
             --exe "Example Rally.exe" --out "$RUNNER_TEMP/rea-example" \
             --repo akitaonrails/rea-example --author "rea CI" --no-lock
+      # The family's rules, on the scaffold as generated: the next step points
+      # its SDK dependencies at this checkout, which the sdk-tag rule refuses.
+      - name: The family's rules (the vendored launcher-check, as launcher-ci runs it)
+        working-directory: ${{ runner.temp }}/rea-example
+        run: sh sdk/scripts/launcher-check --github
       # The scaffold pins the SDK by tag (this commit's release tag, or
       # v<workspace version> before it is tagged). That tag may not exist
       # yet and is not the code under test, and a Cargo [patch] (compat.yml)
@@ -180,9 +185,6 @@ jobs:
         run: |
           cargo build --release --workspace --target i686-pc-windows-gnu
           sh sdk/packaging/check-imports.sh target/i686-pc-windows-gnu/release/*.exe
-      - name: The family's rules (the vendored launcher-check, as launcher-ci runs it)
-        working-directory: ${{ runner.temp }}/rea-example
-        run: sh sdk/scripts/launcher-check --github
       - name: Windows-target tests under Wine (headless, the vendored wine-test)
         working-directory: ${{ runner.temp }}/rea-example
         run: sh sdk/scripts/wine-test --workspace
