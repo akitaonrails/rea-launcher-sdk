@@ -9,11 +9,20 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [0.4.1] - 2026-11-02
 
-CI fixes for v0.4.0's release commit; no change for launchers' code.
-Launchers bumping from v0.3.x go straight to v0.4.1 (v0.4.0's Migration
-section applies).
+Fixes found by v0.4.0's CI. Launchers bumping from v0.3.x go straight to
+v0.4.1 (v0.4.0's Migration section applies).
+
+### Added
+
+- `scripts/wine-test` prints what each failing test printed (its panic
+  message and output, at most 40 lines), not only its name, so a CI log
+  says why; `--details-from LOG` reads a saved log.
 
 ### Fixed
+
+- The close hook's `close_on = alt_f4_state` ignores a hidden foreground
+  window: older Wine with the null driver calls a process's only, hidden
+  window the foreground one, and Alt+F4 pressed elsewhere ended the game.
 
 - The close hook's in-front `alt_f4_state` test prints SKIPPED with the
   reason where Wine can't bring a window to the front or let `SendInput`
