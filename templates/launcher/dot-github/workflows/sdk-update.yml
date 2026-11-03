@@ -1,0 +1,23 @@
+name: sdk-update
+
+# Weekly: opens or updates a pull request `sdk-update/vX.Y.Z` that moves
+# this launcher to the newest rea-launcher-sdk tag (sdk-bump), with that
+# range's Migration items in its body. It never merges: bump only when the
+# release fixes or adds something this launcher uses, apply the Migration
+# items, run the checks (sdk/scripts/launcher-check too), compare the golden
+# snapshots, then merge (sdk/docs/playbooks/sdk-change.md, "Upgrading a
+# launcher"). The repository must allow GitHub Actions to create pull
+# requests; pass a fine-grained token as the `token` secret to get CI on
+# the pull request.
+on:
+  schedule: [{cron: "17 5 * * 1"}]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    permissions: {contents: write, pull-requests: write}
+    uses: @SDK_REPO@/.github/workflows/sdk-update.yml@@SDK_TAG@
+    # secrets: {token: ${{ secrets.SDK_UPDATE_TOKEN }}}  # so the PR runs CI

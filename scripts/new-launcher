@@ -167,7 +167,8 @@ if grep -rIl '@[A-Z_]*@' "$OUT" | grep -q .; then
 fi
 
 # --- sdk/, Cargo.lock, git ------------------------------------------------------
-sh "$SDK/scripts/sdk-sync" "$OUT" >/dev/null
+# The tag Cargo and the workflows pin, also when this checkout isn't tagged.
+sh "$SDK/scripts/sdk-sync" --tag "$SDK_TAG" "$OUT" >/dev/null
 
 # Line lengths depend on the names filled in: let rustfmt lay the code out.
 if command -v cargo >/dev/null 2>&1; then
@@ -197,5 +198,5 @@ Created $OUT
   repo:     https://github.com/$REPO
   SDK:      $SDK_TAG ($SDK_GIT)
 Next (docs/playbooks/new-launcher.md, Phase 3): ${GIT:+the scaffold is committed; }run the checks
-in its AGENTS.md, then Phase 4.
+in its AGENTS.md (sdk/scripts/launcher-check among them), then Phase 4.
 EOF

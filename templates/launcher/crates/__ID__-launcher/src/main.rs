@@ -27,10 +27,11 @@ mod app {
     use @CRATE_SNAKE@::{runtime, ui};
     use rea_launcher::log::Log;
     use rea_launcher::{cfg, fsx};
-    use rea_launcher_win32::console::{self, Output};
-    use rea_launcher_win32::dialog::{self, Icon};
-    use rea_launcher_win32::process::Launch;
-    use rea_launcher_win32::{display, gpu, wine};
+    use rea_launcher_win32::instance::{self, SecondStart, Window};
+    use rea_launcher_win32::process::{self, Launch};
+    use rea_launcher_win32::report::{self, Mode as Says, Run};
+    use rea_launcher_win32::gpu::{self, Glx};
+    use rea_launcher_win32::{dialog, display, wine};
 
     const TITLE: &str = "@GAME@";
 
@@ -54,22 +55,31 @@ mod app {
         }
     }
 
-    /// Where messages go: the starting terminal, a dialog when a person
-    /// started it without one, or only `launcher.log`.
+    /// Where messages go: the SDK's `report` decides from the run's
+    /// audience (the terminal, a dialog, or only `launcher.log`).
     struct Out {
         log: Log,
-        attached: bool,
-        interactive: bool,
+        says: Says,
     }
 
     impl Out {
-        fn say(&self, text: &str, icon: Icon) {
-            match console::output(self.attached, console::stdout_usable(), self.interactive) {
-                Output::Terminal if icon == Icon::Info => println!("{text}"),
-                Output::Terminal => eprintln!("{text}"),
-                Output::Dialog => dialog::message(TITLE, text, icon),
-                Output::Nowhere => {}
+        /// A command's result (`--help`, `--check`): the terminal, or a
+        /// dialog when a person started it without one.
+        fn say(&self, text: &str) {
+            let route = report::route_here(self.says);
+            if route.print {
+                println!("{text}");
             }
+            if route.dialog {
+                dialog::message(TITLE, text, dialog::Icon::Info);
+            }
+        }
+
+        /// An error the launcher stops on: always in the log, and a dialog
+        /// whenever a person may be watching.
+        fn fail(&self, text: &str) {
+            self.log.line(&format!("error: {text}"));
+            report::fatal(TITLE, text, self.says);
         }
 
         fn warn(&self, message: &str) {
@@ -80,49 +90,84 @@ mod app {
     pub fn run() -> i32 {
         let log = Log::new(home().join("launcher.log"));
         log.line(concat!("@LAUNCHER_NAME@ ", env!("CARGO_PKG_VERSION")));
-        let parsed = cli::parse(std::env::args().skip(1));
-        let (attached, interactive) = match &parsed {
-            Ok(invocation) => (
-                invocation.wants_console() && console::attach_parent(),
-                invocation.interactive(),
-            ),
-            Err(_) => (console::attach_parent(), true),
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let parsed = cli::parse(args.iter().cloned());
+        let audience = match &parsed {
+            Ok(invocation) => report::audience(invocation.run()),
+            // A bad command line answers like a command: the terminal, or a
+            // dialog when a person started it and sees no terminal.
+            Err(_) => report::audience(Run {
+                command: true,
+                ..Run::from_args(&args, &[])
+            }),
         };
         let out = Out {
             log,
-            attached,
-            interactive,
+            says: audience.mode(),
         };
         let invocation = match parsed {
             Ok(invocation) => invocation,
             Err(error) => {
-                out.log.line(&format!("error: {error}"));
-                out.say(&error, Icon::Error);
+                out.fail(&error);
                 return cli::USAGE_ERROR;
             }
         };
         match run_mode(&out, invocation) {
             Ok(code) => code,
             Err(error) => {
-                out.log.line(&format!("error: {error}"));
-                out.say(&error, Icon::Error);
+                out.fail(&error);
                 cli::REFUSED
+            }
+        }
+    }
+
+    /// One launcher at a time (STANDARDS "One instance"): a second start
+    /// brings the open window forward, or says the game is running and
+    /// exits non-zero. Keep the guard for the launcher's lifetime.
+    fn single_instance(out: &Out, invocation: &Invocation) -> Result<instance::Guard, i32> {
+        match instance::single(@CRATE_SNAKE@::INSTANCE) {
+            Ok(guard) => Ok(guard),
+            Err(running) => {
+                let second = running.second_start(
+                    invocation.is_action(),
+                    Window::Own(@CRATE_SNAKE@::WINDOW_TITLE),
+                );
+                out.log.line(second.log_line());
+                if let Some(text) = second.message(TITLE) {
+                    out.fail(&text);
+                }
+                Err(second.exit_code())
             }
         }
     }
 
     fn run_mode(out: &Out, invocation: Invocation) -> Result<i32, String> {
         if invocation.mode == Mode::Help {
-            out.say(&config::usage(), Icon::Info);
+            out.say(&config::usage());
             return Ok(cli::OK);
         }
+        let mut instance = match single_instance(out, &invocation) {
+            Ok(guard) => Some(guard),
+            Err(code) => return Ok(code),
+        };
         let path = settings_path();
         if let Mode::Window { settings_only } = invocation.mode {
-            if wine::is_wine() {
-                match gpu::prefer_glx() {
-                    Ok(true) => out.log.line("settings window: OpenGL through GLX (UseEGL=N)"),
-                    Ok(false) => {}
-                    Err(error) => out.warn(&error.to_string()),
+            // A fresh Wine prefix draws eframe windows through EGL, which
+            // fails on many drivers: switch it to GLX, and run the launcher
+            // once more so this first start already gets the window.
+            match gpu::prefer_glx_or_restart(instance.take()) {
+                Glx::Restarted { exit_code } => {
+                    out.log.line("settings window: GLX set on a fresh prefix, started again");
+                    return Ok(exit_code as i32);
+                }
+                Glx::Ready {
+                    instance: guard,
+                    warning,
+                } => {
+                    instance = guard;
+                    if let Some(warning) = warning {
+                        out.warn(&warning);
+                    }
                 }
             }
             let saved = cfg::read_file(&path).ok().flatten();
@@ -159,11 +204,24 @@ mod app {
             found.exe.display()
         ));
         if invocation.mode == Mode::Check {
-            out.say(&cli::check_report(&game, &found), Icon::Info);
+            out.say(&cli::check_report(&game, &found));
             return Ok(cli::OK);
         }
 
         let runtime_dir = settings.runtime.clone().unwrap_or_else(|| home().join("runtime"));
+        let exe_name = found
+            .exe
+            .file_name()
+            .ok_or("the game's exe has no file name")?;
+        let exe = runtime_dir.join(exe_name);
+        // A launcher that was killed released the instance, but its game
+        // may still run from this runtime copy: never sync under it.
+        if !process::find_running(&exe).is_empty() {
+            let busy = SecondStart::Busy;
+            out.log.line(busy.log_line());
+            out.fail(&busy.message(TITLE).unwrap_or_default());
+            return Ok(busy.exit_code());
+        }
         let report = runtime::prepare(&game, &runtime_dir)?;
         for warning in &report.warnings {
             out.warn(warning);
@@ -183,11 +241,6 @@ mod app {
             fsx::write_atomic(&path, text)
                 .map_err(|error| format!("Cannot save {}: {error}", path.display()))?;
         }
-        let exe_name = found
-            .exe
-            .file_name()
-            .ok_or("the game's exe has no file name")?;
-        let exe = runtime_dir.join(exe_name);
         if !wine::is_wine() {
             match gpu::prefer_fast_gpu(&exe) {
                 Ok(true) => out.log.line("Windows: high-performance GPU preferred"),
@@ -197,6 +250,7 @@ mod app {
         }
         let code = Launch::new(&exe).cwd(&runtime_dir).run()?;
         out.log.line(&format!("game exited with {code}"));
+        drop(instance);
         Ok(code as i32)
     }
 }

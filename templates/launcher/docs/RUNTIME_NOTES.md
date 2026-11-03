@@ -42,6 +42,23 @@ Status: ✅ verified · ⚠️ partly (see notes) · ❌ fails · — not yet ch
 | HiDPI / 4K | — | |
 | Ultrawide | — | |
 
+### Quitting and leftovers
+
+Every way of quitting, in the real game, then the process table checked by
+name and by command line: no game, launcher, `wineserver` or gamescope left
+within a few seconds (`sdk/docs/STANDARDS.md`, "Clean exit, single
+instance").
+
+| Quit path | Status | Leftover processes | Notes |
+|---|---|---|---|
+| Quit from the game's menu | — | — | |
+| Window close button / Alt+F4 | — | — | |
+| `@ID@-play stop` (SIGTERM) | — | — | |
+| Ctrl+C on `@ID@-play` (SIGINT) | — | — | |
+| Steam "Stop" (Proton) | — | — | |
+| gamescope closed | — | — | |
+| Second launcher start while the game runs | — | — | brings the window forward or says the game is running (exit 5) |
+
 ### Robustness
 
 | Check | Status | Notes |

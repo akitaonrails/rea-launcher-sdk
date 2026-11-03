@@ -50,6 +50,7 @@ cargo clippy --target i686-pc-windows-gnu --workspace --all-targets -- -D warnin
 cargo deny check
 for t in linux/tests/*.sh packaging/tests/*.sh; do sh "$t"; done
 ../rea-launcher-sdk/scripts/sdk-sync --check .
+sdk/scripts/launcher-check                     # family rules; every error blocks the commit
 cargo build --release --locked --target i686-pc-windows-gnu
 sdk/scripts/wine-test --locked --workspace     # Windows-target tests under Wine, headless
 ```
@@ -70,5 +71,7 @@ Fill this in as the playbook's phases find it, and keep it current:
 - **Files the game writes:** (config, saves, registry keys; decides `runtime::GamePolicy`)
 - **Community components used:** (see `docs/RESEARCH.md`)
 - **Patches:** (only what nobody else solved; byte sites per edition)
-- **Owner decisions:** (licence-less assets, official art, DRM)
+- **Owner decisions:** (licence-less assets, official art, DRM; dated, also
+  in `docs/RESEARCH.md`. An exception to a `launcher-check` rule is a line
+  `rule: reason` in `.rea-check-waivers`, only with the owner's decision.)
 - **Known problems and their status:**

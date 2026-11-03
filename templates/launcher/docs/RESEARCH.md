@@ -20,6 +20,24 @@ inferences and decisions apart.
 |---|---|---|---|---|---|
 | (name, link) | | | yes / no (last release) | | bundle / configure / download on request / not used: why |
 
+Decisions: **Bundle**, **Configure**, **Download on request**, **Not
+used** (why), or **Our own** (draft C1): a fix nobody had, which gets a
+draft in `docs/CONTRIBUTIONS.md` with that id, or `no draft: <reason>`
+(`sdk/scripts/launcher-check`, rule `own-fix-draft`).
+
+## Owner decisions
+
+Licence-less assets, official art, DRM, anything public: the owner's call,
+dated, with the reason. A build with its DRM or disc check removed
+(pre-activated, no-CD, cracked) is supported only by such a decision; the
+launcher never applies, ships or patches DRM files, and the README says so
+(`sdk/docs/STANDARDS.md`, "DRM exceptions"). Record it here and in
+`AGENTS.md`, then add the `drm-exception` line to `.rea-check-waivers`.
+
+| Date | Decision | Why |
+|---|---|---|
+| | | |
+
 ## Editions
 
 | Build | Source | @GAME_EXE@ SHA-256 | Size | Notes |

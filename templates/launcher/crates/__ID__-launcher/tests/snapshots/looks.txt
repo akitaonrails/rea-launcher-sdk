@@ -1,0 +1,12 @@
+unknown original: resolution original, vsync on
+unknown recommended: resolution 1920x1080, vsync on
+unknown steam_deck: resolution 1280x800, vsync on
+1920x1080 original: resolution original, vsync on
+1920x1080 recommended: resolution 1920x1080, vsync on
+1920x1080 steam_deck: resolution 1280x800, vsync on
+2560x1440 original: resolution original, vsync on
+2560x1440 recommended: resolution 2560x1440, vsync on
+2560x1440 steam_deck: resolution 1280x800, vsync on
+1280x800 original: resolution original, vsync on
+1280x800 recommended: resolution 1280x800, vsync on
+1280x800 steam_deck: resolution 1280x800, vsync on
