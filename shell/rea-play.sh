@@ -93,7 +93,7 @@ rea_defaults() {
   # One-run flags: launcher.cfg keys the helper itself reads, which a
   # `--play --<key> value` run overrides for that run (rea_one_run).
   : "${REA_HELPER_KEYS=}"           # e.g. "scaler resolution display_mode postfx dxvk"
-  : "${REA_FLAG_SWITCHES=--no-window --settings --linux --check}"  # flags without a value
+  : "${REA_FLAG_SWITCHES=--no-window --settings --linux --check --help --version}"  # flags without a value
 }
 
 # A test seam's value, only under REA_TEST=1.
@@ -809,7 +809,11 @@ rea_settings() {
   rea_glob
   rea_run env "$@" 2>"$REA_STATE/settings.log"
   _rea_rc=$?
-  [ "$REA_MODE" = wine ] && rea_wineserver_wait
+  # Exit 3 is also "another launcher holds this prefix" (a second start):
+  # the prefix's wineserver then serves that launcher's game, and waiting
+  # for it would block until that game ends (CMR1 83dacbb). Nothing starts
+  # after a 3, so nothing waits.
+  [ "$REA_MODE" = wine ] && [ "$_rea_rc" != 3 ] && rea_wineserver_wait
   case $_rea_rc in
     0) return 0 ;;
     4) echo "no settings window could open; playing with the saved settings"; return 0 ;;
@@ -900,8 +904,11 @@ rea_cmd_default() {
   rea_start
 }
 
+# --play while our game runs starts nothing and says so with exit 3 (a
+# script or a Steam shortcut must not read it as a game that ran). The
+# plain start (the window) still exits 0: a person sees the message.
 rea_cmd_play() {
-  if rea_running; then echo "already running"; return 0; fi
+  if rea_running; then echo "already running"; return 3; fi
   rea_start "$@"
 }
 

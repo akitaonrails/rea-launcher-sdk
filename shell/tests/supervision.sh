@@ -234,7 +234,14 @@ for case in 0:0 4:0 3:1 1:1 139:1; do
   : > "$T/wineserver"
   if rea_settings > "$T/out"; then got=0; else got=1; fi
   check "settings exit ${case%:*} -> $got" "$got" "${case#*:}"
-  contains "settings exit ${case%:*}: the prefix's wineserver is awaited" "$(cat "$T/wineserver")" "wineserver -w"
+  if [ "${case%:*}" = 3 ]; then
+    # Exit 3 is also a second launcher refused while another one (or its
+    # game) holds the prefix: waiting for the prefix's wineserver would
+    # wait for that game (CMR1 83dacbb). Nothing follows a 3.
+    lacks "settings exit 3: no wait for the prefix's wineserver" "$(cat "$T/wineserver")" "wineserver -w"
+  else
+    contains "settings exit ${case%:*}: the prefix's wineserver is awaited" "$(cat "$T/wineserver")" "wineserver -w"
+  fi
 done
 contains "a failed window points at settings.log" "$(cat "$T/out")" "see $REA_STATE/settings.log"
 echo 3 > "$T/rc"; rea_settings > "$T/out"

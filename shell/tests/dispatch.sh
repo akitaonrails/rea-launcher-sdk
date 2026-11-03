@@ -46,8 +46,10 @@ own() { setsid sleep 30 & S=$!; sleep 0.2; st=$(rea_proc_stat "$S"); printf '%s 
 own
 check "already running: no second window" "$(main; cat "$T/out")" "0
 already running"
-check "already running: no second --play" "$(main --play; cat "$T/out")" "0
+check "already running: --play starts nothing and fails (exit 3)" "$(main --play; cat "$T/out")" "3
 already running"
+rm -f "$T/ran"; main play > /dev/null
+[ -e "$T/ran" ] && fail "a second play started the game" || ok "a second play starts nothing"
 check "status when running" "$(main status; cat "$T/out")" "0
 running"
 rea_stop > /dev/null; wait "$S" 2>/dev/null
