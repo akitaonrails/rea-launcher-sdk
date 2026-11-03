@@ -93,6 +93,16 @@ case "$*" in *--settings*--linux*) echo "window $*" >> "$T/scr.log"; exit 0 ;; e
 echo "launcher $*" >> "$T/scr.log"
 FAKE
 chmod +x "$T/scr/ScreamerLauncher"
+# A stand-in gamescope (first on PATH in scr): the result must not depend on
+# whether this machine has gamescope (the host did, the gaming box and CI
+# runners don't). It drops its own options and runs the command after --.
+cat > "$T/scr/gamescope" <<'FAKE'
+#!/bin/sh
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+[ "$#" -gt 0 ] && shift
+exec "$@"
+FAKE
+chmod +x "$T/scr/gamescope"
 # The Screamer recipe from README.md.
 cat > "$T/scr/linux/screamer-play" <<'SCR'
 #!/bin/sh

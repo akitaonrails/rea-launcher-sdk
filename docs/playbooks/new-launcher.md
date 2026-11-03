@@ -235,3 +235,7 @@ player deleted never comes back.
   wrong window.
 - `scripts/wine-test` keeps its prefix between runs: a registry test
   cleans up the keys it wrote.
+- A test never depends on what this machine has installed (gamescope,
+  xrandr, Wine): put a stand-in first on `PATH` or set the helper's
+  `REA_*` seam. A Linux helper test passed on a desktop with gamescope
+  and failed in the gaming box and on CI runners, which have none.
