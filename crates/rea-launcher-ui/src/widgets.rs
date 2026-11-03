@@ -1302,6 +1302,64 @@ pub fn photo_caption(ui: &mut Ui, strip: Rect, alt: &str, lines: &[(&str, Captio
     }
 }
 
+/// [`photo_caption`] on a solid `panel` plate, each line wrapped to the
+/// strip's width (OR's caption): for text that sits over a busy part of
+/// the photo, where the fade into `base` is not backing enough (no small
+/// text over a photo without a solid backing). Same accessibility.
+pub fn photo_caption_plated(ui: &mut Ui, strip: Rect, alt: &str, lines: &[(&str, CaptionStyle)]) {
+    let p = palette(ui);
+    let image = ui.interact(strip, ui.scope_id().with("rea-photo"), Sense::hover());
+    accessible(&image, WidgetInfo::labeled(Role::Image, true, alt), None);
+    if lines.is_empty() {
+        return;
+    }
+    let (pad, gap) = (vec2(12.0, 8.0), 2.0);
+    let wrap = (strip.width() - 56.0).max(80.0);
+    let galleys: Vec<_> = lines
+        .iter()
+        .map(|&(text, style)| {
+            let (font, color) = caption_font(&p, style);
+            ui.painter().layout(text.to_owned(), font, color, wrap)
+        })
+        .collect();
+    let width = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);
+    let height = galleys.iter().map(|g| g.size().y).sum::<f32>() + gap * (galleys.len() - 1) as f32;
+    let plate = Rect::from_min_size(
+        pos2(
+            strip.left() + 16.0,
+            strip.bottom() - 28.0 - height - 2.0 * pad.y,
+        ),
+        vec2(width, height) + 2.0 * pad,
+    );
+    ui.painter()
+        .rect_filled(plate, CornerRadius::same(6), p.panel);
+    let mut y = plate.top() + pad.y;
+    for (galley, &(_, style)) in galleys.into_iter().zip(lines) {
+        let h = galley.size().y;
+        ui.painter().galley(
+            pos2(plate.left() + pad.x, y),
+            galley,
+            caption_font(&p, style).1,
+        );
+        y += h + gap;
+    }
+    let caption = ui.interact(plate, ui.scope_id().with("rea-caption"), Sense::hover());
+    let text: Vec<&str> = lines.iter().map(|(t, _)| *t).collect();
+    accessible(
+        &caption,
+        WidgetInfo::labeled(Role::Label, true, text.join(". ")),
+        None,
+    );
+}
+
+fn caption_font(p: &Palette, style: CaptionStyle) -> (egui::FontId, Color32) {
+    match style {
+        CaptionStyle::Title => (semibold(19.0), p.ink),
+        CaptionStyle::Text => (body(size::NOTE), p.muted),
+        CaptionStyle::Credit => (body(size::MIN_TEXT), p.muted),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1727,6 +1785,46 @@ mod tests {
         };
         // On stays on the right while disabled (v0.3 drew it off).
         assert!(knob_x(true) > knob_x(false) + 10.0);
+    }
+
+    #[test]
+    fn a_plated_caption_wraps_on_a_solid_panel() {
+        let p = crate::theme::tests::OR;
+        let ctx = egui::Context::default();
+        theme::install(&ctx, &p);
+        let strip = Rect::from_min_size(pos2(0.0, 0.0), vec2(260.0, 400.0));
+        let long = "Splash Wave or Magical Sound Shower on the coast road at sunset";
+        let mut shapes = Vec::new();
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                photo_caption_plated(
+                    ui,
+                    strip,
+                    "A red convertible",
+                    &[(long, CaptionStyle::Text)],
+                );
+            });
+            output.textures_delta.clear();
+            shapes = output.shapes;
+        }
+        let plate = shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                Shape::Rect(rect) if rect.fill == p.panel => Some(rect.rect),
+                _ => None,
+            })
+            .expect("a panel plate");
+        let text = shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                Shape::Text(text) => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(text.galley.rows.len() > 1, "wrapped");
+        assert!(plate.contains_rect(text.visual_bounding_rect()));
+        assert!(strip.contains_rect(plate));
+        assert_eq!(text.galley.job.sections[0].format.color, p.muted);
     }
 
     #[test]

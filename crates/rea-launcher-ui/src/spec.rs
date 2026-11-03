@@ -22,11 +22,15 @@
 //! a `Toggle` or `Choice` with an unset label (`OptionSpec::unset_label`,
 //! e.g. "As the game") → chips with that choice first, which writes the
 //! empty text (the launcher then clears the key from `launcher.cfg`);
-//! `Range` → a slider; `Size` and `Text` → a text field (a `Size` that the
-//! row refuses shows what it needs); `Path` → [`widgets::folder_field`]
+//! `Range` → a slider, or chips with `RowOptions::steps` (the unset chip
+//! first when the spec has one, see [`step_choices`]); `Size` → a text
+//! field, or with `RowOptions::sizes` chips of the screen's and common
+//! sizes plus Custom ([`size_choices`]); `Text` → a text field (a value
+//! the row refuses shows what it needs); `Path` → [`widgets::folder_field`]
 //! with [`spec_path_row`], a text field with [`spec_row`]. The label is the
 //! row's [`widgets::field`] (the toggle's own label for a toggle), the
-//! description a note under it; both are the control's accessible name and
+//! description a note under it (the chosen value's note instead with
+//! `RowOptions::notes`, the disabled reason while disabled); both are the control's accessible name and
 //! description.
 
 use std::collections::BTreeSet;
@@ -80,7 +84,25 @@ pub struct RowOptions<'a> {
     pub disabled: Option<&'a str>,
     /// For a `Range`: chips with these `(value, label)` steps instead of a
     /// slider (OR's draw distance: `(0, "Game's own"), (4, "4"), (8, "8")`).
+    /// With an `unset_label` the unset chip comes first (CMR3's field of
+    /// view: "As the game", 60°, 75°…); a saved value between the steps
+    /// gets its own chip ([`step_choices`]).
     pub steps: Option<&'a [(u32, &'a str)]>,
+    /// What each value does, by its `launcher.cfg` text (`""` for unset):
+    /// the chosen value's note is shown in place of the row's description
+    /// and added to the accessible description (CMR3's gamepad presets).
+    pub notes: Option<&'a [(&'a str, &'a str)]>,
+    /// For a `Size`: chips of sizes from the screen instead of a text
+    /// field ([`size_choices`]), plus Custom for any other size.
+    pub sizes: Option<SizeChips>,
+}
+
+/// How a `Size` row offers sizes ([`RowOptions::sizes`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SizeChips {
+    /// The screen in pixels (`window::WindowFit::screen`), either
+    /// orientation; `None` until known.
+    pub screen: Option<(u32, u32)>,
 }
 
 /// One option's row; `changed()` when `value` changed. See the module
@@ -167,15 +189,15 @@ fn row(
                     let response = match options.steps {
                         Some(steps) => {
                             let mut current = parsed;
-                            let chips: Vec<Chip<'_, Option<u32>>> = steps
+                            let labels = step_choices(spec, steps, parsed);
+                            let chips: Vec<Chip<'_, Option<u32>>> = labels
                                 .iter()
-                                .map(|(v, label)| Chip::new(Some(*v), label).disabled(disabled))
+                                .map(|(v, label)| Chip::new(*v, label.as_str()).disabled(disabled))
                                 .collect();
                             let response = quiet_chips(ui, &chips, &mut current);
-                            if response.changed()
-                                && let Some(n) = current
-                            {
-                                *value = n.to_string();
+                            if response.changed() {
+                                // `None` is the unset chip: the empty text.
+                                *value = current.map(|n| n.to_string()).unwrap_or_default();
                             }
                             response
                         }
@@ -192,6 +214,13 @@ fn row(
                         }
                     };
                     control = Some(response);
+                });
+            }
+            Kind::Size { .. } if options.sizes.is_some() => {
+                let screen = options.sizes.and_then(|sizes| sizes.screen);
+                ui.horizontal_top(|ui| {
+                    widgets::field(ui, spec.label);
+                    control = Some(size_chips(ui, spec, value, screen, disabled));
                 });
             }
             Kind::Size { .. } | Kind::Text => {
@@ -237,15 +266,21 @@ fn row(
             Some(why) => {
                 widgets::note(ui, why);
             }
-            None if !spec.description.is_empty() => {
-                widgets::note(ui, spec.description);
+            None => {
+                let shown = value_note(options.notes, value).unwrap_or(spec.description);
+                if !shown.is_empty() {
+                    widgets::note(ui, shown);
+                }
             }
-            None => {}
         }
     });
     if let Some(control) = &control {
         // The row's description, and why it is disabled when it is.
-        let description = widgets::join_sentences(spec.description, disabled.unwrap_or_default());
+        let described = match value_note(options.notes, value) {
+            Some(note) => widgets::join_sentences(spec.description, note),
+            None => spec.description.to_owned(),
+        };
+        let description = widgets::join_sentences(&described, disabled.unwrap_or_default());
         widgets::name_control(control, Some(spec.label), Some(&description));
         if let Some(why) = disabled
             && !matches!(spec.kind, Kind::Toggle | Kind::Choice(_))
@@ -258,6 +293,161 @@ fn row(
         inner.response.mark_changed();
     }
     inner.response
+}
+
+/// The note for `value` in `notes` (matched without case or spaces).
+fn value_note<'a>(notes: Option<&[(&str, &'a str)]>, value: &str) -> Option<&'a str> {
+    notes?
+        .iter()
+        .find(|(v, _)| v.eq_ignore_ascii_case(value.trim()))
+        .map(|(_, note)| *note)
+}
+
+/// The chips of a stepped `Range` row: the unset chip first when the
+/// spec has an `unset_label` (value `None`), the steps, then a `saved`
+/// value that is none of them (its number as the label).
+pub fn step_choices(
+    spec: &OptionSpec,
+    steps: &[(u32, &str)],
+    saved: Option<u32>,
+) -> Vec<(Option<u32>, String)> {
+    let mut choices: Vec<(Option<u32>, String)> = spec
+        .unset
+        .map(|label| (None, label.to_owned()))
+        .into_iter()
+        .collect();
+    choices.extend(
+        steps
+            .iter()
+            .map(|(n, label)| (Some(*n), (*label).to_owned())),
+    );
+    if let Some(n) = saved
+        && !steps.iter().any(|(step, _)| *step == n)
+    {
+        choices.push((Some(n), n.to_string()));
+    }
+    choices
+}
+
+/// Common screen sizes a `Size` row offers, with their short names.
+pub const COMMON_SIZES: [((u32, u32), &str); 3] = [
+    ((1920, 1080), "1080p"),
+    ((2560, 1440), "1440p"),
+    ((3840, 2160), "4K"),
+];
+
+/// One chip of a `Size` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SizeChoice {
+    /// The spec's unset chip (`unset_label`): the empty text.
+    Unset,
+    /// A `launcher.cfg` text (`1920x1080`, or a saved alias word).
+    Text(String),
+    /// Any other size, typed in a field under the chips.
+    Custom,
+}
+
+/// The chips of a `Size` row: the unset chip (with an `unset_label`),
+/// "Screen W×H" (the landscape screen size, unless it is a common one),
+/// [`COMMON_SIZES`], a `saved` text that is none of them (shown as it
+/// is, `×` for `x`), then Custom. Sizes the spec refuses are left out.
+/// This is SRR's, OR's and CMR3's resolution row; the launcher's own
+/// words (CMR3's "Original 640×480") stay launcher code.
+pub fn size_choices(
+    spec: &OptionSpec,
+    screen: Option<(u32, u32)>,
+    saved: &str,
+) -> Vec<(SizeChoice, String)> {
+    let text = |(w, h): (u32, u32)| format!("{w}x{h}");
+    let valid = |size: (u32, u32)| spec.parse(&text(size)).is_ok();
+    let mut choices: Vec<(SizeChoice, String)> = spec
+        .unset
+        .map(|label| (SizeChoice::Unset, label.to_owned()))
+        .into_iter()
+        .collect();
+    let screen = screen.and_then(rea_launcher::display::landscape);
+    if let Some(size) = screen.filter(|&size| valid(size))
+        && !COMMON_SIZES.iter().any(|(common, _)| *common == size)
+    {
+        choices.push((
+            SizeChoice::Text(text(size)),
+            format!("Screen {}×{}", size.0, size.1),
+        ));
+    }
+    for (size, label) in COMMON_SIZES {
+        if valid(size) {
+            choices.push((SizeChoice::Text(text(size)), label.to_owned()));
+        }
+    }
+    let saved = saved.trim();
+    if !saved.is_empty()
+        && spec.parse(saved).is_ok()
+        && !choices
+            .iter()
+            .any(|(choice, _)| matches!(choice, SizeChoice::Text(t) if same_size(t, saved)))
+    {
+        choices.push((
+            SizeChoice::Text(saved.to_owned()),
+            saved.replace(['x', 'X'], "×"),
+        ));
+    }
+    choices.push((SizeChoice::Custom, "Custom".to_owned()));
+    choices
+}
+
+fn same_size(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// A `Size` row's chips, and the Custom field while Custom is chosen.
+fn size_chips(
+    ui: &mut Ui,
+    spec: &OptionSpec,
+    value: &mut String,
+    screen: Option<(u32, u32)>,
+    disabled: Option<&str>,
+) -> Response {
+    let custom_id = ui.next_auto_id().with("rea-size-custom");
+    let mut custom = ui
+        .data(|data| data.get_temp::<bool>(custom_id))
+        .unwrap_or(false);
+    let choices = size_choices(spec, screen, value);
+    let listed = |value: &str| {
+        choices.iter().find_map(|(choice, _)| match choice {
+            SizeChoice::Unset if value.trim().is_empty() => Some(SizeChoice::Unset),
+            SizeChoice::Text(t) if same_size(t, value) => Some(choice.clone()),
+            _ => None,
+        })
+    };
+    let mut current = if custom {
+        SizeChoice::Custom
+    } else {
+        listed(value).unwrap_or(SizeChoice::Custom)
+    };
+    let chips: Vec<Chip<'_, SizeChoice>> = choices
+        .iter()
+        .map(|(choice, label)| Chip::new(choice.clone(), label.as_str()).disabled(disabled))
+        .collect();
+    let response = ui
+        .vertical(|ui| {
+            let response = quiet_chips(ui, &chips, &mut current);
+            if response.changed() {
+                custom = current == SizeChoice::Custom;
+                match &current {
+                    SizeChoice::Unset => value.clear(),
+                    SizeChoice::Text(text) => text.clone_into(value),
+                    SizeChoice::Custom => {}
+                }
+            }
+            if current == SizeChoice::Custom {
+                let field = text_field(ui, spec, value, 200.0, disabled.is_none());
+                widgets::name_control(&field, Some(spec.label), Some("Any size, as WIDTHxHEIGHT."));
+            }
+            response
+        })
+        .inner;
+    ui.data_mut(|data| data.insert_temp(custom_id, custom));
+    response
 }
 
 /// Chips whose disabled reasons the row writes itself.
@@ -568,6 +758,203 @@ mod tests {
         assert_eq!(
             testing::description(&vsync).as_deref(),
             Some("Waits for the screen's refresh. Needs DXVK.")
+        );
+    }
+
+    const RESOLUTION: OptionSpec = OptionSpec::new(
+        "resolution",
+        Kind::Size {
+            min: (640, 480),
+            max: (3840, 2160),
+            aliases: rea_launcher::cfg::SIZES_ONLY,
+        },
+        "Resolution",
+        "The game's picture size.",
+    )
+    .unset_label("Auto");
+
+    const FOV: OptionSpec = OptionSpec::new(
+        "fov",
+        Kind::Range { min: 30, max: 150 },
+        "Field of view",
+        "",
+    )
+    .unset_label("As the game");
+
+    const FOVS: &[(u32, &str)] = &[(60, "60°"), (75, "75°"), (90, "90°")];
+
+    const PADS: &[(&str, &str)] = &[("rally", "Rally"), ("standard", "Standard")];
+    const PAD: OptionSpec = OptionSpec::new(
+        "gamepad",
+        Kind::Choice(PADS),
+        "Gamepad",
+        "How the pad is mapped.",
+    );
+    const PAD_NOTES: &[(&str, &str)] = &[
+        ("rally", "Triggers steer the throttle and brake."),
+        ("standard", "Sticks only, like a modern game."),
+    ];
+
+    #[test]
+    fn size_chips_come_from_the_screen() {
+        let labels = |screen, saved| -> Vec<String> {
+            size_choices(&RESOLUTION, screen, saved)
+                .into_iter()
+                .map(|(_, label)| label)
+                .collect()
+        };
+        // A 16:10 laptop: its own size first, then the common ones.
+        assert_eq!(
+            labels(Some((2560, 1600)), ""),
+            ["Auto", "Screen 2560×1600", "1080p", "1440p", "4K", "Custom"]
+        );
+        // A common screen size is not listed twice; a portrait screen
+        // counts in landscape.
+        assert_eq!(
+            labels(Some((1920, 1080)), ""),
+            ["Auto", "1080p", "1440p", "4K", "Custom"]
+        );
+        assert_eq!(labels(Some((1200, 1920)), "")[1], "Screen 1920×1200");
+        // A saved size that is none of them keeps its own chip.
+        assert_eq!(labels(None, "1280x720")[4], "1280×720");
+        assert_eq!(
+            labels(None, "1920X1080").len(),
+            5,
+            "the same size, any case"
+        );
+        // Sizes the spec refuses are left out.
+        const SMALL: OptionSpec = OptionSpec::new(
+            "resolution",
+            Kind::Size {
+                min: (640, 480),
+                max: (1920, 1200),
+                aliases: rea_launcher::cfg::SIZES_ONLY,
+            },
+            "Resolution",
+            "",
+        );
+        assert_eq!(
+            size_choices(&SMALL, Some((3840, 2160)), "")
+                .into_iter()
+                .map(|(_, label)| label)
+                .collect::<Vec<_>>(),
+            ["1080p", "Custom"]
+        );
+    }
+
+    #[test]
+    fn step_rows_offer_unset_first_and_keep_a_saved_value() {
+        assert_eq!(
+            step_choices(&FOV, FOVS, Some(82)),
+            [
+                (None, "As the game".to_owned()),
+                (Some(60), "60°".to_owned()),
+                (Some(75), "75°".to_owned()),
+                (Some(90), "90°".to_owned()),
+                (Some(82), "82".to_owned()),
+            ]
+        );
+        assert_eq!(step_choices(&SPECS[2], FOVS, Some(60)).len(), 3);
+    }
+
+    #[derive(Default)]
+    struct Rows {
+        resolution: String,
+        fov: String,
+        pad: String,
+    }
+
+    fn rows_window(ui: &mut Ui, rows: &mut Rows) {
+        spec_row_with(
+            ui,
+            &RESOLUTION,
+            &mut rows.resolution,
+            RowOptions {
+                sizes: Some(SizeChips {
+                    screen: Some((2560, 1600)),
+                }),
+                ..RowOptions::default()
+            },
+        );
+        spec_row_with(
+            ui,
+            &FOV,
+            &mut rows.fov,
+            RowOptions {
+                steps: Some(FOVS),
+                ..RowOptions::default()
+            },
+        );
+        spec_row_with(
+            ui,
+            &PAD,
+            &mut rows.pad,
+            RowOptions {
+                notes: Some(PAD_NOTES),
+                ..RowOptions::default()
+            },
+        );
+    }
+
+    #[test]
+    fn size_step_and_noted_rows_end_to_end() {
+        let mut ui = testing::harness(
+            &Palette::default(),
+            &Metrics::DEFAULT,
+            Rows {
+                resolution: "1920x1080".into(),
+                fov: "75".into(),
+                pad: "rally".into(),
+            },
+            rows_window,
+        );
+        let row = ui.get_by_role_and_label(Role::RadioGroup, "Resolution");
+        assert_eq!(testing::value(&row).as_deref(), Some("1080p"));
+        ui.get_by_label("Screen 2560×1600").click();
+        ui.run();
+        assert_eq!(ui.state().resolution, "2560x1600");
+        ui.get_by_label("Auto").click();
+        ui.run();
+        assert_eq!(ui.state().resolution, "");
+        // Custom opens a field for any size.
+        assert!(ui.query_by_role(Role::TextInput).is_none());
+        ui.get_by_label("Custom").click();
+        ui.run();
+        let field = ui.get_by_role_and_label(Role::TextInput, "Resolution");
+        field.click();
+        ui.run();
+        ui.get_by_role_and_label(Role::TextInput, "Resolution")
+            .type_text("1600x900");
+        ui.run();
+        assert_eq!(ui.state().resolution, "1600x900");
+        assert!(testing::checked(&ui.get_by_label("Custom")));
+
+        // The unset chip of a stepped row writes the empty text.
+        let fov = ui.get_by_role_and_label(Role::RadioGroup, "Field of view");
+        assert_eq!(testing::value(&fov).as_deref(), Some("75°"));
+        ui.get_by_label("As the game").click();
+        ui.run();
+        assert_eq!(ui.state().fov, "");
+        ui.get_by_label("90°").click();
+        ui.run();
+        assert_eq!(ui.state().fov, "90");
+
+        // The chosen value's note replaces the description.
+        assert!(
+            ui.query_by_label("Triggers steer the throttle and brake.")
+                .is_some()
+        );
+        assert!(ui.query_by_label("How the pad is mapped.").is_none());
+        ui.get_by_label("Standard").click();
+        ui.run();
+        assert!(
+            ui.query_by_label("Sticks only, like a modern game.")
+                .is_some()
+        );
+        let pad = ui.get_by_role_and_label(Role::RadioGroup, "Gamepad");
+        assert_eq!(
+            testing::description(&pad).as_deref(),
+            Some("How the pad is mapped. Sticks only, like a modern game.")
         );
     }
 
