@@ -11,6 +11,7 @@ look with each game's colours, art and tabs left to the launcher.
 | `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_row_with(…, RowOptions { disabled, steps })` / `spec_path_row(…, pick)` (an `unset_label` option adds an "As the game" chip): one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
 | `download` | `download_row(ui, &Download { label, size, state })` → `Option<DownloadAction>` (Start / Cancel / Remove); `DownloadState` (Missing{partial}, Connecting, Downloading{done,total,rate}, Verifying, Unpacking, Installed, Failed(msg)), `DownloadState::from_phase(Option<&Phase>, installed, partial)` + `with_rate`; `describe`, `size_text`, `time_left` |
 | `testing` (feature) | `harness(&Palette, &Metrics, state, ui)`, `harness_sized(…, size, …)` (scroll with `node.scroll_to_me()` below the fold) on `egui_kittest`, `checked`/`disabled`/`description`/`value`, re-exported `Queryable` |
+| `report` | A native (Linux) launcher's messages: `audience(Mode, Native) -> Audience` (`Terminal` / `Window` / `LogOnly`; `Native::here()` reads stdin/stderr `IsTerminal` and `DISPLAY`/`WAYLAND_DISPLAY`), `Message { title, text, link: Option<Link { label, url }>, details }`, `fatal(&Palette, &Metrics, &Message, Mode) -> Audience` (prints to stderr, then the window when the audience is `Window`), `show`/`show_with` (the window alone, pad navigation included), `message_ui` + `MessageState` + `Action` for drawing it inside another window or a test |
 | `pad` | `inject` and `key_for`, plus `Nav`/`PadNav` re-exported from `rea_launcher::pad` (edge detection on XInput button masks; the bits are `rea_launcher::pad::DPAD_UP` …). `inject`: d-pad → Tab/Shift+Tab/arrows, A → Space; Start, LB/RB and B come back to the launcher ; Linux: `pad::joystick::Joysticks` (`new()`, `buttons()` → the XInput mask from every `/dev/input/js*` pad, read without blocking, rescanned every 2 s; `with_scan` for fake devices in tests) |
 
 `eframe` and `egui` are re-exported (`rea_launcher_ui::egui`), so a
@@ -72,6 +73,27 @@ Text sizes: body text (labels, notes, chips, buttons) is at least 13 pt
 and nothing is under 11 pt (`theme::size`, `Metrics::text_sizes`); keep
 `assert!(theme::text_size_problems(&METRICS).is_empty())` next to the
 contrast test.
+
+## Native messages (no Windows message box)
+
+`rea_launcher_win32::report` covers Windows and Wine. A native Linux
+launcher calls `rea_launcher_ui::report::fatal` for every error before
+or instead of the settings window (game not found, unknown edition,
+refused home), so an AppImage double-click never exits silently:
+
+| Mode | Terminal attached | Desktop | Audience |
+|---|---|---|---|
+| `Play { interactive: true }` | any | yes | `Window` |
+| `Command { interactive }` | yes | any | `Terminal` |
+| `Command { interactive: true }` | no | yes | `Window` |
+| any | yes | no | `Terminal` |
+| otherwise (scripts, the helper's log, no desktop) | | | `LogOnly` |
+
+The text is always printed to stderr too (the helper and the AppImage log
+it). The window: the title, the text (scrolls when long), the link's
+address in full, then **Copy details** (title, text, `details`, address),
+the link's button (opens the browser) and **OK**, which has the focus so
+Enter, Space or the pad's A close it; Escape, B and Start close it too.
 
 ## A download (core job → row → actions)
 
@@ -247,3 +269,9 @@ Behaviour not listed is the same.
   with `rea_launcher_ui::pad::joystick::Joysticks` (same events, mapping
   and 2-second rescan); `Pads::buttons()` becomes `Joysticks::buttons()`
   and the `libc` dependency can go if nothing else uses it.
+- **Native Linux errors** (DiRT Rally): call
+  `report::fatal(&PALETTE, &METRICS, &Message { … }, Mode::Play {
+  interactive: !no_window })` where `linux::run` now only `eprintln!`s an
+  error (bad home, `cli::check` failing, unknown edition — give that one
+  the issue form as `link`), keeping the log line. `--help`/`--check`
+  output uses `Mode::Command`.
