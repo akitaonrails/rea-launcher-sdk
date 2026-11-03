@@ -35,6 +35,7 @@ cat > "$T/want" <<'EOF'
 .github/ISSUE_TEMPLATE/config.yml
 .github/ISSUE_TEMPLATE/unknown-edition.yml
 .github/workflows/build.yml
+.github/workflows/sdk-update.yml
 .gitignore
 AGENTS.md
 CHANGELOG.md
@@ -57,6 +58,11 @@ crates/exr-launcher/src/runtime.rs
 crates/exr-launcher/src/ui.rs
 crates/exr-launcher/tests/cli.rs
 crates/exr-launcher/tests/edition.rs
+crates/exr-launcher/tests/snapshots.rs
+crates/exr-launcher/tests/snapshots/first-run-2560x1440.cfg.txt
+crates/exr-launcher/tests/snapshots/help.txt
+crates/exr-launcher/tests/snapshots/launcher.cfg.txt
+crates/exr-launcher/tests/snapshots/looks.txt
 deny.toml
 docs/CONTRIBUTIONS.md
 docs/RESEARCH.md
@@ -126,6 +132,17 @@ n=$(awk '/^## Always/{f=1;next} f&&/^## /{exit} f&&/^[-] |^  /{n++} END{print n+
 [ -s "$L/sdk/docs/STANDARDS.md" ] && [ -n "$(ls "$L"/sdk/docs/playbooks/*.md 2>/dev/null)" ] \
   && ok "STANDARDS and playbooks vendored under sdk/docs" || bad "STANDARDS and playbooks vendored under sdk/docs"
 has "README routes shared code to the SDK" "$L/README.md" "https://github.com/akitaonrails/rea-launcher-sdk/issues"
+has "weekly SDK update at the tag" "$L/.github/workflows/sdk-update.yml" \
+  "uses: akitaonrails/rea-launcher-sdk/.github/workflows/sdk-update.yml@$TAG"
+has "sdk/VERSION names the pinned tag" "$L/sdk/VERSION" "tag=$TAG"
+has "the window title is not the game's" "$L/crates/exr-launcher/src/lib.rs" \
+  "pub const WINDOW_TITLE: &str = \"Example Rally: Driver's Cut Launcher\";"
+# The family's rules (scripts/launcher-check): a fresh scaffold has no errors.
+if sh "$ROOT/scripts/launcher-check" "$L" > "$T/check" 2>&1; then
+  ok "launcher-check: no errors in a fresh scaffold"
+else
+  bad "launcher-check on a fresh scaffold: $(grep '^error' "$T/check" | tr '\n' ' ')"
+fi
 
 # --- the generated repository's own shell tests --------------------------------
 for t in "$L"/linux/tests/*.sh "$L"/packaging/tests/*.sh; do

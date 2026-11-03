@@ -270,6 +270,7 @@ for t in linux/tests/*.sh packaging/tests/*.sh; do sh "$t"; done
 cargo build --release --locked --target i686-pc-windows-gnu
 sdk/scripts/wine-test --locked --workspace      # Windows-target tests under Wine, headless
 sh ../rea-launcher-sdk/scripts/sdk-sync --check .   # sdk/ matches the pinned SDK
+sdk/scripts/launcher-check                      # the rea launcher family's rules
 ```
 
 - New SDK release: `sdk/scripts/sdk-bump vX.Y.Z` moves the Cargo tags,

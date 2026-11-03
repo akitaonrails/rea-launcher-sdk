@@ -1,0 +1,8 @@
+name: Bug report
+body:
+  - type: checkboxes
+    id: worked
+    attributes:
+      label: What worked?
+      options:
+        - label: The game started

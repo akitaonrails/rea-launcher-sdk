@@ -1,0 +1,21 @@
+# The folder with your installed game. It is only read, never changed.
+# Values: a folder or file.
+#game =
+
+# Sets the picture options at once: as the game shipped, recommended for
+# your screen, or for the Steam Deck. Options set after it win.
+# Values: original, recommended or steam_deck.
+look = recommended
+
+# The game's screen size, or original for the size it shipped with.
+# Values: WIDTHxHEIGHT or original.
+resolution = 2560x1440
+
+# Waits for the screen's refresh: no tearing, slightly more input delay.
+# Values: on or off.
+vsync = on
+
+# Where the launcher keeps its private copy of the game. Default: a runtime
+# folder beside launcher.log.
+# Values: a folder or file.
+#runtime =

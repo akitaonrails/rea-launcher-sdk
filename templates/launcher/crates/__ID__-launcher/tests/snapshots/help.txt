@@ -1,0 +1,19 @@
+<launcher> <version>: plays your own copy of <game> on modern Windows and Linux.
+
+Usage: <launcher> [options]
+
+Without options the settings window opens; Play saves them and starts the game.
+
+Options (each is also a launcher.cfg key):
+  --game <folder>                         Game folder
+  --look original|recommended|steam_deck  Look
+  --resolution <WxH>                      Resolution
+  --vsync on|off                          VSync
+  --runtime <folder>                      Runtime folder
+
+Launcher switches:
+  --settings   only the settings window (exit 0 after Play, 3 when closed)
+  --no-window  play with the saved settings and these options, no window
+  --check      check the game folder and its edition, then exit (see launcher.log)
+  --linux      started by the Linux helper (linux/<id>-play)
+  --help       this text

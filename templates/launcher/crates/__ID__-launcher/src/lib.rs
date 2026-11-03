@@ -10,6 +10,15 @@
 //! - [`runtime`]: the private runtime copy of the game folder.
 //! - `palette`, `ui`: the settings window (Windows, and the host's tests).
 
+/// The settings window's title. It must differ from the game's own window
+/// title: a second start brings this window forward
+/// (`rea_launcher_win32::instance::Window::Own`), never the game's.
+pub const WINDOW_TITLE: &str = "@GAME@ Launcher";
+
+/// The single-instance name: one launcher at a time per user session (a
+/// named mutex on Windows, per prefix under Wine).
+pub const INSTANCE: &str = "rea-@ID@-launcher";
+
 pub mod cli;
 pub mod config;
 pub mod edition;

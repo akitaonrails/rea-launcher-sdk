@@ -1,0 +1,5 @@
+name: sdk-update
+on: {workflow_dispatch: }
+jobs:
+  update:
+    uses: akitaonrails/rea-launcher-sdk/.github/workflows/sdk-update.yml@v0.4.0

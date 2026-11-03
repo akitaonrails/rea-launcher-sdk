@@ -1,0 +1,11 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.7.3"
+edition = "2024"
+
+[workspace.dependencies]
+rea-launcher = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.4.0" }
+rea-launcher-win32 = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.4.0" }

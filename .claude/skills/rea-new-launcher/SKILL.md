@@ -26,3 +26,12 @@ Non-negotiable, even if the user doesn't repeat it:
 - Settings-window work goes through a design skill; accessibility first; every
   option and CLI flag gets an end-to-end test; no confusing options.
 - Push, tag, or post anything public only with the user's go-ahead.
+- Run `sdk/scripts/launcher-check` before every commit and before a release.
+  Its errors are blocking: fix them (`--explain RULE` says how). Never edit
+  `.rea-check-waivers`, turn off `conformance` or reword a file just to
+  silence a rule; a waiver is the owner's decision, with its reason.
+- Every fix of our own gets its draft in `docs/CONTRIBUTIONS.md` in the
+  commit that ships it.
+- A build with DRM or a disc check removed (pre-activated, no-CD) is
+  supported only after the owner decides; ask, then follow STANDARDS
+  "DRM exceptions".

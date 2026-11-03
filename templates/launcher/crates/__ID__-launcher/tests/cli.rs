@@ -39,8 +39,28 @@ fn modes_follow_the_family_flags() {
         assert_eq!(mode(&[help]), Mode::Help);
     }
     let helper = parse(&["--settings", "--linux"]).unwrap();
-    assert!(helper.linux && !helper.interactive() && !helper.wants_console());
+    assert!(helper.linux && !helper.wants_console());
     assert!(parse(&["--check"]).unwrap().wants_console());
+}
+
+/// Who sees a message comes from the SDK's rule (report::Audience), never
+/// from `--no-window` or `--linux` alone (STANDARDS "Messages reach the
+/// player").
+#[test]
+fn the_player_sees_the_errors_of_the_helpers_game_run() {
+    let watching = |args: &[&str], wine: bool| parse(args).unwrap().audience(wine).interactive;
+    // `<id>-play` and the AppImage start the game run like this, for a
+    // player in front of the screen: errors must reach them as dialogs.
+    assert!(watching(&["--no-window", "--linux"], true));
+    assert!(watching(&["--no-window"], true), "under Wine nobody reads stdout");
+    assert!(watching(&[], false), "a double-clicked launcher");
+    assert!(!watching(&["--no-window"], false), "a script on Windows");
+    // The helper's settings window shows its own messages.
+    assert!(!watching(&["--settings", "--linux"], true));
+    // The helper reads --check's output and exit code itself.
+    assert!(!watching(&["--check", "--linux"], true));
+    assert!(parse(&["--check"]).unwrap().is_action());
+    assert!(!parse(&["--no-window"]).unwrap().is_action());
 }
 
 #[test]
@@ -106,7 +126,10 @@ fn check_needs_a_game_folder_with_a_known_edition() {
     assert!(unknown.contains(edition::UNKNOWN_EDITION_ISSUE), "{unknown}");
 }
 
-/// The real program, as a player's terminal or the Linux helper runs it.
+/// The real program, as the Linux helper runs it. `--linux` because under
+/// Wine (`sdk/scripts/wine-test`) a run without it is a player's: its
+/// messages are dialogs, and a dialog would wait forever in a headless
+/// test. The SDK's audience rule is tested above.
 #[cfg(windows)]
 mod program {
     use super::*;
@@ -116,6 +139,7 @@ mod program {
         let home = scratch(name).join("AppData");
         let output = Command::new(env!("CARGO_BIN_EXE_@LAUNCHER_NAME@"))
             .args(args)
+            .arg("--linux")
             .env("LOCALAPPDATA", &home)
             .output()
             .unwrap();
@@ -137,7 +161,7 @@ mod program {
     fn a_bad_flag_exits_2_with_its_message() {
         let (output, log) = run("bad", &["--vsync", "maybe"]);
         assert_eq!(output.status.code(), Some(cli::USAGE_ERROR));
-        assert!(text(&output.stderr).contains("--vsync needs on or off"));
+        assert!(text(&output.stdout).contains("--vsync needs on or off"));
         assert!(std::fs::read_to_string(log).unwrap().contains("--vsync needs on or off"));
     }
 
@@ -149,7 +173,7 @@ mod program {
         let (output, log) = run("unknown", &["--check", "--game", &game]);
         assert_eq!(output.status.code(), Some(cli::REFUSED));
         let digest = identify::hex(&identify::sha256(b"some other build"));
-        assert!(text(&output.stderr).contains(&digest));
+        assert!(text(&output.stdout).contains(&digest));
         let log = std::fs::read_to_string(log).unwrap();
         assert!(log.contains(&digest) && log.contains(edition::UNKNOWN_EDITION_ISSUE), "{log}");
     }

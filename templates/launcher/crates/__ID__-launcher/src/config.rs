@@ -45,7 +45,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         "game",
         Kind::Path,
         "Game folder",
-        "The folder with your installed @GAME@ (@GAME_EXE@). It is only read, never changed.",
+        "The folder with your installed game. It is only read, never changed.",
     ),
     OptionSpec::new(
         "look",

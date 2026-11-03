@@ -1,0 +1,14 @@
+name: build
+on: [push]
+jobs:
+  ci:
+    uses: akitaonrails/rea-launcher-sdk/.github/workflows/launcher-ci.yml@v0.4.0
+    with:
+      rust-target: i686-pc-windows-gnu
+      wine-tests: true
+      package-command: packaging/package.sh dist/FX
+  release:
+    needs: ci
+    uses: akitaonrails/rea-launcher-sdk/.github/workflows/launcher-release.yml@v0.4.0
+    with:
+      package: fx-launcher
