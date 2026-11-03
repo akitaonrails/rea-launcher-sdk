@@ -89,7 +89,7 @@ own `set -f` is kept.
 | Command | What it does |
 |---|---|
 | *(none)*, `--settings`, `settings` | the settings window, then the game. Arguments go to the window. Already running: says so and exits 0 |
-| `--play`, `play`, `start` | the game with the saved settings, no window. Arguments go to the launcher after `REA_PLAY_ARGS` |
+| `--play`, `play`, `start` | the game with the saved settings, no window. Arguments go to the launcher after `REA_PLAY_ARGS`. Already running: says so, starts nothing and exits **3** (v0.4.0; it was 0, which a script or shortcut read as a game that ran) |
 | `stop`, `--stop` | ends the session this helper started, then `wineserver -k` in the prefix (Wine mode). Prints `stopped` |
 | `status`, `--status` | `running` or `idle` |
 | `-h`, `--help`, `help` | usage, plus `rea_hook_usage` |
@@ -107,7 +107,10 @@ it says so and nothing starts. Anything else counts as a failure and points
 at `settings.log`. The window's stderr always goes to
 `$REA_STATE/settings.log` (the SRR behaviour). In Wine mode,
 `wineserver -w` runs after the window, so the game cannot join the
-desktop's wineserver outside gamescope.
+desktop's wineserver outside gamescope, except after a `3`: that is also
+"another launcher holds this prefix", whose wineserver serves that
+launcher's game, and nothing starts after it anyway (v0.4.0; CMR1 had a
+local workaround).
 
 ## Configuration variables
 
@@ -140,7 +143,7 @@ empty value (empty means "none").
 | `REA_INTERRUPT_WINESERVER` | `1` | when the waiting helper is interrupted, it also runs `wineserver -k` in the prefix (under distrobox the game can live outside the session group) |
 | `REA_PLAY_ARGS` † | `--no-window` | launcher flags for a game run |
 | `REA_SETTINGS_ARGS` † | `--settings --linux` | launcher flags for the window |
-| `REA_GAME_PROCS` | empty | the game's process names, separated by `\|` (a Windows name cannot contain `\|`). When set, the inner script waits `REA_GAME_SETTLE` seconds after the launcher returns, then until none is alive. Zombies do not count. Names are matched with `pgrep -x`, so a name is at most 15 characters |
+| `REA_GAME_PROCS` | empty | the game's process names, separated by `\|` (a Windows name cannot contain `\|`). When set, the inner script waits `REA_GAME_SETTLE` seconds after the launcher returns, then until none is alive. Zombies do not count. Names are matched with `pgrep -x`, so a name is at most 15 characters. Only this prefix's processes count (v0.4.0): one whose environment names another `WINEPREFIX`/`WINECONFIGDIR` is another install's copy. One whose environment can't be read or names no prefix still counts. Only that value is read; nothing is printed |
 | `REA_GAME_SETTLE` | `3` | |
 | `REA_DIRECT_NOTE` | `starting without a gamescope of our own` | the message for a run without gamescope |
 
@@ -149,7 +152,7 @@ empty value (empty means "none").
 | Variable | Default | Meaning |
 |---|---|---|
 | `REA_HELPER_KEYS` † | empty | `launcher.cfg` keys the helper reads itself that a play run may override, e.g. `scaler resolution display_mode postfx dxvk` (CMR3). The flag is the key with `-` for `_` (`display_mode` → `--display-mode`) |
-| `REA_FLAG_SWITCHES` † | `--no-window --settings --linux --check` | launcher flags that take no value; every other `--flag` takes the next word |
+| `REA_FLAG_SWITCHES` † | `--no-window --settings --linux --check --help --version` | launcher flags that take no value; every other `--flag` takes the next word |
 
 `x-play --play --scaler fsr --resolution 1280x720` passes the flags to the
 launcher (it applies them for one run, without saving them). A
@@ -175,6 +178,8 @@ settings window go to the window, which saves what the player picks.
 | `REA_RES_KEY` | `resolution` | the cfg key that holds the size |
 | `REA_DEFAULT_SIZE` | `1920x1080` | used when the value is unset, invalid or unknown |
 | `REA_ORIGINAL_SIZE` | empty | what `original` means. Empty: the default size |
+| `REA_LOOK_SIZES` | empty | the gamescope size each look gives when no resolution is set: `name=WIDTHxHEIGHT`, `name=screen` (or `auto`: the screen's size) or `name=<resolution word>` such as `original`, e.g. `original=640x480 steam_deck=1280x800 enhanced=screen`. With it, the size comes from this run's `--resolution`, else this run's `--look`, else the file's `resolution`, else its look, as the launchers resolve it; `resolution = auto` is no explicit size (the look decides, else the screen). This run's look and resolution flags are read without listing them in `REA_HELPER_KEYS`. Empty: looks size nothing (CMR1, CMR2005, CMR4, OR each had a local `*_look_size` hook) |
+| `REA_LOOK_KEY` | `look` | the cfg key and flag (`--look`) of the look |
 | `REA_ORIGINAL_WORDS` | `original` | the resolution words that mean `REA_ORIGINAL_SIZE` (case-insensitive; only these). OR's Rust config treats `off` as original too (`ORIGINAL_OR_OFF`), but or-play has always given gamescope the default 1920x1080 for `off`; OR keeps the default, and a game that wants both sets `REA_ORIGINAL_WORDS="original off"` |
 | `REA_FULLSCREEN_SIZE` | empty | `screen`: `fullscreen`, `full` and `desktop` mean the screen's size (`REA_SCREEN`, else xrandr's current mode) |
 | `REA_SCALER_KEY` | `scaler` | the cfg key for gamescope's `-F`. Empty: always use `REA_DEFAULT_SCALER` |
@@ -206,7 +211,9 @@ becomes the default, so gamescope never receives a filter it would refuse.
 `/etc/vulkan/icd.d /usr/share/vulkan/icd.d`), `REA_NV_LIB_CHECK` (a command
 run instead of the `libGLX_nvidia` lookup), `REA_GAMESCOPE_CHECK`,
 `REA_LAUNCH_CMD` (replaces the whole supervised launch), `REA_PROC`
-(replaces `/proc` for `rea_game_alive`). They are honoured only when a test
+(replaces `/proc` for `rea_game_alive`), `REA_GAMESCOPE_HEADLESS=1`
+(adds `--backend headless` to gamescope, for a real-game test that must
+not open a window; no PATH wrapper needed). They are honoured only when a test
 sets `REA_TEST=1` after sourcing; like every `REA_*` variable they are
 dropped from the environment at source time, and the inner script receives
 the library's own `REA_TEST` (empty outside tests). `REA_SCREEN` is a
@@ -339,7 +346,8 @@ only changes invalid input:
   the session before it exits.
 - **`settings.log`** and the exit-code messages (SRR) apply to every
   launcher; the others discarded stderr.
-- **CMR3's process wait** is zombie-aware (SRR's `game_alive`).
+- **CMR3's process wait** is zombie-aware (SRR's `game_alive`), and since
+  v0.4.0 ignores the game running from another Wine prefix.
 - **Game-only environment** goes through a data file rather than CMR3's
   `CMR3_VK_*` relay variables. `WINEDLLOVERRIDES` is passed to the game
   session only, never exported into the helper's shell.

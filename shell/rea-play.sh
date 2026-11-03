@@ -20,6 +20,8 @@
 #   REA_GAMESCOPE_CHECK  command run instead of `command -v gamescope`
 #   REA_LAUNCH_CMD       command run instead of the whole supervised launch
 #   REA_PROC             replaces /proc for the game-process check
+#   REA_GAMESCOPE_HEADLESS  1: gamescope --backend headless (no window on
+#                        the desktop; real-game tests)
 
 REA_SDK_VERSION=0.3.3
 
@@ -40,7 +42,7 @@ REA_GAME_PROCS REA_GAME_SETTLE REA_WINEBUS_MARKER REA_WINEBUS_VALUES
 REA_DIRECT_NOTE REA_TEST REA_SYSFS REA_ICD_DIRS REA_NV_LIB_CHECK
 REA_GAMESCOPE_CHECK REA_LAUNCH_CMD REA_PROC REA_INITED REA_ORIGINAL_WORDS
 REA_FUNCTIONS_ONLY REA_PLAY_HERE REA_HELPER_KEYS REA_FLAG_SWITCHES REA_ONE_RUN
-REA_GAME_PREFIX'
+REA_LOOK_KEY REA_LOOK_SIZES REA_GAME_PREFIX REA_GAMESCOPE_HEADLESS'
 # shellcheck disable=SC2086
 unset $REA_CONFIG_VARS 2>/dev/null || true
 
@@ -72,6 +74,11 @@ rea_defaults() {
   : "${REA_DEFAULT_SIZE:=1920x1080}"
   : "${REA_ORIGINAL_SIZE:=}"        # "original" means this (empty: default)
   : "${REA_ORIGINAL_WORDS:=original}"  # the words that mean it (OR's Rust: "original off")
+  # The size each look gives when no resolution is set, e.g.
+  # "original=640x480 steam_deck=1280x800 enhanced=screen" (screen or auto:
+  # the screen's size). Empty: looks never size gamescope.
+  : "${REA_LOOK_SIZES:=}"
+  : "${REA_LOOK_KEY:=look}"
   : "${REA_FULLSCREEN_SIZE:=}"      # "screen": fullscreen = the screen size
   : "${REA_SCREEN:=}"               # WIDTHxHEIGHT instead of asking xrandr
   : "${REA_SCALER_KEY=scaler}"      # empty: always REA_DEFAULT_SCALER
@@ -258,7 +265,10 @@ rea_is_off() {
 # is ignored.
 rea_one_run() {
   REA_ONE_RUN=
-  [ -n "$REA_HELPER_KEYS" ] || return 0
+  _rea_keys=$REA_HELPER_KEYS
+  # Looks size gamescope: this run's --look and --resolution count too.
+  [ -n "$REA_LOOK_SIZES" ] && _rea_keys="$_rea_keys $REA_LOOK_KEY $REA_RES_KEY"
+  [ -n "$_rea_keys" ] || return 0
   while [ "$#" -gt 0 ]; do
     _rea_a=$1; shift
     case $_rea_a in
@@ -278,7 +288,7 @@ rea_one_run() {
     case $_rea_val in *'
 '*) continue ;; esac
     rea_noglob
-    for _rea_k in $REA_HELPER_KEYS; do
+    for _rea_k in $_rea_keys; do
       [ "$_rea_k" = "$_rea_key" ] && REA_ONE_RUN="$REA_ONE_RUN$_rea_key=$_rea_val
 "
     done
@@ -324,7 +334,7 @@ rea_screen_size() {
 # screen, when REA_FULLSCREEN_SIZE=screen); anything else is
 # REA_DEFAULT_SIZE.
 rea_game_size() {
-  _rea_r=$(rea_get_value "$REA_RES_KEY" | tr -d ' \t\r')
+  _rea_r=$(rea_resolution_value)
   _rea_size=
   rea_noglob
   # shellcheck disable=SC2086
@@ -342,6 +352,61 @@ rea_game_size() {
   esac
   [ -n "$_rea_size" ] || _rea_size=$(rea_parse_size "$REA_DEFAULT_SIZE") || _rea_size=1920x1080
   REA_W=${_rea_size%x*} REA_H=${_rea_size#*x}
+}
+
+# The size a look gives (REA_LOOK_SIZES), lowercased look name in $1:
+# WIDTHxHEIGHT, the screen's size for screen/auto, else the word as it is
+# (e.g. original, read as a resolution). Fails for a look not listed.
+rea_look_size() {
+  rea_noglob
+  # shellcheck disable=SC2086
+  set -- "$1" $REA_LOOK_SIZES
+  rea_glob
+  _rea_look=$1; shift
+  for _rea_pair in "$@"; do
+    case $_rea_pair in *=*) ;; *) continue ;; esac
+    [ "$(printf '%s' "${_rea_pair%%=*}" | tr 'A-Z' 'a-z')" = "$_rea_look" ] || continue
+    _rea_lv=$(printf '%s' "${_rea_pair#*=}" | tr 'A-Z' 'a-z')
+    case $_rea_lv in
+      screen|auto) rea_screen_size || rea_parse_size "$REA_DEFAULT_SIZE" ;;
+      *) printf '%s\n' "$_rea_lv" ;;
+    esac
+    return 0
+  done
+  return 1
+}
+
+# The resolution text rea_game_size reads. With REA_LOOK_SIZES, as the
+# launchers resolve it: this run's --resolution, else this run's --look,
+# else launcher.cfg's resolution, else its look; `auto` (or unset) is no
+# explicit size, and when no look gives one either it is the screen.
+# Without REA_LOOK_SIZES: the resolution as it is.
+rea_resolution_value() {
+  if [ -z "$REA_LOOK_SIZES" ]; then
+    rea_get_value "$REA_RES_KEY" | tr -d ' \t\r'
+    return 0
+  fi
+  _rea_auto=
+  for _rea_src in run file; do
+    if [ "$_rea_src" = run ]; then
+      _rea_rv=$(REA_CFG=; rea_get_value "$REA_RES_KEY" | tr -d ' \t\r')
+      _rea_lk=$(REA_CFG=; rea_get_value "$REA_LOOK_KEY" | tr -d ' \t\r')
+    else
+      [ -n "$REA_CFG" ] && [ -f "$REA_CFG" ] || break
+      _rea_rv=$(rea_get_value "$REA_RES_KEY" "$REA_CFG" | tr -d ' \t\r')
+      _rea_lk=$(rea_get_value "$REA_LOOK_KEY" "$REA_CFG" | tr -d ' \t\r')
+    fi
+    if [ "$_rea_rv" = auto ]; then
+      _rea_auto=1
+    elif [ -n "$_rea_rv" ]; then
+      printf '%s\n' "$_rea_rv"; return 0
+    fi
+    if [ -n "$_rea_lk" ] && _rea_ls=$(rea_look_size "$_rea_lk"); then
+      printf '%s\n' "$_rea_ls"; return 0
+    fi
+  done
+  [ -n "$_rea_auto" ] && rea_screen_size
+  return 0
 }
 
 # gamescope's -F filter from the cfg's scaler; unknown values (gamescope
@@ -878,12 +943,14 @@ rea_start() {
   if rea_use_gamescope; then
     rea_game_size
     rea_scaler
+    _rea_backend=
+    [ "$(rea_seam REA_GAMESCOPE_HEADLESS)" = 1 ] && _rea_backend='--backend headless'
     rea_noglob
     # shellcheck disable=SC2086
     if [ "$REA_GAMESCOPE_OUTPUT" = 1 ]; then
-      set -- gamescope -W "$REA_W" -H "$REA_H" -w "$REA_W" -h "$REA_H" -f -S fit -F "$REA_F" $REA_GAMESCOPE_EXTRA -- "$@"
+      set -- gamescope $_rea_backend -W "$REA_W" -H "$REA_H" -w "$REA_W" -h "$REA_H" -f -S fit -F "$REA_F" $REA_GAMESCOPE_EXTRA -- "$@"
     else
-      set -- gamescope -w "$REA_W" -h "$REA_H" -f -S fit -F "$REA_F" $REA_GAMESCOPE_EXTRA -- "$@"
+      set -- gamescope $_rea_backend -w "$REA_W" -h "$REA_H" -f -S fit -F "$REA_F" $REA_GAMESCOPE_EXTRA -- "$@"
     fi
     rea_glob
     echo "starting at ${REA_W}x${REA_H}, scaler $REA_F"

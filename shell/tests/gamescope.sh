@@ -198,6 +198,58 @@ rea_cmd_play_test
 contains "through rea_main --play" "$(ran)" "-F nis --"
 REA_HELPER_KEYS=
 
+echo "# looks size gamescope (REA_LOOK_SIZES; CMR1, CMR4, OR, CMR2005 had their own)"
+REA_LOOK_SIZES="original=640x480 Steam_Deck=1280x800 enhanced=screen wide=auto classic=original"
+REA_SCREEN=2560x1440 REA_ORIGINAL_SIZE=800x600
+look() { # cfg-text flags...
+  printf '%b' "$1" > "$C"; shift
+  rm -f "$T/ran"; rea_start "$@" > /dev/null
+  sed -n 's/.*gamescope -W \([0-9]*\) -H \([0-9]*\) .*/\1x\2/p' "$T/ran"
+}
+check "the file's look" "$(look 'look = original\n')" 640x480
+check "look names in any case" "$(look 'look = STEAM_DECK\n')" 1280x800
+check "screen: the screen's size" "$(look 'look = enhanced\n')" 2560x1440
+check "auto: the screen's size" "$(look 'look = wide\n')" 2560x1440
+check "a word is read as a resolution (original)" "$(look 'look = classic\n')" 800x600
+check "the file's resolution wins over its look" "$(look 'look = original\nresolution = 1024x768\n')" 1024x768
+check "resolution = auto: the look decides" "$(look 'look = steam_deck\nresolution = auto\n')" 1280x800
+check "resolution = auto without a sized look: the screen" "$(look 'look = custom\nresolution = Auto\n')" 2560x1440
+check "an unlisted look: the default" "$(look 'look = custom\n')" 1920x1080
+check "this run's --look wins over the file's resolution" "$(look 'resolution = 1024x768\n' --look steam_deck)" 1280x800
+check "this run's --resolution wins over its --look" "$(look 'look = original\n' --look steam_deck --resolution 1600x900)" 1600x900
+check "--look=value spelling" "$(look '' --look=original)" 640x480
+check "--resolution auto on the run: its --look, else the file's" "$(look 'look = original\n' --resolution auto)" 640x480
+check "no look keys in REA_HELPER_KEYS needed" "$REA_HELPER_KEYS" ""
+REA_SCREEN=
+check "screen unknown: the default size" "$(xrandr() { :; }; look 'look = enhanced\n')" 1920x1080
+REA_LOOK_SIZES=
+check "without REA_LOOK_SIZES a look sizes nothing (as before)" "$(look 'look = original\n')" 1920x1080
+check "...and auto is an invalid size (as before)" "$(look 'resolution = auto\n')" 1920x1080
+REA_ORIGINAL_SIZE=
+
+echo "# a test-only headless gamescope (REA_GAMESCOPE_HEADLESS, under REA_TEST=1)"
+REA_GAMESCOPE_HEADLESS=1
+run_with 'resolution = 1280x720\n'
+contains "--backend headless first" "$(ran)" "gamescope --backend headless -W 1280 -H 720 -w 1280"
+REA_GAMESCOPE_OUTPUT=0; run_with 'resolution = 1280x720\n'
+contains "...also without an output size" "$(ran)" "gamescope --backend headless -w 1280"
+REA_GAMESCOPE_OUTPUT=1
+REA_TEST=0; run_with 'resolution = 1280x720\n'; REA_TEST=1
+lacks "never outside tests" "$(ran)" "headless"
+REA_GAMESCOPE_HEADLESS=
+run_with 'resolution = 1280x720\n'
+lacks "off by default" "$(ran)" "headless"
+contains "the inner script learns the prefix" "$(ran)" "REA_GAME_PREFIX=$REA_GAME_PREFIX "
+
+echo "# switches the template uses take no value (REA_FLAG_SWITCHES)"
+REA_HELPER_KEYS="scaler"
+printf 'scaler = linear\n' > "$C"
+rm -f "$T/ran"; rea_start --help --scaler nis > /dev/null
+contains "--help takes no value" "$(ran)" "-F nis --"
+rm -f "$T/ran"; rea_start --version --scaler fsr > /dev/null
+contains "--version takes no value" "$(ran)" "-F fsr --"
+REA_HELPER_KEYS=
+
 echo "# values compared as the launchers do (any case, boolean spellings)"
 REA_HELPER_KEYS="scaler resolution display_mode postfx dxvk" REA_WINDOWED_KEY=display_mode
 printf 'resolution = 1920x1080\n' > "$C"
