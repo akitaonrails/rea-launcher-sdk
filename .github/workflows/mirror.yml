@@ -11,7 +11,9 @@ name: mirror
 # under the pin's file name (pins.sh pin_file: the primary url's basename),
 # so the fallback url the pin lists, `pin_mirror_url <name>`, always names
 # the uploaded asset. Every file is
-# checked against its sha256 before upload. The release is never deleted:
+# checked against its sha256 before upload. A pin with `tag=RELEASE` goes
+# into that release instead of `tag` (CMR1's HD pack: hd-pack-2). The
+# release is never deleted:
 # it is created only when missing, and assets are replaced with --clobber.
 #
 # Call it by hand after adopting a new pin (workflow_dispatch in the
@@ -90,13 +92,15 @@ jobs:
               return 0
             fi
             file=$(pin_file "$1")
-            # Two pins must never share an asset name.
-            if grep -qxF "$file" "$RUNNER_TEMP/names"; then
-              echo "::error::$1: asset name $file is used by another pin"; exit 1
+            rel=$(pin_tag "$1")
+            rel=${rel:-$TAG}
+            # Two pins must never share an asset name in one release.
+            if grep -qxF "$rel/$file" "$RUNNER_TEMP/names"; then
+              echo "::error::$1: asset name $file is used by another pin in $rel"; exit 1
             fi
-            echo "$file" >> "$RUNNER_TEMP/names"
-            echo "::group::$1 -> $file"
-            got=$(pin_fetch "$1" "$OUT") || { echo "::error::$1: no source matched its sha256"; exit 1; }
+            echo "$rel/$file" >> "$RUNNER_TEMP/names"
+            echo "::group::$1 -> $rel/$file"
+            got=$(pin_fetch "$1" "$OUT/$rel") || { echo "::error::$1: no source matched its sha256"; exit 1; }
             pin_verify "$got" "$(pin_sha "$1")"
             url=$(pin_mirror_url "$1")
             if ! pin_urls "$1" | grep -qxF "$url"; then
@@ -124,20 +128,24 @@ jobs:
             fi
           done
           [ "$n" -gt 0 ] || { echo "::error::no pin in $PINS is marked mirror (or hosted, with include-hosted)"; exit 1; }
-          ls -l "$OUT"
+          ls -lR "$OUT"
 
       - name: Upload to the mirror release
         shell: sh
         run: |
           OUT=$RUNNER_TEMP/mirror
-          # Create once; never delete (a failed run must not leave the
-          # fallback urls dead). Not "latest": the game's releases stay so.
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --latest=false \
-              --title "Validated third-party components" \
-              --notes "Exact, checksum-verified copies of the pins marked mirror, kept so builds survive an upstream move or deletion. Refreshed by the mirror workflow."
-          fi
-          set -- "$OUT"/*
-          gh release upload "$TAG" "$@" --repo "$GITHUB_REPOSITORY" --clobber
-          echo "mirrored to $GITHUB_REPOSITORY@$TAG:"
-          for f; do echo "  ${f##*/}"; done
+          # One release per tag (the input's, and each pin's own tag=).
+          for dir in "$OUT"/*/; do
+            rel=$(basename "$dir")
+            # Create once; never delete (a failed run must not leave the
+            # fallback urls dead). Not "latest": the game's releases stay so.
+            if ! gh release view "$rel" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release create "$rel" --repo "$GITHUB_REPOSITORY" --latest=false \
+                --title "Validated third-party components" \
+                --notes "Exact, checksum-verified copies of the pins marked mirror, kept so builds survive an upstream move or deletion. Refreshed by the mirror workflow."
+            fi
+            set -- "$dir"*
+            gh release upload "$rel" "$@" --repo "$GITHUB_REPOSITORY" --clobber
+            echo "mirrored to $GITHUB_REPOSITORY@$rel:"
+            for f; do echo "  ${f##*/}"; done
+          done

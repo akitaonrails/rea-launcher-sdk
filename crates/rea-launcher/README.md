@@ -13,7 +13,7 @@ made that copy the reference.
 |---|---|
 | `fsx` | Whole-file swaps (temp + rename) that never write through a hard link; stale temp cleanup |
 | `paths` | `resolve`, the runtime/game overlap check, `native`, `\\?\` stripping |
-| `runtime` | The private runtime copy: list, plan, sync, restore, manifest |
+| `runtime` | The private runtime copy: list, plan, sync (with progress), restore, manifest |
 | `saves` | Save mirroring by recorded state, for one file or a folder |
 | `ledger` | SHA-256 record of the components the launcher installed |
 | `ini` | Section-aware INI editing that keeps comments, case, CRLF, BOM, bytes |
@@ -28,6 +28,8 @@ made that copy the reference.
 | `pad` | XInput state parsing and settings-window navigation by edges |
 | `log` | `launcher.log` with a size cap |
 | `args` | Windows command-line quoting |
+| `instance` | One launcher at a time without the play helper (native Linux): `instance::single`, a `flock` |
+| `testing` | Golden snapshots for launcher tests: `snapshot!`, version as `<version>`, CRLF-proof |
 
 ## Examples
 
@@ -266,6 +268,58 @@ assert_eq!(args::quote_windows(OsStr::new(r"C:\Games\")), r#""C:\Games\\""#);
 assert_eq!(args::command_line(OsStr::new("a.exe"), &["-d"]), r#""a.exe" "-d""#);
 ```
 
+### Golden snapshots (testing)
+
+Every launcher's `tests/snapshots.rs` compares `--help`, the
+`launcher.cfg` template and each look's plan with files under
+`tests/snapshots/` (docs/STANDARDS.md). Use the SDK's helper, not a local
+`check()`: a help text that printed the crate version broke the tag builds
+of CMR3, CMR4 and OR when the release commit bumped it.
+
+```rust,no_run
+# fn usage() -> String { String::new() }
+#[test]
+fn help() {
+    // tests/snapshots/help.txt; this crate's version is stored as <version>.
+    rea_launcher::snapshot!("help.txt", usage());
+}
+```
+
+- `REA_UPDATE_SNAPSHOTS=1 cargo test` writes them; review the diff.
+  `rea_launcher::snapshots!().update_var("CMR3_UPDATE_SNAPSHOTS")` keeps
+  a launcher's documented variable working too.
+- The caller's `CARGO_PKG_VERSION` becomes `<version>` (whole tokens only:
+  `10.3.3` stays). A stored snapshot that still holds the version fails
+  with "would fail at the next version bump".
+- CRLF and LF compare equal; a failure names the first differing line and
+  says when only version numbers differ.
+
+### Copy progress (runtime)
+
+`runtime::sync_with_progress` calls back with `Progress { files_done,
+files_total, bytes_done, bytes_total }` once the plan is known and after
+each file; `ProgressCounter` hands it from the worker thread to the
+window. No second thread measuring the runtime (DiRT Rally's 40 GB copy).
+
+### instance (native Linux)
+
+```rust,no_run
+let _instance = match rea_launcher::instance::single("rea-dirt-rally") {
+    Ok(guard) => guard,
+    Err(running) => {
+        eprintln!("{running}"); // "the launcher is already running"
+        std::process::exit(running.exit_code()); // ALREADY_RUNNING = 5
+    }
+};
+```
+
+The same `Result<Guard, AlreadyRunning>` as `rea_launcher_win32::instance`
+(use that one on Windows: it can bring the window forward), and the same
+exit code, `instance::ALREADY_RUNNING` (5), which `rea-play.sh` reads as
+"nothing started". The lock is
+`$XDG_RUNTIME_DIR/rea-launcher-<name>.lock`; the kernel drops it when the
+process ends, so a killed launcher leaves no stale lock.
+
 ## One table for the window and the command line
 
 The rule: every window option has a flag and a `launcher.cfg` key, every
@@ -441,6 +495,16 @@ Behaviour not listed here is the same.
 
 ### Every launcher
 
+- **v0.4.0:** golden snapshot tests use `rea_launcher::snapshot!(name,
+  text)` (or `snapshots!()` with `.update_var("<ID>_UPDATE_SNAPSHOTS")` to
+  keep the documented variable) in place of a local `check()`; drop the
+  local `.replace(env!("CARGO_PKG_VERSION"), "<version>")`. Stored
+  snapshots that hold the version literally now fail: write `<version>`.
+- **v0.4.0:** a launcher that measured its runtime copy from a second
+  thread (DiRT Rally `copy.rs`) calls `runtime::sync_with_progress` with a
+  `ProgressCounter` instead. `runtime::sync` is unchanged.
+- **v0.4.0:** a native Linux launcher takes `rea_launcher::instance::single`
+  at start (DiRT Rally had no guard when run without the play helper).
 - **Temp files** are `.name.rea-new` (CMR3 used `.name.cmr3-new`, CMR4
   `.name.cmr4-new`, OR `name.tmp`, SRR `name.srr-tmp`). Remove old
   leftovers once with `fsx::remove_stale_temps(runtime, &[".cmr3-new"])`;

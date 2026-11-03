@@ -79,9 +79,16 @@ else
 fi
 if have shellcheck; then
   check "shellcheck" shellcheck -s sh -S warning -e SC2010 packaging/*.sh packaging/tests/*.sh \
-    scripts/sdk-sync scripts/sdk-bump scripts/clean scripts/wine-test scripts/dev-check scripts/tests/*.sh
+    scripts/sdk-sync scripts/sdk-bump scripts/clean scripts/wine-test scripts/dev-check scripts/prepush-scan scripts/release scripts/tests/*.sh
 else
   skip "shellcheck" "shellcheck not installed"
+fi
+# Committed secrets: the commits a push would publish and the tree (the
+# pinned gitleaks of scripts/prepush-scan; paths only, never the match).
+if have gitleaks; then
+  check "secret scan (prepush-scan)" sh scripts/prepush-scan
+else
+  skip "secret scan" "gitleaks not installed (CI runs the pinned one)"
 fi
 # A mise shim without a selected version exists but fails: run it to know.
 if have actionlint && actionlint -version >/dev/null 2>&1; then

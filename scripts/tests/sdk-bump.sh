@@ -177,6 +177,35 @@ else
 fi
 grep -qx "commit=$V3" "$L/sdk/VERSION" && ok "stamped with the tag's commit, not the work tree" || bad "stamp: $(cat "$L/sdk/VERSION")"
 
+# 4. No REA_SDK_CACHE: never the home folder. The launcher's ignored .work/
+# holds the clone; without an ignored .work/, a temp folder (removed).
+# Ignored folders' Cargo.toml files (a scratch copy in .work/) are left.
+(cd "$S" && git checkout -q -- CHANGELOG.md)
+(cd "$L" && git add -A && git commit -qm up3 >/dev/null 2>&1)
+sh "$BUMP" --force --no-cargo v0.2.0 "$L" >/dev/null 2>&1
+printf '/.work/\n' > "$L/.gitignore"
+mkdir -p "$L/.work/scratch" "$L/vendor-free"
+printf '[dependencies]\nrea-launcher = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.1.0" }\n' > "$L/.work/scratch/Cargo.toml"
+(cd "$L" && git add -A && git commit -qm ignore-work)
+H=$T/home
+mkdir -p "$H"
+if env -u REA_SDK_CACHE -u XDG_CACHE_HOME HOME="$H" REA_SDK_URL="$S" sh "$L/sdk/scripts/sdk-bump" --no-cargo v0.3.0 "$L" >"$T/out" 2>&1; then ok "no cache variable: bump works"; else bad "no cache variable: $(cat "$T/out")"; fi
+grep -q "SDK v0.3.0 from $L/.work/sdk-checkout\$" "$T/out" && ok "the clone goes into the launcher's ignored .work/" || bad "clone place: $(grep from "$T/out")"
+check "nothing in the home folder" "" "$(find "$H" -mindepth 1 | head -n 3)"
+check "an ignored folder's Cargo.toml is left alone" 'rea-launcher = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.1.0" }' "$(grep '^rea-launcher' "$L/.work/scratch/Cargo.toml")"
+check "the launcher's own Cargo.toml moved" 'rea-launcher = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.3.0" }' "$(grep '^rea-launcher =' "$L/Cargo.toml")"
+(cd "$L" && git add -A && git commit -qm up4)
+sh "$BUMP" --force --no-cargo v0.2.0 "$L" >/dev/null 2>&1
+rm "$L/.gitignore"; rm -rf "$L/.work"
+(cd "$L" && git add -A && git commit -qm no-ignore)
+export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
+if env -u REA_SDK_CACHE -u XDG_CACHE_HOME HOME="$H" REA_SDK_URL="$S" sh "$L/sdk/scripts/sdk-bump" --no-cargo v0.3.0 "$L" >"$T/out" 2>&1; then ok "no ignored .work/: bump works"; else bad "no .work: $(cat "$T/out")"; fi
+grep -q "SDK v0.3.0 from $TMPDIR/sdk-bump\.[^/]*/sdk-checkout\$" "$T/out" && ok "then the clone is in its temp folder" || bad "temp clone: $(grep from "$T/out")"
+check "and the temp folder is removed" "" "$(ls "$TMPDIR")"
+check "no .work/ created in the launcher" "" "$(ls -d "$L/.work" 2>/dev/null)"
+check "still nothing in the home folder" "" "$(find "$H" -mindepth 1 | head -n 3)"
+unset TMPDIR
+
 # The SDK's own CHANGELOG: every v0.2.0 and v0.3.0 Migration bullet is
 # found (the CMR4 bump missed the ones inside Added bullets).
 awk_prog=$(sed -n "/^  awk -v old=/,/^  ' \"\$CO\/CHANGELOG.md\"/p" "$ROOT/scripts/sdk-bump" | sed '1d;$d')

@@ -15,6 +15,7 @@ pub mod env;
 pub mod fsx;
 pub mod identify;
 pub mod ini;
+pub mod instance;
 pub mod ledger;
 pub mod log;
 pub mod pad;
@@ -23,6 +24,7 @@ pub mod paths;
 pub mod pe;
 pub mod runtime;
 pub mod saves;
+pub mod testing;
 pub mod wine;
 
 /// A fresh, empty folder for one test.

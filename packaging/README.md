@@ -11,7 +11,7 @@ busybox) and is vendored into each launcher by `scripts/sdk-sync`.
 | `appimage/tools.pins` | Pins for Wine, appimagetool and the dated type2 runtime |
 | `appimage/wine/` | Wine's licence and source notes, shipped in every Wine AppImage |
 | `smoke-package.sh` | Checks a package folder or zip against an allowlist |
-| `release-notes.sh` | Prints a version's CHANGELOG section |
+| `release-notes.sh` | Prints a version's CHANGELOG section; `--since vX` adds every section after vX (a fix-forward release) |
 | `../.github/workflows/launcher-ci.yml` | Reusable: checks, build, package, allowlist, upload |
 | `../.github/workflows/launcher-release.yml` | Reusable: tag/version check, SHA256SUMS, attestation, release |
 | `../.github/workflows/upstream-watch.yml` | Reusable: opens an issue when an upstream release no longer matches its pin |
@@ -122,6 +122,21 @@ dgvoodoo <the author's download url> <sha256 of the zip> hosted https://github.c
 workflow skips `hosted` pins (with a notice) unless the caller sets
 `include-hosted: true`. Set it only once the owner's decision (who decided,
 when, why, the author's terms) is recorded in `THIRD_PARTY.md`.
+
+A pin can name its own mirror release with `tag=RELEASE` (v0.4.0), for a
+file that lives in another release than `thirdparty` (CMR1's HD pack in
+`hd-pack-2`): `pin_mirror_url` and mirror.yml use that release for it.
+
+```text
+hdpack https://example.com/hd-pack-2.zip <sha256> hosted tag=hd-pack-2 https://github.com/akitaonrails/rea-colin-mcrae/releases/download/hd-pack-2/hd-pack-2.zip
+```
+
+**Offline** (`REA_NO_FETCH=1`, v0.4.0): `pin_fetch` takes the file from the
+destination, the cache or a `file://` url only, never the network, and
+names the pin it could not find. A package test sets it so a build that
+would download fails at once instead of reaching out; `appimage-wine.sh`
+builds offline from `file://` pins (it reads the Wine version from the
+archive's own top folder, so a pin named by its checksum works).
 
 ## AppImage
 

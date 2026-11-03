@@ -10,11 +10,13 @@
 # commit), whatever this SDK checkout is at: it runs that version's own
 # sdk-sync from a temporary `git clone --shared` of this repository (read
 # only; the commit must be in it: `git fetch --tags` if not). When VERSION
-# names this checkout's clean HEAD, or an unreproducible commit ("-dirty",
-# "unknown"), it compares with this work tree. --against-head always
+# names this checkout's HEAD and the work tree is clean, or an
+# unreproducible commit ("-dirty", "unknown"), it compares with this work
+# tree; a checkout with uncommitted changes is never the reference. --against-head always
 # compares with this work tree (the old behaviour).
 #
-# Layout: sdk/rea-play.sh (from shell/), sdk/scripts/{wine-test,sdk-bump,clean},
+# Layout: sdk/rea-play.sh (from shell/), sdk/scripts/{wine-test,sdk-bump,clean,
+# prepush-scan,release,launcher-check} (launcher-ci runs launcher-check),
 # sdk/packaging/... and sdk/docs/{STANDARDS.md,playbooks/*.md} (as in the
 # SDK), so a launcher refers to the SDK's wording instead of copying it.
 # sdk/ belongs to this script: never edit it by hand, re-run the sync.
@@ -53,35 +55,41 @@ if [ "$MODE" = check ] && [ -z "$AGAINST_HEAD" ] && [ -f "$REPO/sdk/VERSION" ]; 
       echo "sdk-sync: sdk/VERSION names no reproducible commit ($rec_commit); comparing with this work tree" >&2
       TAG=$rec_tag AGAINST_HEAD=1 ;;
     *[!0-9a-f]*) die "bad commit in $REPO/sdk/VERSION" ;;
-    "$head")
-      TAG=$rec_tag AGAINST_HEAD=1 ;;  # this checkout is that version
     *)
-      git -C "$SDK" cat-file -e "$rec_commit^{commit}" 2>/dev/null \
-        || die "SDK $rec_tag ($rec_commit) is not in $SDK: git -C $SDK fetch --tags, or pass --against-head"
-      AT=$(mktemp -d "${TMPDIR:-/tmp}/sdk-sync-at.XXXXXX")
-      trap 'rm -rf "$AT"' EXIT
-      trap 'exit 129' HUP
-      trap 'exit 130' INT
-      trap 'exit 143' TERM
-      git clone --quiet --shared --no-checkout "$SDK" "$AT/sdk" || die "cannot clone $SDK"
-      git -C "$AT/sdk" -c advice.detachedHead=false checkout --quiet --detach "$rec_commit" \
-        || die "cannot check out $rec_commit"
-      [ -f "$AT/sdk/scripts/sdk-sync" ] || die "SDK $rec_tag has no scripts/sdk-sync"
-      echo "sdk-sync: comparing with SDK $rec_tag ($rec_commit), the version in sdk/VERSION" >&2
-      set -- --check --tag "$rec_tag"
-      # Versions with --against-head compare with their own (clean) tree that way.
-      if grep -q -- '--against-head' "$AT/sdk/scripts/sdk-sync"; then set -- "$@" --against-head; fi
-      status=0
-      sh "$AT/sdk/scripts/sdk-sync" "$@" "$REPO" || status=$?
-      exit "$status" ;;
+      # This checkout is that version only when it is clean: an SDK being
+      # changed (uncommitted edits) is compared through a clone of the
+      # recorded commit, like any other version.
+      if [ "$rec_commit" = "$head" ] && [ -z "$(git -C "$SDK" status --porcelain 2>/dev/null)" ]; then
+        TAG=$rec_tag AGAINST_HEAD=1
+      fi ;;
   esac
+  if [ -z "$AGAINST_HEAD" ]; then
+    git -C "$SDK" cat-file -e "$rec_commit^{commit}" 2>/dev/null \
+      || die "SDK $rec_tag ($rec_commit) is not in $SDK: git -C $SDK fetch --tags, or pass --against-head"
+    AT=$(mktemp -d "${TMPDIR:-/tmp}/sdk-sync-at.XXXXXX")
+    trap 'rm -rf "$AT"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    git clone --quiet --shared --no-checkout "$SDK" "$AT/sdk" || die "cannot clone $SDK"
+    git -C "$AT/sdk" -c advice.detachedHead=false checkout --quiet --detach "$rec_commit" \
+      || die "cannot check out $rec_commit"
+    [ -f "$AT/sdk/scripts/sdk-sync" ] || die "SDK $rec_tag has no scripts/sdk-sync"
+    echo "sdk-sync: comparing with SDK $rec_tag ($rec_commit), the version in sdk/VERSION" >&2
+    set -- --check --tag "$rec_tag"
+    # Versions with --against-head compare with their own (clean) tree that way.
+    if grep -q -- '--against-head' "$AT/sdk/scripts/sdk-sync"; then set -- "$@" --against-head; fi
+    status=0
+    sh "$AT/sdk/scripts/sdk-sync" "$@" "$REPO" || status=$?
+    exit "$status"
+  fi
 fi
 
 # The vendored set, SDK-relative (dest() maps it into sdk/).
 files() {
   (
     cd "$SDK"
-    for f in shell/rea-play.sh scripts/wine-test scripts/sdk-bump scripts/clean packaging/*.sh packaging/appimage/AppRun.in \
+    for f in shell/rea-play.sh scripts/wine-test scripts/sdk-bump scripts/clean scripts/prepush-scan scripts/release scripts/launcher-check packaging/*.sh packaging/appimage/AppRun.in \
       packaging/appimage/tools.pins packaging/appimage/wine/COPYING.LIB \
       packaging/appimage/wine/LICENSE packaging/appimage/wine/SOURCE.txt \
       docs/STANDARDS.md docs/playbooks/*.md; do

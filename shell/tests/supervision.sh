@@ -196,6 +196,16 @@ rm -f "$T/polls"
 PATH=$T/bin:$PATH REA_PROC=$T/proc REA_GAME_PROCS='SEGA Rally_SSE1' sh "$REA_INNER" "$REA_EXE"
 check "the inner script ignores REA_PROC without REA_TEST=1" "$(cat "$T/polls")" 1
 rm -f "$T/polls"
+# The launcher refused (exit 5, ALREADY_RUNNING): another launcher's game
+# holds the prefix. The inner script never waits for or kills it.
+mv "$T/bin/wine" "$T/bin/wine.ok"
+printf '#!/bin/sh\nexit 5\n' > "$T/bin/wine"; chmod +x "$T/bin/wine"
+: > "$T/inner-ws"
+PATH=$T/bin:$PATH REA_TEST=1 REA_PROC=$T/proc REA_GAME_PROCS='SEGA Rally_SSE1' sh "$REA_INNER" "$REA_EXE"
+check "a refused launcher (exit 5) ends the inner script with 5" "$?" 5
+check "...without wineserver -k (the other launcher's game lives)" "$(cat "$T/inner-ws")" ""
+[ -e "$T/polls" ] && fail "it waited for the other game" || ok "...and without waiting for the game"
+mv "$T/bin/wine.ok" "$T/bin/wine"
 
 echo "# the caller's traps"
 # A top-level script (as a game's -play is): its traps come back after a
@@ -229,16 +239,26 @@ check "the caller's EXIT trap runs after an interrupted launch" "$(cat "$T/calle
 
 echo "# the settings window"
 REA_EXE=$T/TestLauncher.exe
-for case in 0:0 4:0 3:1 1:1 139:1; do
+for case in 0:0 4:0 3:1 5:1 1:1 139:1; do
   echo "${case%:*}" > "$T/rc"
   : > "$T/wineserver"
   if rea_settings > "$T/out"; then got=0; else got=1; fi
   check "settings exit ${case%:*} -> $got" "$got" "${case#*:}"
-  contains "settings exit ${case%:*}: the prefix's wineserver is awaited" "$(cat "$T/wineserver")" "wineserver -w"
+  if [ "${case%:*}" = 3 ] || [ "${case%:*}" = 5 ]; then
+    # Exit 5 (ALREADY_RUNNING; 3 in older launchers) is a second launcher
+    # refused while another one (or its game) holds the prefix: waiting for
+    # the prefix's wineserver would wait for that game (CMR1 83dacbb).
+    lacks "settings exit ${case%:*}: no wait for the prefix's wineserver" "$(cat "$T/wineserver")" "wineserver -w"
+  else
+    contains "settings exit ${case%:*}: the prefix's wineserver is awaited" "$(cat "$T/wineserver")" "wineserver -w"
+  fi
 done
 contains "a failed window points at settings.log" "$(cat "$T/out")" "see $REA_STATE/settings.log"
 echo 3 > "$T/rc"; rea_settings > "$T/out"
 contains "closed without Play is said" "$(cat "$T/out")" "closed without Play"
+echo 5 > "$T/rc"; rea_settings > "$T/out"
+check "another launcher running: rea_settings returns 5" "$?" 5
+contains "...and says so" "$(cat "$T/out")" "already running; nothing started"
 check "settings: prefix, SDL, flags" "$(cat "$T/settings")" \
   "env SDL_GAMECONTROLLER_ALLOW_BACKGROUND_EVENTS=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 WINEPREFIX=$T/prefix wine $REA_EXE --settings --linux"
 REA_SDL_SETTINGS=0; echo 0 > "$T/rc"; rea_settings > /dev/null

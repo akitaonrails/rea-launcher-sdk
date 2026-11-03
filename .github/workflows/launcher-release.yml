@@ -32,6 +32,15 @@ on:
         description: "changelog: the tag's CHANGELOG section; generate: GitHub's generated notes."
         type: string
         default: changelog
+      notes-since:
+        description: >-
+          With notes: changelog, also include every CHANGELOG section after
+          this version (a fix-forward release whose previous tag was never
+          published): a tag such as v0.3.0, or `latest-release` for the
+          repository's latest published GitHub release. Empty: only the
+          tag's section.
+        type: string
+        default: ""
       attest:
         description: Attest build provenance for every published file.
         type: boolean
@@ -80,7 +89,13 @@ jobs:
           NOTES: ${{ inputs.notes }}
           CHANGELOG: ${{ inputs.changelog }}
           SDK_DIR: ${{ inputs.sdk-dir }}
+          NOTES_SINCE: ${{ inputs.notes-since }}
         run: |
+          case $NOTES_SINCE in
+            '' | latest-release | v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::notes-since must be empty, latest-release or a tag like v1.2.3"; exit 1 ;;
+          esac
+          case $NOTES_SINCE in *[!A-Za-z0-9.+-]*) echo "::error::unexpected characters in notes-since"; exit 1 ;; esac
           case $NOTES in
             changelog) sh "$SDK_DIR/packaging/release-notes.sh" "$GITHUB_REF_NAME" "$CHANGELOG" ;;
             generate) ;;
@@ -127,9 +142,19 @@ jobs:
           NOTES: ${{ inputs.notes }}
           CHANGELOG: ${{ inputs.changelog }}
           SDK_DIR: ${{ inputs.sdk-dir }}
+          NOTES_SINCE: ${{ inputs.notes-since }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$NOTES" = changelog ]; then
-            sh "$SDK_DIR/packaging/release-notes.sh" "$GITHUB_REF_NAME" "$CHANGELOG" > "$RUNNER_TEMP/notes.md"
+            set --
+            since=$NOTES_SINCE
+            if [ "$since" = latest-release ]; then
+              # The latest published release; none yet: only this section.
+              since=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+              case $since in v[0-9]*) echo "notes since $since" ;; *) since='' ;; esac
+            fi
+            if [ -n "$since" ] && [ "$since" != "$GITHUB_REF_NAME" ]; then set -- --since "$since"; fi
+            sh "$SDK_DIR/packaging/release-notes.sh" "$@" "$GITHUB_REF_NAME" "$CHANGELOG" > "$RUNNER_TEMP/notes.md"
           fi
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

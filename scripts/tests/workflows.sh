@@ -83,7 +83,7 @@ S=$(step mirror.yml "Fetch and verify every mirrorable pin") || exit 1
 S2=$(step mirror.yml "Upload to the mirror release") || exit 1
 mirror_env() { export PINS=pins.txt TAG=thirdparty SDK_DIR=sdk RUNNER_TEMP="$M/rt" GITHUB_REPOSITORY=me/game GH_LOG="$M/gh.log" PATH="$M/bin:$PATH"; }
 if (cd "$M/repo" && mirror_env && sh -e "$S") >"$T/out" 2>&1; then ok "mirror: fetch step passes"; else bad "mirror: fetch step: $(cat "$T/out")"; fi
-[ "$(ls "$M/rt/mirror" | LC_ALL=C sort | tr '\n' ' ')" = "Xidi-v4.3.1.zip dxvk.tar.gz " ] && ok "mirror: only marked pins, under the pin's file name" || bad "mirror: files: $(ls "$M/rt/mirror")"
+[ "$(ls "$M/rt/mirror/thirdparty" | LC_ALL=C sort | tr '\n' ' ')" = "Xidi-v4.3.1.zip dxvk.tar.gz " ] && ok "mirror: only marked pins, under the pin's file name" || bad "mirror: files: $(ls "$M/rt/mirror/thirdparty")"
 grep -q 'warning.*dxvk: add the mirror url as a fallback: https://github.com/me/game/releases/download/thirdparty/dxvk.tar.gz' "$T/out" \
   && ok "mirror: warns when a pin lacks its mirror url" || bad "mirror: missing-fallback warning"
 if grep -q 'xidi: add the mirror url' "$T/out"; then bad "mirror: no warning when the fallback is listed"; else ok "mirror: no warning when the fallback is listed"; fi
@@ -91,8 +91,8 @@ if (cd "$M/repo" && mirror_env && sh -e "$S2") >"$T/out" 2>&1; then ok "mirror: 
 grep -q '^gh release create thirdparty --repo me/game --latest=false' "$M/gh.log" && ok "mirror: creates the missing release, not as latest" || bad "mirror: create: $(cat "$M/gh.log")"
 up=$(grep '^gh release upload thirdparty ' "$M/gh.log")
 case $up in *" --repo me/game --clobber") ;; *) up='' ;; esac
-case $up in *"$M/rt/mirror/Xidi-v4.3.1.zip"*) ;; *) up='' ;; esac
-case $up in *"$M/rt/mirror/dxvk.tar.gz"*) ;; *) up='' ;; esac
+case $up in *"$M/rt/mirror/thirdparty/Xidi-v4.3.1.zip"*) ;; *) up='' ;; esac
+case $up in *"$M/rt/mirror/thirdparty/dxvk.tar.gz"*) ;; *) up='' ;; esac
 [ -n "$up" ] && ok "mirror: uploads with --clobber" || bad "mirror: upload: $(cat "$M/gh.log")"
 : > "$M/gh.log"
 (cd "$M/repo" && mirror_env && GH_HAS_RELEASE=1 && export GH_HAS_RELEASE && sh -e "$S2") >/dev/null 2>&1
@@ -112,11 +112,11 @@ echo dgv > "$M/up/dgVoodoo2_80.zip"
 echo "dgvoodoo file://$M/up/dgVoodoo2_80.zip $(sha "$M/up/dgVoodoo2_80.zip") hosted" >> "$M/repo/pins.txt"
 rm -rf "$M/rt/mirror"
 (cd "$M/repo" && mirror_env && sh -e "$S") >"$T/out" 2>&1
-[ ! -e "$M/rt/mirror/dgVoodoo2_80.zip" ] && grep -q 'dgvoodoo is marked hosted (no licence): skipped' "$T/out" \
+[ ! -e "$M/rt/mirror/thirdparty/dgVoodoo2_80.zip" ] && grep -q 'dgvoodoo is marked hosted (no licence): skipped' "$T/out" \
   && ok "mirror: hosted pin skipped without include-hosted" || bad "mirror: hosted skip: $(cat "$T/out")"
 rm -rf "$M/rt/mirror"
 if (cd "$M/repo" && mirror_env && INCLUDE_HOSTED=true && export INCLUDE_HOSTED && sh -e "$S") >"$T/out" 2>&1 \
-  && [ -f "$M/rt/mirror/dgVoodoo2_80.zip" ]; then ok "mirror: hosted pin uploaded with include-hosted"; else bad "mirror: include-hosted: $(cat "$T/out")"; fi
+  && [ -f "$M/rt/mirror/thirdparty/dgVoodoo2_80.zip" ]; then ok "mirror: hosted pin uploaded with include-hosted"; else bad "mirror: include-hosted: $(cat "$T/out")"; fi
 grep -q "hosted by the owner's decision" "$T/out" && ok "mirror: hosted upload is announced" || bad "mirror: hosted notice"
 # One-pin-per-file folders (OutRun's packaging/<name>.txt), alone, as a
 # glob, and mixed with a pin file; unmarked and malformed files are skipped.
@@ -128,13 +128,26 @@ printf 'https://example.com/hd.zip %s 325966152 3168683238\n' "$(sha "$M/up/hd.z
 for pins in pd 'pd/*.txt' 'pd/vcredist.txt'; do
   rm -rf "$M/rt/mirror"
   if (cd "$M/repo" && mirror_env && PINS=$pins && export PINS && sh -e "$S") >"$T/out" 2>&1 \
-    && [ "$(ls "$M/rt/mirror")" = vc_redist.x86.exe ]; then ok "mirror: pins '$pins' (one pin per file)"; else bad "mirror: pins '$pins': $(ls "$M/rt/mirror" 2>&1) $(cat "$T/out")"; fi
+    && [ "$(ls "$M/rt/mirror/thirdparty")" = vc_redist.x86.exe ]; then ok "mirror: pins '$pins' (one pin per file)"; else bad "mirror: pins '$pins': $(ls "$M/rt/mirror/thirdparty" 2>&1) $(cat "$T/out")"; fi
 done
 rm -rf "$M/rt/mirror"
 (cd "$M/repo" && mirror_env && PINS='pins.txt pd' && export PINS && sh -e "$S") >"$T/out" 2>&1
-[ "$(ls "$M/rt/mirror" | LC_ALL=C sort | tr '\n' ' ')" = "Xidi-v4.3.1.zip dxvk.tar.gz vc_redist.x86.exe " ] \
-  && ok "mirror: a pin file and a folder together" || bad "mirror: mixed: $(ls "$M/rt/mirror")"
+[ "$(ls "$M/rt/mirror/thirdparty" | LC_ALL=C sort | tr '\n' ' ')" = "Xidi-v4.3.1.zip dxvk.tar.gz vc_redist.x86.exe " ] \
+  && ok "mirror: a pin file and a folder together" || bad "mirror: mixed: $(ls "$M/rt/mirror/thirdparty")"
 if (cd "$M/repo" && mirror_env && PINS=nowhere && export PINS && sh -e "$S") >"$T/out" 2>&1; then bad "mirror: a missing source fails"; else grep -q 'no pin file or folder nowhere' "$T/out" && ok "mirror: a missing source fails" || bad "mirror: missing: $(cat "$T/out")"; fi
+
+# A pin's own tag= release (CMR1's HD pack in hd-pack-2): its own folder,
+# its own release, the fallback check against that release's url.
+echo pack > "$M/up/hd-pack-2.zip"
+printf 'hdpack file://%s %s mirror tag=hd-pack-2 https://github.com/me/game/releases/download/hd-pack-2/hd-pack-2.zip\n' "$M/up/hd-pack-2.zip" "$(sha "$M/up/hd-pack-2.zip")" > "$M/repo/tagged.txt"
+rm -rf "$M/rt/mirror"; : > "$M/gh.log"
+(cd "$M/repo" && mirror_env && PINS='pins.txt tagged.txt' && export PINS && sh -e "$S") >"$T/out" 2>&1
+[ -f "$M/rt/mirror/hd-pack-2/hd-pack-2.zip" ] && [ -f "$M/rt/mirror/thirdparty/dxvk.tar.gz" ] \
+  && ok "mirror: tag= pins go to their own release folder" || bad "mirror: tag=: $(ls -R "$M/rt/mirror") $(cat "$T/out")"
+if grep -q 'hdpack: add the mirror url' "$T/out"; then bad "mirror: tag= fallback url recognised"; else ok "mirror: tag= fallback url recognised"; fi
+(cd "$M/repo" && mirror_env && sh -e "$S2") >/dev/null 2>&1
+grep -q '^gh release create hd-pack-2 ' "$M/gh.log" && grep -q "^gh release upload hd-pack-2 $M/rt/mirror/hd-pack-2/hd-pack-2.zip --repo me/game --clobber" "$M/gh.log" \
+  && grep -q '^gh release upload thirdparty ' "$M/gh.log" && ok "mirror: one release per tag" || bad "mirror: per-tag upload: $(cat "$M/gh.log")"
 
 # compat.yml: the launcher's own cargo config is kept, the SDK crates that
 # exist are patched in, sdk/ is re-vendored, a second patch is refused.
@@ -185,6 +198,67 @@ check_n "imports (packages): the others are still checked" 4
 : > "$P/checked"
 (cd "$P" && pkg_env 'dist/Game-*/' && RUST_TARGET=x86_64-unknown-linux-gnu && sh -e "$S") >/dev/null 2>&1
 check_n "imports (packages): not for a native target" 0
+
+# Secret scan: the launcher-ci step against a fake gitleaks, and its pin in
+# step with scripts/prepush-scan.
+pin() { sed -n "s/^$1=//p" "$HERE/../prepush-scan"; }
+grep -q "GITLEAKS_VERSION: $(pin GITLEAKS_VERSION)\$" "$WF/launcher-ci.yml" && ok "secret scan: same gitleaks version as prepush-scan" || bad "secret scan: version differs from prepush-scan"
+grep -q "GITLEAKS_SHA256: $(pin GITLEAKS_SHA256_x86_64)\$" "$WF/launcher-ci.yml" && ok "secret scan: same SHA-256 as prepush-scan" || bad "secret scan: SHA-256 differs from prepush-scan"
+grep -q 'bREA_\[A-Z0-9_\]\*KEY=' "$WF/launcher-ci.yml" && grep -q 'bREA_\[A-Z0-9_\]\*KEY=' "$HERE/../prepush-scan" && ok "secret scan: same allowlist" || bad "secret scan: allowlists differ"
+grep -q 'sh scripts/prepush-scan --all' "$WF/ci.yml" && ok "secret scan: the SDK's ci.yml runs prepush-scan --all" || bad "secret scan: ci.yml"
+G=$T/gl
+mkdir -p "$G/bin" "$G/w" "$G/rt"
+cat > "$G/bin/gitleaks" <<'FAKE'
+#!/bin/sh
+echo "$*" >> "$GL_LOG"
+while [ $# -gt 0 ]; do [ "$1" = --report-path ] && r=$2; shift; done
+echo "Secret: $GL_SECRET"
+if [ -n "${GL_FIND:-}" ]; then printf 'github-pat|4|abcdef0123456789|conf.rs\ngithub-pat|4||%s/scan/tree/conf.rs\n' "$RUNNER_TEMP" > "$r"; else : > "$r"; fi
+FAKE
+chmod +x "$G/bin/gitleaks"
+(cd "$G/w" && git init -q && echo x > f && git -c user.name=t -c user.email=t@e commit -qm x --allow-empty && git add f && git -c user.name=t -c user.email=t@e commit -qm f) >/dev/null 2>&1
+S=$(step launcher-ci.yml "Scan the history and the tree (paths and commit ids only)") || exit 1
+scan() { (cd "$G/w" && rm -rf "$G/rt/scan" && PATH="$G/bin:$PATH" RUNNER_TEMP="$G/rt" GL_LOG="$G/log" GL_SECRET=hunter2-not-real sh -e "$S") > "$T/out" 2>&1; }
+if scan; then ok "secret scan: nothing found passes"; else bad "secret scan: clean: $(cat "$T/out")"; fi
+grep -q -- '--redact' "$G/log" && grep -q '^git ' "$G/log" && grep -q '^dir ' "$G/log" && ok "secret scan: history and tree, redacted" || bad "secret scan: modes: $(cat "$G/log")"
+grep -q -- "-c $G/rt/scan/gitleaks.toml" "$G/log" && ok "secret scan: the SDK allowlist without a .gitleaks.toml" || bad "secret scan: config: $(cat "$G/log")"
+if GL_FIND=1 scan; then bad "secret scan: a finding fails"; else ok "secret scan: a finding fails"; fi
+grep -q '::error file=conf.rs,line=4::possible secret (commit abcdef012345, rule github-pat)' "$T/out" && ok "secret scan: annotation with path and commit" || bad "secret scan: annotation: $(cat "$T/out")"
+grep -q '::error file=conf.rs,line=4::possible secret (tree at HEAD' "$T/out" && ok "secret scan: tree paths are the repo's" || bad "secret scan: tree path: $(cat "$T/out")"
+grep -q hunter2 "$T/out" && bad "secret scan: gitleaks' output was shown" || ok "secret scan: gitleaks' own output is never shown"
+echo '[extend]' > "$G/w/.gitleaks.toml"; : > "$G/log"; scan
+grep -q -- "-c $G/w/.gitleaks.toml" "$G/log" && ok "secret scan: a repository's .gitleaks.toml wins" || bad "secret scan: repo config: $(cat "$G/log")"
+
+# launcher-release notes: notes-since (a fix-forward release).
+R=$T/rel
+mkdir -p "$R/w/sdk/packaging" "$R/bin" "$R/rt"
+cp "$HERE/../../packaging/release-notes.sh" "$R/w/sdk/packaging/"
+printf '# Changelog\n\n## [0.2.2] - d\n\n- fix\n\n## [0.2.1] - d\n\n- feature\n\n## [0.2.0] - d\n\n- old\n' > "$R/w/CHANGELOG.md"
+printf '#!/bin/sh\necho "${GH_LATEST:-}"\n[ -n "${GH_LATEST:-}" ]\n' > "$R/bin/gh"; chmod +x "$R/bin/gh"
+S=$(step launcher-release.yml "Release notes") || exit 1
+notes() { # notes-since [latest]
+  (cd "$R/w" && PATH="$R/bin:$PATH" NOTES=changelog CHANGELOG=CHANGELOG.md SDK_DIR=sdk NOTES_SINCE=$1 GH_LATEST=${2:-} \
+    GITHUB_REF_NAME=v0.2.2 GITHUB_REPOSITORY=o/r RUNNER_TEMP="$R/rt" sh -e "$S") > "$T/out" 2>&1
+  grep -c '^- ' "$R/rt/notes.md"
+}
+[ "$(notes '')" = 1 ] && ok "release notes: only the tag's section by default" || bad "release notes: default: $(cat "$R/rt/notes.md")"
+[ "$(notes v0.2.0)" = 2 ] && ok "release notes: notes-since a tag" || bad "release notes: since: $(cat "$R/rt/notes.md")"
+[ "$(notes latest-release v0.2.0)" = 2 ] && ok "release notes: since the latest published release" || bad "release notes: latest: $(cat "$R/rt/notes.md" "$T/out")"
+[ "$(notes latest-release)" = 1 ] && ok "release notes: no release yet: the tag's section" || bad "release notes: none yet: $(cat "$R/rt/notes.md")"
+[ "$(notes latest-release v0.2.2)" = 1 ] && ok "release notes: the latest is this tag: its section" || bad "release notes: same tag"
+S=$(step launcher-release.yml "Release notes exist") || exit 1
+if (cd "$R/w" && NOTES=changelog CHANGELOG=CHANGELOG.md SDK_DIR=sdk NOTES_SINCE='x;y' GITHUB_REF_NAME=v0.2.2 sh -e "$S") >/dev/null 2>&1; then bad "release notes: a bad notes-since is refused"; else ok "release notes: a bad notes-since is refused"; fi
+
+# Wine tests: wine-test-exclude reaches wine-test as --exclude, before the
+# arguments (which may end with "-- test args").
+W=$T/wt
+mkdir -p "$W/sdk/scripts"
+printf '#!/bin/sh\nprintf "[%%s]" "$@" > "%s/args"\n' "$W" > "$W/sdk/scripts/wine-test"
+S=$(step launcher-ci.yml "Windows-target tests under Wine (headless)") || exit 1
+(cd "$W" && SDK_DIR=sdk RUST_TARGET=i686-pc-windows-gnu WINE_TEST_ARGS='--locked --workspace -- --nocapture' WINE_TEST_EXCLUDE='cmr-hooks other' sh -e "$S") >"$T/out" 2>&1
+[ "$(cat "$W/args")" = "[--target][i686-pc-windows-gnu][--exclude][cmr-hooks][--exclude][other][--locked][--workspace][--][--nocapture]" ] \
+  && ok "wine tests: wine-test-exclude as --exclude, before the args" || bad "wine tests: $(cat "$W/args" "$T/out")"
+if (cd "$W" && SDK_DIR=sdk RUST_TARGET=i686-pc-windows-gnu WINE_TEST_ARGS='' WINE_TEST_EXCLUDE='a;b' sh -e "$S") >/dev/null 2>&1; then bad "wine tests: a bad exclude is refused"; else ok "wine tests: a bad exclude is refused"; fi
 
 # No status-swallowing "check && echo" anywhere in the workflows.
 if grep -n '&& echo' "$WF"/*.yml; then bad "no '&& echo' checks in workflows"; else ok "no '&& echo' checks in workflows"; fi

@@ -291,12 +291,61 @@ pub(crate) fn bring_over(from: &Path, to: &Path, link: bool) -> io::Result<bool>
 /// Brings `runtime` up to date with `game`, recording the result in
 /// `runtime/manifest_name`. Never deletes runtime-only files, never writes
 /// into `game`, and replaces (never writes through) a symbolic link in the
-/// runtime. Errors name the path.
+/// runtime. Errors name the path. [`sync_with_progress`] also reports how
+/// far it is.
 pub fn sync(
     game: &Path,
     runtime: &Path,
     policy: &dyn Policy,
     manifest_name: &str,
+) -> io::Result<SyncReport> {
+    sync_with_progress(game, runtime, policy, manifest_name, &mut |_| {})
+}
+
+/// How far a [`sync_with_progress`] is: files and bytes of what this sync
+/// brings over (not the whole game folder; an up-to-date runtime has a
+/// total of 0). Bytes are the source files' sizes, counted per file.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    pub files_done: usize,
+    pub files_total: usize,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+}
+
+impl Progress {
+    /// The share done, `0.0..=1.0`, by bytes (by files when every file is
+    /// empty); nothing to bring is done.
+    pub fn fraction(&self) -> f32 {
+        let (done, total) = if self.bytes_total > 0 {
+            (self.bytes_done as f64, self.bytes_total as f64)
+        } else {
+            (self.files_done as f64, self.files_total as f64)
+        };
+        if total > 0.0 {
+            (done / total).clamp(0.0, 1.0) as f32
+        } else {
+            1.0
+        }
+    }
+
+    /// Whether everything planned is in.
+    pub fn finished(&self) -> bool {
+        self.files_done >= self.files_total
+    }
+}
+
+/// [`sync`], calling `progress` once the plan is known (nothing done yet)
+/// and after each file brought over, so a window can show "12 of 40 GB"
+/// without measuring the runtime from a second thread (DiRT Rally's 40 GB
+/// first copy). Run it on a worker thread and hand the numbers over with a
+/// [`ProgressCounter`].
+pub fn sync_with_progress(
+    game: &Path,
+    runtime: &Path,
+    policy: &dyn Policy,
+    manifest_name: &str,
+    progress: &mut dyn FnMut(Progress),
 ) -> io::Result<SyncReport> {
     let (source, warnings) = list_with_warnings(game).map_err(fsx::at(game))?;
     fs::create_dir_all(runtime).map_err(fsx::at(runtime))?;
@@ -307,11 +356,21 @@ pub fn sync(
     let to = |rel: &str| native(runtime, &policy.runtime_rel(rel));
     let present = |rel: &str| policy.present(rel, &to(rel));
     let plan = plan(&source, &present, &manifest, policy);
+    let size = |rel: &String| source.get(rel).map_or(0, |stamp| stamp.size);
+    let mut now = Progress {
+        files_total: plan.copy.len(),
+        bytes_total: plan.copy.iter().map(size).sum(),
+        ..Progress::default()
+    };
+    progress(now);
     let mut linked = 0;
     for rel in &plan.copy {
         if bring_over(&native(game, rel), &to(rel), policy.link(rel))? {
             linked += 1;
         }
+        now.files_done += 1;
+        now.bytes_done += size(rel);
+        progress(now);
     }
     fsx::write_atomic(&manifest_path, format_manifest(&plan.manifest))?;
     Ok(SyncReport {
@@ -319,6 +378,51 @@ pub fn sync(
         linked,
         warnings,
     })
+}
+
+/// A [`Progress`] shared between the thread that syncs and the window that
+/// shows it: clones share the numbers.
+///
+/// ```
+/// use rea_launcher::runtime::{self, CopyAll, ProgressCounter};
+/// # fn main() -> std::io::Result<()> {
+/// # let base = std::env::temp_dir().join(format!("rea-doc-progress-{}", std::process::id()));
+/// # let (game, rt) = (base.join("game"), base.join("rt"));
+/// # std::fs::create_dir_all(&game)?;
+/// # std::fs::write(game.join("data.bin"), [0u8; 64])?;
+/// let counter = ProgressCounter::new();
+/// let worker = {
+///     let counter = counter.clone();
+///     let (game, rt) = (game.clone(), rt.clone());
+///     std::thread::spawn(move || {
+///         runtime::sync_with_progress(&game, &rt, &CopyAll, ".manifest", &mut |p| counter.set(p))
+///     })
+/// };
+/// // The window, each frame:
+/// let now = counter.get();
+/// println!("{} of {} bytes", now.bytes_done, now.bytes_total);
+/// worker.join().unwrap()?;
+/// assert_eq!(counter.get().bytes_done, 64);
+/// # std::fs::remove_dir_all(base)?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct ProgressCounter(std::sync::Arc<std::sync::Mutex<Progress>>);
+
+impl ProgressCounter {
+    pub fn new() -> ProgressCounter {
+        ProgressCounter::default()
+    }
+
+    /// Records the latest progress (the callback of [`sync_with_progress`]).
+    pub fn set(&self, progress: Progress) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = progress;
+    }
+
+    /// The latest progress.
+    pub fn get(&self) -> Progress {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 /// Puts the game's own `rel` (found whatever its case) back in the
@@ -789,6 +893,65 @@ mod tests {
         for d in [game, rt] {
             fs::remove_dir_all(d).unwrap();
         }
+    }
+
+    #[test]
+    fn progress_counts_what_this_sync_brings() {
+        let base = test_dir("progress");
+        let (game, rt) = (base.join("Jogos d'Ação"), base.join("runtime"));
+        fs::create_dir_all(game.join("Data")).unwrap();
+        fs::write(game.join("game.exe"), [1u8; 100]).unwrap();
+        fs::write(game.join("Data/track.bin"), [2u8; 300]).unwrap();
+        fs::write(game.join("empty.txt"), b"").unwrap();
+        let mut seen = Vec::new();
+        let report =
+            sync_with_progress(&game, &rt, &CopyAll, MANIFEST, &mut |p| seen.push(p)).unwrap();
+        assert_eq!(report.brought, 3);
+        assert_eq!(seen.len(), 4, "the plan, then one per file: {seen:?}");
+        assert_eq!(
+            seen[0],
+            Progress {
+                files_done: 0,
+                files_total: 3,
+                bytes_done: 0,
+                bytes_total: 400
+            }
+        );
+        assert!(seen.windows(2).all(|w| w[0].bytes_done <= w[1].bytes_done));
+        let last = *seen.last().unwrap();
+        assert_eq!((last.files_done, last.bytes_done), (3, 400));
+        assert!(last.finished());
+        assert_eq!(last.fraction(), 1.0);
+        assert_eq!(seen[0].fraction(), 0.0);
+
+        // Up to date: nothing to bring, and that reads as done.
+        let mut again = Vec::new();
+        sync_with_progress(&game, &rt, &CopyAll, MANIFEST, &mut |p| again.push(p)).unwrap();
+        assert_eq!(again, [Progress::default()]);
+        assert_eq!(again[0].fraction(), 1.0);
+
+        // One changed file: only its bytes count.
+        fs::write(game.join("game.exe"), [3u8; 50]).unwrap();
+        let counter = ProgressCounter::new();
+        let shared = counter.clone();
+        sync_with_progress(&game, &rt, &CopyAll, MANIFEST, &mut |p| shared.set(p)).unwrap();
+        assert_eq!(
+            counter.get(),
+            Progress {
+                files_done: 1,
+                files_total: 1,
+                bytes_done: 50,
+                bytes_total: 50
+            }
+        );
+        let half = Progress {
+            files_done: 1,
+            files_total: 2,
+            bytes_done: 0,
+            bytes_total: 0,
+        };
+        assert_eq!(half.fraction(), 0.5, "empty files count by number");
+        let _ = fs::remove_dir_all(base);
     }
 
     #[test]
