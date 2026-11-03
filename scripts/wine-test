@@ -3,6 +3,7 @@
 #
 #   scripts/wine-test [--target TRIPLE] [cargo test args...] [-- test args...]
 #   scripts/wine-test --failures-from LOG     names the failures in a saved log
+#   scripts/wine-test --details-from LOG      what the failing tests printed
 #
 # Run it from the root of the Cargo workspace to test (the SDK, or a
 # launcher through its vendored sdk/scripts/wine-test), e.g.
@@ -43,6 +44,17 @@ failures_from() {
   ' | sort -u
 }
 
+# Prints what each failing test printed (cargo's "---- NAME stdout ----"
+# blocks: the panic message and the test's own output), at most 40 lines
+# per test, so a CI log says why and not only which.
+details_from() {
+  tr -d '\r' <"$1" | awk '
+    /^---- .* stdout ----$/ { on = 1; n = 0; print; next }
+    on && (/^failures:$/ || /^---- /) { on = 0 }
+    on && n < 40 { print; n++ }
+  '
+}
+
 # Prints the test executables cargo reports as aborted: not exit status 101
 # (101 is a normal "some tests failed" exit, already named by failures_from).
 aborted_from() {
@@ -50,6 +62,11 @@ aborted_from() {
     grep -v '(exit status: 101)$' | sed -n 's/.*`wine \([^`]*\.exe\).*/\1/p' | sort -u
 }
 
+if [ "${1:-}" = --details-from ]; then
+  [ $# -eq 2 ] && [ -f "$2" ] || { echo "usage: $0 --details-from LOG" >&2; exit 2; }
+  details_from "$2"
+  exit 0
+fi
 if [ "${1:-}" = --failures-from ]; then
   [ $# -eq 2 ] && [ -f "$2" ] || { echo "usage: $0 --failures-from LOG" >&2; exit 2; }
   failures_from "$2"
@@ -152,6 +169,7 @@ if cargo test --target "$target" --no-fail-fast "$@" >"$log" 2>&1; then
   exit 0
 fi
 grep -E '^test result|^error' "$log" || tail -20 "$log"
+details_from "$log"
 failures_from "$log"
 aborted_from "$log" | while IFS= read -r exe; do
   echo "aborted: $exe; running its tests one by one" >&2

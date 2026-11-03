@@ -42,6 +42,11 @@ printf '%s\r\n' \
 check "names failures listed by a binary that exited normally" "FAIL ini::keeps_bom
 FAIL ini::trims_keys
 ABORTED $EXE_ABORT" "$(sh "$WT" --failures-from "$T/canned.log")"
+check "prints what a failing test printed (why, not only which)" "---- ini::keeps_bom stdout ----
+thread 'ini::keeps_bom' panicked at src/ini.rs:10:5:
+    left: 1
+" "$(sh "$WT" --details-from "$T/canned.log")
+"
 
 # Fakes.
 mkdir -p "$T/bin" "$T/ws"
