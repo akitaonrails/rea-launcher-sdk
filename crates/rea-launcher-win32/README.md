@@ -16,7 +16,7 @@ state parsing and button bits (`rea_launcher::pad`) — live in the portable
 | `instance` | `single(name) -> Result<Guard, AlreadyRunning>` (named mutex in `Local\`), `AlreadyRunning::second_start(action, window)` → `SecondStart::{Focused, Busy, WindowOpen}` (`exit_code`: 0 or `ALREADY_RUNNING` = 5, `message(game)`, `log_line`; pure `SecondStart::decide`), `bring_to_front`/`is_window_found(Window::Own/Title/Class/ClassTitle)`; pure `is_own_window`, `same_image`, `mutex_name` | SRR + DiRT + CMR4 + Screamer |
 | `xinput` | cached lookup; `pads` (as `rea_launcher::pad::Pad`), `buttons`, `connected`, `set_rumble`/`test_rumble`/`stop_rumble` (latest call wins), `ids` (USB vid/pid) | CMR4 + SRR/OR |
 | `display` | `monitors` (physical modes, as `rea_launcher::display::Monitor`), `displays` (+ refresh rate, `\\.\DISPLAYn` device, adapter name), `adapters` (GPU names, attached/primary), `screen_size`, `mode_supported`, `wine_dpi_scale` (Wine only; 1.0 and untouched DPI awareness on Windows) | CMR4 + SCR + SRR + OR |
-| `gpu` | `prefer_fast_gpu` (`GpuPreference=2;`), `prefer_glx` (Wine `UseEGL=N`) | all four |
+| `gpu` | `prefer_fast_gpu` (`GpuPreference=2;`), `prefer_glx` (Wine `UseEGL=N`), `prefer_glx_or_restart(Option<Guard>)` → `Glx::{Ready { instance, warning }, Restarted { exit_code }}` (runs the launcher again once when it had to write `UseEGL`; `GLX_RESTARTED_ENV`, pure `needs_restart`) | all four + CMR2005 |
 | `dialog` | `message`, `pick_folder`, `open_url` | all four |
 | `report` | `audience(Run { command, no_window, settings_only, linux })` → `Audience { command, interactive }` and `.mode()` (who is watching; pure `Audience::of(run, wine)`, `Run::from_args(args, extra_commands)`, `COMMAND_FLAGS`); `fatal`/`note(title, text, Mode::{Command, Play})`: print and/or dialog by the rule below; `route`, `route_here`, `Terminal` | CMR3/CMR4/DiRT regression, CMR1 `audience.rs` |
 | `console` | `attach_parent()` (attach to the starting terminal's console and point stdout/stderr at it, keeping redirections), `stdout_usable()`, `output(attached, usable, interactive)` → Terminal / Dialog / Nowhere | new |
@@ -197,3 +197,12 @@ What changes for a launcher moving to this version of the crate.
   5; CMR4 exits 1 for a refused second start and CMR2005 0 — moving to the
   helper makes them 5 (tell the Linux helper: 5 means "another launcher
   holds this prefix").
+- **`gpu::prefer_glx_or_restart`** — before the settings window, under
+  Wine, replace `gpu::prefer_glx()` (and CMR2005's own re-exec) with
+  `match gpu::prefer_glx_or_restart(guard) { Glx::Restarted { exit_code }
+  => exit(exit_code), Glx::Ready { instance, warning } => … }`. On a
+  fresh prefix the first start used to open the window through EGL
+  (software, or no window at all on NVIDIA without egl-x11) until the next
+  start; now it runs again at once. Verify: delete `UseEGL` from
+  `HKCU\Software\Wine\X11 Driver` in a test prefix and start the window:
+  `launcher.log` shows two starts and the window draws.
