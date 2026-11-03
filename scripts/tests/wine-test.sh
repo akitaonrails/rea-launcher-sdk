@@ -111,7 +111,7 @@ FAIL ini::trims_keys
 FAIL abi::two" "$(grep '^FAIL' "$T/out")"
 
 # The locale is C.UTF-8 whatever the caller's.
-(cd "$T/ws" && FAKE_MODE=pass LANG= LC_ALL=POSIX sh "$WT" --workspace >/dev/null 2>&1)
+(cd "$T/ws" && FAKE_MODE=pass LANG='' LC_ALL=POSIX sh "$WT" --workspace >/dev/null 2>&1)
 grep -qx 'lang=C.UTF-8 lc_all=C.UTF-8' "$T/record" && ok "LANG and LC_ALL are C.UTF-8" || bad "locale: $(grep lang "$T/record")"
 
 # Host-only crates opt out with [package.metadata.rea] wine-test = false.
