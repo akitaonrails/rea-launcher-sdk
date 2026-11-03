@@ -5,7 +5,7 @@ look with each game's colours, art and tabs left to the launcher.
 
 | Module | What |
 |---|---|
-| `theme` | `Palette` (colour roles: base, panel, line, ink, muted, action, select, error, disabled, focus, selection; `tint` for a const translucent colour), `Metrics` (sizes and style choices, below), `install`/`install_with`, `palette`/`metrics`, `contrast`, `contrast_problems(&Palette, &Metrics)` / `Palette::pairs`, Barlow fonts (`body`, `semibold`, `condensed`, `decal`) |
+| `theme` | `Palette` (colour roles: base, panel, line, ink, muted, action, select, error, disabled, focus, selection; `tint` for a const translucent colour), `Metrics` (sizes and style choices, below), `install`/`install_with`, `visuals` (the egui style: dark, or light with palette-filled widgets when `Palette::is_light`), `palette`/`metrics`, `contrast`, `contrast_problems(&Palette, &Metrics)` / `Palette::pairs`, Barlow fonts (`body`, `semibold`, `condensed`, `decal`) |
 | `widgets` | `chips`/`chips_with`/`chips_sized` (disabled reasons, `ChipSize::Compact`, one focus stop stepped with ←/→), `toggle`, `look_card` + `fit_title`, `game_card`, `outline_button`, `primary_button`, `progress_bar`, `folder_field`, `heading`/`field`/`note`/`error_note`, `heading_focused`/`field_focused`/`focus_bar` (SCR's row focus), `tabs_bar`, `play_plate`/`footer`, `tab_body`, `gradient`, `stripes`, `decode_jpeg`/`load_jpeg`/`hero_image`/`photo_caption`, `name_control` |
 | `window` | `WindowFit` (final size at creation under Wine with Wine's DPI divided out; opt-in `with_native_fit` DPI fit + recentre off Wine; `screen()` in pixels), `window_zoom`, `creation_zoom`, `SIZE`, `Layout` |
 | `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_row_with(…, RowOptions { disabled, steps })` / `spec_path_row(…, pick)` (an `unset_label` option adds an "As the game" chip): one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
@@ -54,6 +54,19 @@ lightening of `line` (towards white) that passes:
 | SCR | `#283e6b` | 1.70 / 1.46 | `#5d6e90` |
 | SRR | `#1f4a84` | 1.95 / 1.62 | `#5475a1` |
 | OR | `#3d3430` | 1.61 / 1.40 | `#6d6663` |
+
+### Light palettes
+
+A palette whose `base` is light (`Palette::is_light`: black contrasts with
+it more than white, as CMR2005's white menu band) gets egui's light style,
+and egui's own widgets — sliders, number boxes, egui buttons, combo
+boxes, tooltips — are filled from the palette: `panel` at rest, `panel`
+tinted 6 % towards `ink` when hovered or open and 12 % when pressed, `ink`
+strokes and links (`theme::visuals`). `contrast_problems` checks `ink` on
+every one of those fills, in every state, and the link colour on `base`.
+Before v0.4.0 every palette started from egui's dark style, so a light
+palette's dark text sat on dark-grey widgets (1.5:1) and the check could
+not see it. Dark palettes keep egui's dark fills.
 
 Text sizes: body text (labels, notes, chips, buttons) is at least 13 pt
 and nothing is under 11 pt (`theme::size`, `Metrics::text_sizes`); keep
@@ -184,3 +197,17 @@ It depends on the portable `rea-launcher` crate (for `pad`), not on
 `rea-launcher-win32`: the folder picker is a
 closure passed to `folder_field`, and the pad reads a plain XInput button
 mask, so SCR's native Linux build can feed it from `/dev/input/js*`.
+
+## Migration
+
+What changes for a launcher when it moves to a new version of this crate.
+Behaviour not listed is the same.
+
+### v0.4.0
+
+- **Light palettes** (CMR2005): `theme::install`/`set_palette` now give
+  egui's own widgets light, palette-filled backgrounds and set egui's
+  light theme. Delete a local fix such as CMR2005's
+  `palette::light_widgets` (and its call after `install_with`); keep the
+  palette test, which now also checks those fills. Dark palettes: no
+  change.

@@ -200,6 +200,13 @@ pub struct Pair {
 }
 
 impl Palette {
+    /// Whether `base` is light (dark text on a light page, as CMR2005's
+    /// white menu band): black contrasts with it more than white does.
+    /// [`visuals`] then starts from egui's light style.
+    pub fn is_light(&self) -> bool {
+        contrast(self.base, Color32::BLACK) > contrast(self.base, Color32::WHITE)
+    }
+
     /// Every foreground/background pair the widgets draw with this palette
     /// (whatever the metrics). WCAG AA: 4.5:1 for body text, 3:1 for large
     /// text (card titles) and for non-text marks (focus ring, Play plate,
@@ -212,7 +219,7 @@ impl Palette {
             bg,
             least,
         };
-        vec![
+        let mut pairs = vec![
             pair("ink on base", self.ink, self.base, 4.5),
             pair(
                 "ink on panel (fields, selected card, hovered chip or button)",
@@ -274,7 +281,21 @@ impl Palette {
             ),
             pair("focus on panel (ring)", self.focus, self.panel, 3.0),
             pair("disabled_ink on base", self.disabled_ink, self.base, 2.0),
-        ]
+        ];
+        // egui's own widgets (sliders, number boxes, combo boxes,
+        // tooltips) in every state, with the fills `visuals` gives them.
+        pairs.extend(
+            egui_fills(self)
+                .into_iter()
+                .map(|(name, fill)| pair(name, self.ink, fill, 4.5)),
+        );
+        pairs.push(pair(
+            "hyperlink on base",
+            visuals(self).hyperlink_color,
+            self.base,
+            4.5,
+        ));
+        pairs
     }
 
     /// The [`Palette::pairs`] below their contrast; see also
@@ -462,9 +483,9 @@ fn metrics_id() -> Id {
     Id::unique("rea-launcher-ui metrics")
 }
 
-/// Installs the fonts, a dark style in `palette`'s colours (whatever the
-/// system theme), and the palette itself for the widgets to read, with the
-/// default [`Metrics`]. Call once, from eframe's creation closure.
+/// Installs the fonts, a style in `palette`'s colours ([`visuals`]: dark
+/// or light by the palette's base, whatever the system theme), and the
+/// palette itself for the widgets to read, with the default [`Metrics`]. Call once, from eframe's creation closure.
 pub fn install(ctx: &egui::Context, palette: &Palette) {
     install_with(ctx, palette, &Metrics::DEFAULT);
 }
@@ -488,34 +509,120 @@ pub fn metrics(ctx: &egui::Context) -> Metrics {
 }
 
 /// Restyles and stores `palette` without touching fonts (a palette that
-/// follows the chosen game, as in SCR).
+/// follows the chosen game, as in SCR). The egui style is [`visuals`].
 pub fn set_palette(ctx: &egui::Context, palette: &Palette) {
     ctx.data_mut(|data| data.insert_temp(palette_id(), *palette));
-    ctx.set_theme(egui::Theme::Dark);
-    let p = *palette;
+    ctx.set_theme(if palette.is_light() {
+        egui::Theme::Light
+    } else {
+        egui::Theme::Dark
+    });
+    let visuals = visuals(palette);
     ctx.all_styles_mut(move |style| {
-        let v = &mut style.visuals;
-        *v = egui::Visuals::dark();
-        v.panel_fill = p.base;
-        v.extreme_bg_color = p.panel;
-        v.text_edit_bg_color = Some(p.panel);
-        v.override_text_color = Some(p.ink);
-        v.selection.bg_fill = p.selection;
-        v.selection.stroke = Stroke::new(1.0, p.select);
-        v.text_cursor.stroke = Stroke::new(2.0, p.select);
-        for widget in [
-            &mut v.widgets.inactive,
-            &mut v.widgets.hovered,
-            &mut v.widgets.active,
-            &mut v.widgets.open,
-        ] {
-            widget.bg_stroke = Stroke::new(1.0, p.line);
-            widget.corner_radius = CornerRadius::same(6);
-        }
-        v.widgets.hovered.bg_stroke = Stroke::new(1.0, p.muted);
-        v.widgets.active.bg_stroke = Stroke::new(1.0, p.action);
+        style.visuals = visuals.clone();
         style.spacing.item_spacing = vec2(8.0, 8.0);
     });
+}
+
+/// How much of `ink` a light palette's hovered (and open) egui widget
+/// mixes into `panel`; pressed widgets mix twice as much.
+const LIGHT_HOVER_INK: f32 = 0.06;
+
+/// `a` moved `t` (0–1) of the way to `b`, per channel (opaque colours).
+fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let channel = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8;
+    Color32::from_rgb(
+        channel(a.r(), b.r()),
+        channel(a.g(), b.g()),
+        channel(a.b(), b.b()),
+    )
+}
+
+/// The egui style [`set_palette`] installs for `palette`.
+///
+/// A dark base (see [`Palette::is_light`]) starts from egui's dark visuals
+/// and keeps their grey widget fills (the five dark launchers' look). A
+/// light base starts from egui's light visuals and fills egui's own widgets
+/// (sliders, number boxes, egui buttons, combo boxes, tooltips) from the
+/// palette: `panel` at rest, `panel` tinted towards `ink` when hovered or
+/// pressed, `ink` strokes and links. Before v0.4.0 every palette got the
+/// dark fills, so a light palette's dark text sat on dark grey (1.5:1);
+/// [`Palette::pairs`] now checks `ink` on every fill this returns.
+pub fn visuals(palette: &Palette) -> egui::Visuals {
+    let p = *palette;
+    let mut v = if p.is_light() {
+        let mut v = egui::Visuals::light();
+        let hover = mix(p.panel, p.ink, LIGHT_HOVER_INK);
+        let pressed = mix(p.panel, p.ink, 2.0 * LIGHT_HOVER_INK);
+        let w = &mut v.widgets;
+        for (widget, fill) in [
+            (&mut w.noninteractive, p.panel),
+            (&mut w.inactive, p.panel),
+            (&mut w.hovered, hover),
+            (&mut w.active, pressed),
+            (&mut w.open, hover),
+        ] {
+            widget.bg_fill = fill;
+            widget.weak_bg_fill = fill;
+            widget.fg_stroke.color = p.ink;
+        }
+        v.faint_bg_color = p.panel;
+        v.window_fill = p.base;
+        v.window_stroke = Stroke::new(1.0, p.line);
+        v.hyperlink_color = p.ink;
+        v.error_fg_color = p.error;
+        v
+    } else {
+        egui::Visuals::dark()
+    };
+    v.panel_fill = p.base;
+    v.extreme_bg_color = p.panel;
+    v.text_edit_bg_color = Some(p.panel);
+    v.override_text_color = Some(p.ink);
+    v.selection.bg_fill = p.selection;
+    v.selection.stroke = Stroke::new(1.0, p.select);
+    v.text_cursor.stroke = Stroke::new(2.0, p.select);
+    for widget in [
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        widget.bg_stroke = Stroke::new(1.0, p.line);
+        widget.corner_radius = CornerRadius::same(6);
+    }
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, p.muted);
+    v.widgets.active.bg_stroke = Stroke::new(1.0, p.action);
+    v
+}
+
+/// Every fill egui's own widgets draw text on with `palette`'s
+/// [`visuals`], named by state (equal fills listed once).
+fn egui_fills(palette: &Palette) -> Vec<(&'static str, Color32)> {
+    let v = visuals(palette);
+    let w = &v.widgets;
+    let mut fills: Vec<(&'static str, Color32)> = Vec::new();
+    for (name, fill) in [
+        ("ink on an egui widget at rest", w.inactive.weak_bg_fill),
+        ("ink on an egui widget at rest", w.inactive.bg_fill),
+        ("ink on a hovered egui widget", w.hovered.weak_bg_fill),
+        ("ink on a hovered egui widget", w.hovered.bg_fill),
+        ("ink on a pressed egui widget", w.active.weak_bg_fill),
+        ("ink on a pressed egui widget", w.active.bg_fill),
+        (
+            "ink on an open egui widget (combo box)",
+            w.open.weak_bg_fill,
+        ),
+        ("ink on an open egui widget (combo box)", w.open.bg_fill),
+        ("ink on egui's frames", w.noninteractive.bg_fill),
+        ("ink on egui's frames", w.noninteractive.weak_bg_fill),
+        ("ink on a tooltip or popup", v.window_fill),
+    ] {
+        if !fills.iter().any(|&(_, seen)| seen == fill) {
+            fills.push((name, fill));
+        }
+    }
+    fills
 }
 
 /// The installed palette ([`Palette::default`] before [`install`]).
@@ -624,6 +731,25 @@ pub(crate) mod tests {
         selection: tint(rgb(0xff7a00), 128),
     };
 
+    /// CMR2005's light palette (white menu band, warm-black ink).
+    pub(crate) const CMR2005: Palette = Palette {
+        base: rgb(0xfbfaf8),
+        panel: rgb(0xece7e2),
+        line: rgb(0x8a7c72),
+        ink: rgb(0x1c1612),
+        muted: rgb(0x66574d),
+        action: rgb(0xc4122e),
+        action_hover: rgb(0xa30d24),
+        on_action: Color32::WHITE,
+        select: rgb(0x3d2f26),
+        on_select: Color32::WHITE,
+        error: rgb(0x9e1b14),
+        disabled_ink: rgb(0x8f847c),
+        disabled_line: rgb(0xd6cfc8),
+        focus: rgb(0x3d2f26),
+        selection: tint(rgb(0xc4122e), 64),
+    };
+
     /// Each launcher's metrics, as its local widgets drew (see the README).
     pub(crate) const CMR3_METRICS: Metrics = Metrics {
         card: CardMetrics {
@@ -697,6 +823,91 @@ pub(crate) mod tests {
             );
         }
         assert_eq!(Palette::default().contrast_problems(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_light_palette_gets_light_egui_widgets() {
+        // v0.3.3 started every palette from egui's dark visuals: CMR2005's
+        // warm-black ink sat on dark-grey sliders and buttons (~1.5:1), and
+        // the contrast check could not see it.
+        assert!(CMR2005.is_light());
+        for dark in [CMR3, CMR4, SCR, SRR, OR, Palette::default()] {
+            assert!(!dark.is_light(), "{dark:?}");
+        }
+        let ctx = egui::Context::default();
+        install(&ctx, &CMR2005);
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let style = ctx.style_of(theme);
+            let w = &style.visuals.widgets;
+            assert!(!style.visuals.dark_mode);
+            for (state, widget) in [
+                ("rest", &w.inactive),
+                ("hovered", &w.hovered),
+                ("pressed", &w.active),
+                ("open", &w.open),
+                ("frame", &w.noninteractive),
+            ] {
+                for fill in [widget.bg_fill, widget.weak_bg_fill] {
+                    let ratio = contrast(CMR2005.ink, fill);
+                    assert!(ratio >= 4.5, "{state}: ink on {fill:?} is {ratio:.2}:1");
+                }
+                assert_eq!(widget.fg_stroke.color, CMR2005.ink, "{state}");
+            }
+            // Hover and press are visible against the resting fill.
+            assert_ne!(w.hovered.bg_fill, w.inactive.bg_fill);
+            assert_ne!(w.active.bg_fill, w.hovered.bg_fill);
+        }
+        assert_eq!(
+            contrast_problems(&CMR2005, &Metrics::DEFAULT),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn the_check_sees_every_fill_egui_draws_text_on() {
+        for palette in [CMR2005, CMR4, OR] {
+            let pairs = palette.pairs();
+            let v = visuals(&palette);
+            let w = &v.widgets;
+            for fill in [
+                w.inactive.bg_fill,
+                w.inactive.weak_bg_fill,
+                w.hovered.bg_fill,
+                w.hovered.weak_bg_fill,
+                w.active.bg_fill,
+                w.active.weak_bg_fill,
+                w.open.bg_fill,
+                w.open.weak_bg_fill,
+                w.noninteractive.bg_fill,
+                v.window_fill,
+            ] {
+                assert!(
+                    pairs.iter().any(|p| p.fg == palette.ink && p.bg == fill),
+                    "ink on {fill:?} is not checked"
+                );
+            }
+        }
+        // A light palette whose panel is too dark for its ink is caught on
+        // the widget fills, not only on the cards.
+        let murky = Palette {
+            panel: rgb(0x6a625c),
+            ..CMR2005
+        };
+        let problems = murky.contrast_problems();
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.starts_with("ink on an egui widget at rest")),
+            "{problems:?}"
+        );
+        // Dark palettes keep egui's dark fills (their look is unchanged).
+        let dark = visuals(&CMR4);
+        assert_eq!(
+            dark.widgets.inactive.bg_fill,
+            egui::Visuals::dark().widgets.inactive.bg_fill
+        );
+        assert!(dark.dark_mode);
     }
 
     #[test]
