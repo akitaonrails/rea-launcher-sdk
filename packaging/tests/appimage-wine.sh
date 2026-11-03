@@ -36,9 +36,16 @@ wine file://$T/src/wine-11.20-amd64-wow64.tar.xz $(sha "$T/src/wine-11.20-amd64-
 appimagetool file://$T/src/appimagetool $(sha "$T/src/appimagetool")
 appimage-runtime file://$T/src/runtime-x86_64 $(sha "$T/src/runtime-x86_64")
 EOF
-sed "s|^wine .*|wine file://$T/src/wine-11.21-amd64-wow64.tar.xz $(sha "$T/src/wine-11.20-amd64-wow64.tar.xz")|" \
+# Another Wine (its archive's folder says 11.21), and the 11.20 archive
+# under a name without a version (an offline file:// copy named by its
+# checksum): the archive decides.
+mkdir -p "$T/src/o" && cp -R "$W" "$T/src/o/wine-11.21-amd64-wow64"
+(cd "$T/src/o" && tar -cJf "$T/src/wine-11.21-amd64-wow64.tar.xz" wine-11.21-amd64-wow64)
+sed "s|^wine .*|wine file://$T/src/wine-11.21-amd64-wow64.tar.xz $(sha "$T/src/wine-11.21-amd64-wow64.tar.xz")|" \
   "$T/tools.pins" > "$T/other-wine.pins"
-cp "$T/src/wine-11.20-amd64-wow64.tar.xz" "$T/src/wine-11.21-amd64-wow64.tar.xz"
+WSHA=$(sha "$T/src/wine-11.20-amd64-wow64.tar.xz")
+cp "$T/src/wine-11.20-amd64-wow64.tar.xz" "$T/src/$WSHA"
+sed "s|^wine .*|wine file://$T/src/$WSHA $WSHA|" "$T/tools.pins" > "$T/sha-named.pins"
 export T_LOG="$T/tool.log" REA_CACHE="$T/cache"
 
 # A Wine launcher's unpacked package (CMR3-like: thirdparty/ payload).
@@ -190,6 +197,15 @@ refuse "wrong argument count" "appimage-wine.sh" $COMMON "$P"
 refuse "payload listed twice" "listed twice" $COMMON --payload thirdparty --payload thirdparty "$P" "$T/o"
 refuse "SOURCE.txt must match the Wine pin" "does not describe Wine 11.21" --app game --exe GameLauncher.exe --pins "$T/other-wine.pins" --icon "$T/game-launcher.png" --title G "$P" "$T/o"
 }
+if run --app game --exe GameLauncher.exe --pins "$T/sha-named.pins" --icon "$T/game-launcher.png" --title G "$P" "$T/o-sha"; then
+  ok "a Wine pin named by its checksum builds (the version comes from the archive)"
+else bad "checksum-named Wine pin: $(cat "$T/out")"; fi
+rm -rf "$T/o-sha"
+# Offline: everything from file:// pins, never the network.
+if REA_NO_FETCH=1 run --app game --exe GameLauncher.exe --pins "$T/tools.pins" --icon "$T/game-launcher.png" --title G "$P" "$T/o-off"; then
+  ok "offline (REA_NO_FETCH=1) with file:// pins builds"
+else bad "offline build: $(cat "$T/out")"; fi
+rm -rf "$T/o-off"
 printf 'png' > "$T/other.png"
 refuse "desktop Icon must match the icon" "needs Icon=other" --app game --exe GameLauncher.exe --icon "$T/other.png" --desktop "$T/native.desktop" "$P" "$T/o"
 mv "$T/src/appimagetool" "$T/src/appimagetool.off"; rm -rf "$REA_CACHE"

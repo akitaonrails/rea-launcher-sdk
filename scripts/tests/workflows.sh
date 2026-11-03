@@ -83,7 +83,7 @@ S=$(step mirror.yml "Fetch and verify every mirrorable pin") || exit 1
 S2=$(step mirror.yml "Upload to the mirror release") || exit 1
 mirror_env() { export PINS=pins.txt TAG=thirdparty SDK_DIR=sdk RUNNER_TEMP="$M/rt" GITHUB_REPOSITORY=me/game GH_LOG="$M/gh.log" PATH="$M/bin:$PATH"; }
 if (cd "$M/repo" && mirror_env && sh -e "$S") >"$T/out" 2>&1; then ok "mirror: fetch step passes"; else bad "mirror: fetch step: $(cat "$T/out")"; fi
-[ "$(ls "$M/rt/mirror" | LC_ALL=C sort | tr '\n' ' ')" = "Xidi-v4.3.1.zip dxvk.tar.gz " ] && ok "mirror: only marked pins, under the pin's file name" || bad "mirror: files: $(ls "$M/rt/mirror")"
+[ "$(ls "$M/rt/mirror/thirdparty" | LC_ALL=C sort | tr '\n' ' ')" = "Xidi-v4.3.1.zip dxvk.tar.gz " ] && ok "mirror: only marked pins, under the pin's file name" || bad "mirror: files: $(ls "$M/rt/mirror/thirdparty")"
 grep -q 'warning.*dxvk: add the mirror url as a fallback: https://github.com/me/game/releases/download/thirdparty/dxvk.tar.gz' "$T/out" \
   && ok "mirror: warns when a pin lacks its mirror url" || bad "mirror: missing-fallback warning"
 if grep -q 'xidi: add the mirror url' "$T/out"; then bad "mirror: no warning when the fallback is listed"; else ok "mirror: no warning when the fallback is listed"; fi
@@ -91,8 +91,8 @@ if (cd "$M/repo" && mirror_env && sh -e "$S2") >"$T/out" 2>&1; then ok "mirror: 
 grep -q '^gh release create thirdparty --repo me/game --latest=false' "$M/gh.log" && ok "mirror: creates the missing release, not as latest" || bad "mirror: create: $(cat "$M/gh.log")"
 up=$(grep '^gh release upload thirdparty ' "$M/gh.log")
 case $up in *" --repo me/game --clobber") ;; *) up='' ;; esac
-case $up in *"$M/rt/mirror/Xidi-v4.3.1.zip"*) ;; *) up='' ;; esac
-case $up in *"$M/rt/mirror/dxvk.tar.gz"*) ;; *) up='' ;; esac
+case $up in *"$M/rt/mirror/thirdparty/Xidi-v4.3.1.zip"*) ;; *) up='' ;; esac
+case $up in *"$M/rt/mirror/thirdparty/dxvk.tar.gz"*) ;; *) up='' ;; esac
 [ -n "$up" ] && ok "mirror: uploads with --clobber" || bad "mirror: upload: $(cat "$M/gh.log")"
 : > "$M/gh.log"
 (cd "$M/repo" && mirror_env && GH_HAS_RELEASE=1 && export GH_HAS_RELEASE && sh -e "$S2") >/dev/null 2>&1
@@ -112,11 +112,11 @@ echo dgv > "$M/up/dgVoodoo2_80.zip"
 echo "dgvoodoo file://$M/up/dgVoodoo2_80.zip $(sha "$M/up/dgVoodoo2_80.zip") hosted" >> "$M/repo/pins.txt"
 rm -rf "$M/rt/mirror"
 (cd "$M/repo" && mirror_env && sh -e "$S") >"$T/out" 2>&1
-[ ! -e "$M/rt/mirror/dgVoodoo2_80.zip" ] && grep -q 'dgvoodoo is marked hosted (no licence): skipped' "$T/out" \
+[ ! -e "$M/rt/mirror/thirdparty/dgVoodoo2_80.zip" ] && grep -q 'dgvoodoo is marked hosted (no licence): skipped' "$T/out" \
   && ok "mirror: hosted pin skipped without include-hosted" || bad "mirror: hosted skip: $(cat "$T/out")"
 rm -rf "$M/rt/mirror"
 if (cd "$M/repo" && mirror_env && INCLUDE_HOSTED=true && export INCLUDE_HOSTED && sh -e "$S") >"$T/out" 2>&1 \
-  && [ -f "$M/rt/mirror/dgVoodoo2_80.zip" ]; then ok "mirror: hosted pin uploaded with include-hosted"; else bad "mirror: include-hosted: $(cat "$T/out")"; fi
+  && [ -f "$M/rt/mirror/thirdparty/dgVoodoo2_80.zip" ]; then ok "mirror: hosted pin uploaded with include-hosted"; else bad "mirror: include-hosted: $(cat "$T/out")"; fi
 grep -q "hosted by the owner's decision" "$T/out" && ok "mirror: hosted upload is announced" || bad "mirror: hosted notice"
 # One-pin-per-file folders (OutRun's packaging/<name>.txt), alone, as a
 # glob, and mixed with a pin file; unmarked and malformed files are skipped.
@@ -128,13 +128,26 @@ printf 'https://example.com/hd.zip %s 325966152 3168683238\n' "$(sha "$M/up/hd.z
 for pins in pd 'pd/*.txt' 'pd/vcredist.txt'; do
   rm -rf "$M/rt/mirror"
   if (cd "$M/repo" && mirror_env && PINS=$pins && export PINS && sh -e "$S") >"$T/out" 2>&1 \
-    && [ "$(ls "$M/rt/mirror")" = vc_redist.x86.exe ]; then ok "mirror: pins '$pins' (one pin per file)"; else bad "mirror: pins '$pins': $(ls "$M/rt/mirror" 2>&1) $(cat "$T/out")"; fi
+    && [ "$(ls "$M/rt/mirror/thirdparty")" = vc_redist.x86.exe ]; then ok "mirror: pins '$pins' (one pin per file)"; else bad "mirror: pins '$pins': $(ls "$M/rt/mirror/thirdparty" 2>&1) $(cat "$T/out")"; fi
 done
 rm -rf "$M/rt/mirror"
 (cd "$M/repo" && mirror_env && PINS='pins.txt pd' && export PINS && sh -e "$S") >"$T/out" 2>&1
-[ "$(ls "$M/rt/mirror" | LC_ALL=C sort | tr '\n' ' ')" = "Xidi-v4.3.1.zip dxvk.tar.gz vc_redist.x86.exe " ] \
-  && ok "mirror: a pin file and a folder together" || bad "mirror: mixed: $(ls "$M/rt/mirror")"
+[ "$(ls "$M/rt/mirror/thirdparty" | LC_ALL=C sort | tr '\n' ' ')" = "Xidi-v4.3.1.zip dxvk.tar.gz vc_redist.x86.exe " ] \
+  && ok "mirror: a pin file and a folder together" || bad "mirror: mixed: $(ls "$M/rt/mirror/thirdparty")"
 if (cd "$M/repo" && mirror_env && PINS=nowhere && export PINS && sh -e "$S") >"$T/out" 2>&1; then bad "mirror: a missing source fails"; else grep -q 'no pin file or folder nowhere' "$T/out" && ok "mirror: a missing source fails" || bad "mirror: missing: $(cat "$T/out")"; fi
+
+# A pin's own tag= release (CMR1's HD pack in hd-pack-2): its own folder,
+# its own release, the fallback check against that release's url.
+echo pack > "$M/up/hd-pack-2.zip"
+printf 'hdpack file://%s %s mirror tag=hd-pack-2 https://github.com/me/game/releases/download/hd-pack-2/hd-pack-2.zip\n' "$M/up/hd-pack-2.zip" "$(sha "$M/up/hd-pack-2.zip")" > "$M/repo/tagged.txt"
+rm -rf "$M/rt/mirror"; : > "$M/gh.log"
+(cd "$M/repo" && mirror_env && PINS='pins.txt tagged.txt' && export PINS && sh -e "$S") >"$T/out" 2>&1
+[ -f "$M/rt/mirror/hd-pack-2/hd-pack-2.zip" ] && [ -f "$M/rt/mirror/thirdparty/dxvk.tar.gz" ] \
+  && ok "mirror: tag= pins go to their own release folder" || bad "mirror: tag=: $(ls -R "$M/rt/mirror") $(cat "$T/out")"
+if grep -q 'hdpack: add the mirror url' "$T/out"; then bad "mirror: tag= fallback url recognised"; else ok "mirror: tag= fallback url recognised"; fi
+(cd "$M/repo" && mirror_env && sh -e "$S2") >/dev/null 2>&1
+grep -q '^gh release create hd-pack-2 ' "$M/gh.log" && grep -q "^gh release upload hd-pack-2 $M/rt/mirror/hd-pack-2/hd-pack-2.zip --repo me/game --clobber" "$M/gh.log" \
+  && grep -q '^gh release upload thirdparty ' "$M/gh.log" && ok "mirror: one release per tag" || bad "mirror: per-tag upload: $(cat "$M/gh.log")"
 
 # compat.yml: the launcher's own cargo config is kept, the SDK crates that
 # exist are patched in, sdk/ is re-vendored, a second patch is refused.

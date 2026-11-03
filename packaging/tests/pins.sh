@@ -132,6 +132,52 @@ https://github.com/me/game/releases/download/thirdparty/dgVoodoo2_80.zip" "$(pin
 )
 . "$T/sub"
 
+# Per-pin mirror release: tag=RELEASE (CMR1's HD pack in hd-pack-2).
+cat > "$T/tpins" <<EOF
+hdpack https://example.com/hd-pack-2.zip $GOOD hosted tag=hd-pack-2
+plain2 https://example.com/p.zip $GOOD mirror
+twotags https://example.com/x.zip $GOOD tag=a tag=b
+badtag https://example.com/x.zip $GOOD tag=a/b
+emptytag https://example.com/x.zip $GOOD tag=
+EOF
+(
+  PIN_FILE=$T/tpins PIN_DIR='' GITHUB_REPOSITORY=me/game
+  check "pin_tag" "hd-pack-2" "$(pin_tag hdpack)"
+  check "pin_tag: none" "" "$(pin_tag plain2)"
+  check "tag= is not a url" "https://example.com/hd-pack-2.zip" "$(pin_urls hdpack)"
+  check "the mirror url uses the pin's own release" "https://github.com/me/game/releases/download/hd-pack-2/hd-pack-2.zip" "$(pin_mirror_url hdpack)"
+  check "...over PIN_MIRROR_TAG (mirror.yml's default)" "https://github.com/me/game/releases/download/hd-pack-2/hd-pack-2.zip" "$(PIN_MIRROR_TAG=thirdparty pin_mirror_url hdpack)"
+  check "an explicit tag still wins" "https://github.com/me/game/releases/download/x/hd-pack-2.zip" "$(pin_mirror_url hdpack me/game x)"
+  check "no tag=: PIN_MIRROR_TAG, else thirdparty" "https://github.com/me/game/releases/download/thirdparty/p.zip" "$(pin_mirror_url plain2)"
+  pin_hosted hdpack && ok "tag= keeps the hosted mark" || bad "tag= keeps the hosted mark"
+  for b in twotags badtag emptytag; do
+    if pin_sha "$b" 2>/dev/null; then bad "malformed tag= refused ($b)"; else ok "malformed tag= refused ($b)"; fi
+  done
+  echo "fails=$fails" > "$T/sub"
+)
+. "$T/sub"
+
+# Offline (REA_NO_FETCH=1): never the network; the cache and file:// urls
+# still work.
+mkdir -p "$T/fakebin"
+printf '#!/bin/sh\nfor a; do case $a in http*) echo "$a" >> "%s/net.log" ;; esac; done\nexec %s "$@"\n' "$T" "$(command -v curl)" > "$T/fakebin/curl"
+chmod +x "$T/fakebin/curl"
+cat > "$T/opins" <<EOF
+net https://example.invalid/tool.tar.gz $GOOD
+mixed https://example.invalid/tool.tar.gz $GOOD file://$T/mirror/tool-mirror.tar.gz
+EOF
+(
+  PATH=$T/fakebin:$PATH PIN_FILE=$T/opins PIN_DIR='' REA_NO_FETCH=1 PIN_CACHE=$T/ocache
+  if f=$(pin_fetch net "$T/odl" 2>"$T/olog"); then bad "offline: a network-only pin fails"; else ok "offline: a network-only pin fails"; fi
+  grep -q 'offline (REA_NO_FETCH=1): net is not in' "$T/olog" && ok "offline: says why" || bad "offline message: $(cat "$T/olog")"
+  f=$(pin_fetch mixed "$T/odl" 2>/dev/null) && check "offline: a file:// fallback works" "real payload" "$(cat "$f")" || bad "offline: file:// fallback"
+  rm -rf "$T/odl"
+  f=$(pin_fetch net "$T/odl" 2>/dev/null) && ok "offline: the cache works (mixed filled it)" || bad "offline: from the cache"
+  [ -e "$T/net.log" ] && bad "offline: the network was used: $(cat "$T/net.log")" || ok "offline: never the network"
+  echo "fails=$fails" > "$T/sub"
+)
+. "$T/sub"
+
 # The SDK's own tool pins parse.
 PIN_FILE=$HERE/../appimage/tools.pins PIN_DIR=
 for n in wine appimagetool appimage-runtime; do

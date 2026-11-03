@@ -123,6 +123,21 @@ workflow skips `hosted` pins (with a notice) unless the caller sets
 `include-hosted: true`. Set it only once the owner's decision (who decided,
 when, why, the author's terms) is recorded in `THIRD_PARTY.md`.
 
+A pin can name its own mirror release with `tag=RELEASE` (v0.4.0), for a
+file that lives in another release than `thirdparty` (CMR1's HD pack in
+`hd-pack-2`): `pin_mirror_url` and mirror.yml use that release for it.
+
+```text
+hdpack https://example.com/hd-pack-2.zip <sha256> hosted tag=hd-pack-2 https://github.com/akitaonrails/rea-colin-mcrae/releases/download/hd-pack-2/hd-pack-2.zip
+```
+
+**Offline** (`REA_NO_FETCH=1`, v0.4.0): `pin_fetch` takes the file from the
+destination, the cache or a `file://` url only, never the network, and
+names the pin it could not find. A package test sets it so a build that
+would download fails at once instead of reaching out; `appimage-wine.sh`
+builds offline from `file://` pins (it reads the Wine version from the
+archive's own top folder, so a pin named by its checksum works).
+
 ## AppImage
 
 ```sh
