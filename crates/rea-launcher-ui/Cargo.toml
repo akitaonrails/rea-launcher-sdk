@@ -26,3 +26,5 @@ testing = ["dep:egui_kittest"]
 # native Linux launcher). Windows builds are unaffected.
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { workspace = true, features = ["x11", "wayland"] }
+# `pad::joystick`: O_NONBLOCK for /dev/input/js* (already in the tree via winit).
+libc = "0.2"

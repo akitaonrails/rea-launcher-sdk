@@ -11,7 +11,7 @@ look with each game's colours, art and tabs left to the launcher.
 | `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_row_with(…, RowOptions { disabled, steps })` / `spec_path_row(…, pick)` (an `unset_label` option adds an "As the game" chip): one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
 | `download` | `download_row(ui, &Download { label, size, state })` → `Option<DownloadAction>` (Start / Cancel / Remove); `DownloadState` (Missing{partial}, Connecting, Downloading{done,total,rate}, Verifying, Unpacking, Installed, Failed(msg)), `DownloadState::from_phase(Option<&Phase>, installed, partial)` + `with_rate`; `describe`, `size_text`, `time_left` |
 | `testing` (feature) | `harness(&Palette, &Metrics, state, ui)`, `harness_sized(…, size, …)` (scroll with `node.scroll_to_me()` below the fold) on `egui_kittest`, `checked`/`disabled`/`description`/`value`, re-exported `Queryable` |
-| `pad` | `inject` and `key_for`, plus `Nav`/`PadNav` re-exported from `rea_launcher::pad` (edge detection on XInput button masks; the bits are `rea_launcher::pad::DPAD_UP` …). `inject`: d-pad → Tab/Shift+Tab/arrows, A → Space; Start, LB/RB and B come back to the launcher |
+| `pad` | `inject` and `key_for`, plus `Nav`/`PadNav` re-exported from `rea_launcher::pad` (edge detection on XInput button masks; the bits are `rea_launcher::pad::DPAD_UP` …). `inject`: d-pad → Tab/Shift+Tab/arrows, A → Space; Start, LB/RB and B come back to the launcher ; Linux: `pad::joystick::Joysticks` (`new()`, `buttons()` → the XInput mask from every `/dev/input/js*` pad, read without blocking, rescanned every 2 s; `with_scan` for fake devices in tests) |
 
 `eframe` and `egui` are re-exported (`rea_launcher_ui::egui`), so a
 launcher needs no eframe dependency of its own.
@@ -213,7 +213,8 @@ fn show(wine: bool, screen: Option<(u32, u32)>, wine_scale: f32) -> eframe::Resu
 It depends on the portable `rea-launcher` crate (for `pad`), not on
 `rea-launcher-win32`: the folder picker is a
 closure passed to `folder_field`, and the pad reads a plain XInput button
-mask, so SCR's native Linux build can feed it from `/dev/input/js*`.
+mask: on Windows from `rea_launcher_win32::xinput::buttons()`, in a
+native Linux window from `pad::joystick::Joysticks::buttons()`.
 
 ## Migration
 
@@ -242,3 +243,7 @@ Behaviour not listed is the same.
 - **Accessible descriptions**: a disabled spec row's description is
   `description. reason` (it was `description reason`); a look card's
   `note. reason` no longer doubles the full stop.
+- **Native Linux pads** (DiRT Rally): replace the local `jspad` module
+  with `rea_launcher_ui::pad::joystick::Joysticks` (same events, mapping
+  and 2-second rescan); `Pads::buttons()` becomes `Joysticks::buttons()`
+  and the `libc` dependency can go if nothing else uses it.
