@@ -7,6 +7,329 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.4.0] - 2026-11-02
+
+Mistakes the family made, turned into SDK functions a launcher can't get
+wrong and a conformance check (`scripts/launcher-check`) that fails CI when
+a launcher repeats one. Native-Linux launchers get an error window, a
+single-instance lock and pad navigation.
+
+### Migration
+
+- **Who sees a message: `report::audience`** (CMR1, CMR3, CMR4, DiRT,
+  CMR2005, every new launcher). Replace any hand-made `interactive`
+  (`!no_window`, `!linux`, a local `audience.rs`) with
+  `rea_launcher_win32::report::audience(Run { command, no_window,
+  settings_only, linux }).mode()` filled from the parsed flags (or
+  `Run::from_args(&args, &["--controllers"])`), and delete the local copy.
+  What players notice: under Wine (`<id>-play`, the AppImage, Proton) a
+  wrong game folder, an unknown build or "already running" in the game run
+  now shows a dialog instead of looking like a game that never started.
+  `--settings --linux` and `--check --linux` show none (the window or the
+  helper reports). Verify: the launcher's tests call
+  `report::Audience::of` for its helper's command lines.
+- **DLL overrides: only ours are removed** (SRR, DiRT, every launcher
+  calling `wine::app_dll_overrides`). No code change. Values written from
+  v0.4.0 on are recorded under
+  `HKCU\Software\rea-launcher\DllOverrides\<exe>`;
+  `remove_app_dll_overrides` deletes only recorded values. Values written by
+  v0.3.3 have no record: they are now reported in the new
+  `Applied::matching` field and kept when the component is turned off (with
+  the component's DLL gone from the runtime a leftover `native,builtin`
+  falls back to Wine's builtin). Code building an `Applied` literal adds
+  `matching`; log it next to `ours`.
+- **Second start: `instance::AlreadyRunning::second_start`** (SRR, DiRT,
+  CMR4, CMR2005, Screamer). Replace local `instance.rs` `Second`/
+  `SecondStart` and local window lookups with
+  `running.second_start(action, Window::Own(TITLE))`, exit with
+  `exit_code()` (0, or `instance::ALREADY_RUNNING` = 5) and report
+  `message(game)` with the run's audience. Before Play, refuse with
+  `SecondStart::Busy` when `process::find_running(&runtime_exe)` is not
+  empty. CMR4 (1) and CMR2005 (0) change their refused-second-start exit
+  code to 5. A `match` on `instance::Window` needs arms for `Own` and
+  `ClassTitle`.
+- **Fresh prefix, settings window: `gpu::prefer_glx_or_restart`**
+  (CMR2005, the template, every eframe launcher under Wine). Replace
+  `gpu::prefer_glx()` before the window with
+  `match gpu::prefer_glx_or_restart(guard) { Glx::Restarted { exit_code } =>
+  exit(exit_code as i32), Glx::Ready { instance, warning } => … }`.
+- **Close hook `Requests` literal**: has a new field `alt_f4_state`; code
+  building `Requests { … }` adds it. `Config::parse` users: nothing.
+- CMR2005: delete `palette::light_widgets` and its calls; keep the palette
+  test. Dark palettes: no visible change (egui's dark fills kept).
+- Every launcher with a disabled chip row/switch outside spec rows: one
+  more note line under it. OR: its `chip_row`/`bool_row` write
+  `disabled.unwrap_or(row.description)` — now the reason shows twice;
+  pass `row.description` or move to `spec_row_with`. Screamer: its
+  `pad_off_reason` note under a disabled row duplicates too. SRR/CMR3
+  (hover-only reasons) gain the visible note; nothing to change.
+- Disabled switches show the saved value; tests reading `checked` on a
+  disabled switch see it.
+- Disabled look/game cards show the reason instead of the note/subtitle.
+- Stepped rows (`RowOptions::steps`): a saved value between steps gets
+  its own chip; a spec with `unset_label` gets the unset chip first.
+- DiRT Rally: replace `jspad` with `pad::joystick::Joysticks`; route
+  `linux::run`'s errors through `report::fatal` (`Mode::Play
+  { interactive: !no_window }`, the unknown-edition issue form as `link`);
+  `--help`/`--check` with `Mode::Command`.
+- Optional: SRR `option_row`, OR `chip_row`, CMR3 `option_chips` for
+  resolution → `RowOptions::sizes`; CMR3 FOVS + `with_saved` →
+  `steps` + `unset_label`; CMR3 `xidi::note` → `RowOptions::notes`;
+  OR's hand-drawn caption plate → `photo_caption_plated`.
+- Play helper: `--play` / a plain start while the game runs exits 5, not
+  0 (CMR1's and CMR3's `linux/tests/supervision.sh` only compare the
+  output text, so they still pass; a test under `set -e` would not).
+  CMR1: drop the local `rea_wineserver_wait`/`rea_hook_before_settings`
+  override (83dacbb) once its launcher exits 5 (or keep exiting 3: also
+  handled).
+- Launchers with a `*_look_size` hook (CMR1, CMR2005, CMR4, OR) replace it
+  with `REA_LOOK_SIZES` (and drop `look resolution` from REA_HELPER_KEYS
+  if only listed for that).
+- Snapshot tests: replace the local `check()` with `rea_launcher::snapshot!`
+  (or `snapshots!().update_var("<ID>_UPDATE_SNAPSHOTS")`), drop the
+  manual `.replace(env!("CARGO_PKG_VERSION"), "<version>")`. A stored
+  snapshot with the literal version now fails: regenerate it.
+- DiRT Rally: `copy.rs`'s measuring thread → `sync_with_progress` +
+  `ProgressCounter`; native start → `instance::single` and exit
+  `running.exit_code()`.
+- launcher-ci now runs a `secrets` job by default (`secret-scan: false` to
+  opt out); a repo with a false positive adds `.gitleaksignore` or
+  `.gitleaks.toml`.
+- CMR1: mark `cmr-hooks` with `[package.metadata.rea] wine-test = false`
+  and drop `--exclude cmr-hooks` from `wine-test-args` (both work).
+- Hosted pins in a release other than `thirdparty` add `tag=<release>`.
+- Run `sdk/scripts/launcher-check` and fix every error; CI runs it now
+  (`conformance: true`). Rules marked "from v0.4.0" turn from warnings into
+  errors with the bump.
+- Owner-approved DRM exceptions need a waiver line: CMR3 (DRM-free 1.1 via
+  SilentPatch's patcher), Sega Rally Revo (NoDVD build), OutRun 2006
+  (OutRun2006Tweaks' DRM-free exe), DiRT Rally (pre-activated copies):
+  `drm-exception: owner decision <date>, <why> (<where recorded>)`.
+- A native-Linux launcher with two `launcher-ci` jobs passes
+  `conformance: false` to the Windows-tests job (one run is enough).
+
+### Added
+
+- `report::Run`, `report::Audience` (`Audience::of(run, wine)`,
+  `.mode()`), `report::audience(run)` (Windows), `report::COMMAND_FLAGS`,
+  `Run::from_args(args, extra_commands)`: who may be watching a run, from
+  the family flags; tested for all 32 combinations of the four flags and
+  Wine.
+- `instance::Window::Own(title)` (a visible window with the title in a
+  process running this launcher's exe: eframe windows all share winit's
+  class, and a title alone matched Explorer folders and the game's
+  window) and `Window::ClassTitle(class, title)`.
+- `instance::SecondStart::{Focused, Busy, WindowOpen}` with `decide`,
+  `exit_code`, `message(game)`, `log_line`; `instance::ALREADY_RUNNING`
+  (5); `AlreadyRunning::second_start(action, window)`; pure
+  `instance::is_own_window`, `instance::same_image`.
+- `process::find_running(image) -> Vec<u32>` (Toolhelp32 +
+  `QueryFullProcessImageNameW`) and `process::image_path(pid)`: a launcher
+  killed while its game ran no longer lets a second game start from the
+  same runtime copy.
+- `gpu::prefer_glx_or_restart(Option<Guard>) -> Glx`,
+  `gpu::GLX_RESTARTED_ENV`, `gpu::needs_restart`: on a fresh Wine prefix
+  the launcher runs itself again once so the settings window draws through
+  GLX on the first start.
+- Close hook: `close_on = alt_f4_state` — for games with an exclusive
+  DirectInput keyboard (CMR2005), the hook reads Alt+F4 from the keyboard
+  state on any message while the game's own window is in front, once per
+  press. Off by default. `rea_close_hook::Chord`.
+- `wine::owned_key`, `wine::step` → `wine::Step`, `wine::removable`,
+  `Applied::matching`.
+- `theme::visuals(&Palette)` (the egui style the theme installs) and
+  `Palette::is_light()`.
+- `report` (native Linux messages): `report::native_audience(Mode, Native) ->
+  NativeAudience { Terminal, Window, LogOnly }`, `Native { stdin_terminal,
+  stderr_terminal, display }` + `Native::here()` / `Native::desktop()`,
+  `Message { title, text, link: Option<Link { label, url }>, details }`,
+  `report::fatal(&Palette, &Metrics, &Message, Mode) -> NativeAudience`,
+  `report::show` / `show_with(…, buttons)`, `report::message_ui` +
+  `MessageState` + `Action`, `report::pad_closes`, `report::WINDOW_SIZE`.
+  A double-clicked native launcher that fails before its window now shows
+  the error (with the issue link, Copy details and OK) instead of exiting
+  silently.
+- `pad::joystick` (Linux): `Joysticks::new()`, `Joysticks::buttons() -> u16`
+  (XInput bits for `PadNav`), `Joysticks::with_scan(every, scan)`,
+  `Joysticks::count()`, `State`, `devices(dir)`, `RESCAN`.
+- Spec rows: `RowOptions::notes` (per-value notes by cfg text),
+  `RowOptions::sizes: Option<SizeChips { screen }>` (resolution chips),
+  `spec::size_choices`, `spec::SizeChoice`, `spec::COMMON_SIZES`,
+  `spec::step_choices`.
+- `widgets::photo_caption_plated` (wrapped caption on a solid `panel`
+  plate), `widgets::disabled_reasons`, `widgets::join_sentences`.
+- `testing::click_in_view(&mut harness, role, label)`.
+- `rea_launcher::testing`: golden snapshots that survive a release bump.
+  `rea_launcher::snapshot!("help.txt", text)` compares with the calling
+  crate's `tests/snapshots/`, stores its `CARGO_PKG_VERSION` as
+  `<version>`, refuses a stored snapshot that still holds the version,
+  treats CRLF as LF, and names the first differing line.
+  `REA_UPDATE_SNAPSHOTS=1 cargo test` writes them;
+  `rea_launcher::snapshots!().update_var("CMR3_UPDATE_SNAPSHOTS")` keeps a
+  launcher's own variable. (A help snapshot with the version broke the
+  CMR3, CMR4 and OR tag builds.)
+- `runtime::sync_with_progress(game, runtime, policy, manifest, &mut |p| …)`
+  with `runtime::Progress { files_done, files_total, bytes_done,
+  bytes_total }` (`fraction()`, `finished()`) and `runtime::ProgressCounter`
+  (`new`, `set`, `get`; clones share) for a window showing "12 of 40 GB".
+- `rea_launcher::instance::single(name) -> Result<Guard, AlreadyRunning>`:
+  a `flock` lock for native Linux launchers (`$XDG_RUNTIME_DIR/
+  rea-launcher-<name>.lock`), released by the kernel however the process
+  ends; `single_at(path)`, `lock_path(name)`, `Guard::is_held/path`,
+  `AlreadyRunning::exit_code()`, `instance::ALREADY_RUNNING = 5` (same as
+  the win32 lane's).
+- Play helper: `REA_LOOK_SIZES="original=640x480 steam_deck=1280x800
+  enhanced=screen"` (+ `REA_LOOK_KEY`, default `look`) sizes gamescope
+  from `--look` / `look =` as the launchers resolve it (this run's
+  `--resolution`, its `--look`, the file's `resolution`, its look;
+  `resolution = auto` = the look, else the screen). Look/resolution flags
+  are read without listing them in `REA_HELPER_KEYS`.
+- Play helper test seam `REA_GAMESCOPE_HEADLESS=1` (only with
+  `REA_TEST=1`): gamescope `--backend headless`.
+- Secret scanning: launcher-ci.yml `secrets` job (input `secret-scan`,
+  default true) and the SDK's ci.yml `secrets` job, gitleaks 8.30.1
+  (SHA-256 pinned), whole history + tree, every push and PR; findings show
+  file, line, commit and rule, never the match. `scripts/prepush-scan
+  [--all | --range A..B] [--no-tree] [repo]` scans what a push would
+  publish (`@{upstream}..HEAD`) and the tree at HEAD the same way (exit 0
+  clean, 1 findings, 2 tool error; `REA_GITLEAKS`, `REA_NO_FETCH`).
+  Without a `.gitleaks.toml` the SDK allowlist skips play-script `*_KEY=`
+  settings (the only false positive found; every launcher scans clean).
+  dev-check runs it when gitleaks is installed; sdk-sync vendors it.
+- `scripts/release [--date D] [--no-test] VERSION [repo]` (vendored as
+  `sdk/scripts/release`): bumps the crate launcher-release's `package:`
+  names (never the first crate; Cargo.toml or `[workspace.package]`),
+  dates the Unreleased CHANGELOG section in the repo's own heading style
+  (Keep a Changelog links moved on) or dates an undated `## X`, runs
+  `cargo test --locked --workspace` after the bump, checks
+  release-notes.sh, commits `chore: release vX`, annotated tag `vX`. Never
+  pushes; any failure restores the files; refuses a dirty tree, an older
+  or existing version, no/several/unknown package.
+- `packaging/release-notes.sh --since vX VERSION`: every section after vX
+  up to VERSION, with headings (fix-forward releases); launcher-release.yml
+  input `notes-since` (a tag or `latest-release`).
+- pins.sh: `REA_NO_FETCH=1` offline mode (destination, cache, `file://`
+  only; says which pin is missing); a pin's `tag=RELEASE` word names its
+  own mirror release (`pin_tag NAME`; `pin_mirror_url` uses it before
+  `PIN_MIRROR_TAG`); mirror.yml uploads one release per tag.
+- sdk-sync vendors `scripts/launcher-check` (guard lane's conformance
+  check; launcher-ci runs `sdk/scripts/launcher-check --github`), checked
+  by `--check` like every vendored file.
+- wine-test: crates marked `[package.metadata.rea] wine-test = false` are
+  excluded from `--workspace` runs; launcher-ci input `wine-test-exclude`.
+- `scripts/launcher-check [--github] [--explain RULE|all] [--list] [repo]`:
+  checks a launcher repository against the family rules a file can show,
+  one line per problem (`error[rule] file:line: …` + `fix: …`), exit 1 on
+  errors. 33 rules, from the mistakes v0.3 launchers shipped: golden
+  snapshots (missing, holding the crate version, not using
+  `rea_launcher::snapshot!`), hand-made audiences (`!no_window`, `!linux`,
+  `console::output`), the Windows instance guard and the native-Linux
+  lock, window lookup by title/class, native-Linux error window and pads,
+  `prefer_glx` without restart, hand-made widget fills, bundled Microsoft
+  DLLs without a Wine override, own fixes without a draft in
+  CONTRIBUTIONS.md, README outline/order/Contributing link/issue links/
+  versioned links, AGENTS.md pointer and copied STANDARDS, SDK workflow
+  calls and one SDK tag across Cargo, `sdk/VERSION` and workflows, lld per
+  Windows target, `wine-tests`, `--look`, a test naming every option, quit
+  paths in RUNTIME_NOTES, the unknown-edition and bug-report forms (with
+  "What worked"), `sdk-update.yml`, DRM exceptions. Rules that need a
+  v0.4.0 API are warnings for launchers still on v0.3.x and errors from
+  v0.4.0. Owner exceptions: `.rea-check-waivers` lines `rule: reason`
+  (shown with the reason, never failing; unknown rules, empty reasons and
+  stale waivers are reported).
+- `launcher-ci.yml` input `conformance` (default true): runs the vendored
+  `sdk/scripts/launcher-check --github` after the `sdk/` drift check;
+  errors fail the job, warnings are annotations.
+- Scaffold (`scripts/new-launcher`, `templates/launcher`): golden snapshots
+  (`tests/snapshots.rs` + `tests/snapshots/`: `--help`, the `launcher.cfg`
+  template, the first run, every look on four screens) through
+  `rea_launcher::snapshot!`; who sees a message through
+  `report::audience` (`Invocation::run()`, `audience(wine)`, test of the
+  helper's command lines); one instance through `instance::single` +
+  `second_start(action, Window::Own(WINDOW_TITLE))` and
+  `process::find_running` before Play; `gpu::prefer_glx_or_restart`;
+  `WINDOW_TITLE` = "<Game> Launcher" (never the game's title); the weekly
+  `sdk-update.yml` caller; a "What worked?" checklist in the bug report;
+  CONTRIBUTIONS.md with an id column, RESEARCH.md "Our own (draft C1)"
+  and "Owner decisions", RUNTIME_NOTES.md "Quitting and leftovers" table.
+  A fresh scaffold passes `launcher-check` with no errors (tested in
+  `scripts/tests/new-launcher.sh`).
+- Docs: STANDARDS "What a machine can check, it checks", "Every fix of our
+  own gets a draft", "DRM exceptions", audience/instance APIs named,
+  window title rule, snapshot helper; new-launcher playbook "Patterns"
+  (native Linux recipe, old native Linux ports, installer source, portrait
+  monitor, saves via registry, test notes); ci-and-releases: native-Linux
+  two-job shape, `conformance`, pre-push scan, release via
+  `scripts/release`, gentle polling + `gh release view`; readme playbook:
+  headless screenshots, DRM wording; contribute-back and sdk-change: the
+  draft rule, "When a launcher repeats a mistake". Skills `rea-new-launcher`
+  and `rea-sdk-change`: run launcher-check before every commit and before
+  a release; its errors block.
+- `launcher-check` rule `look-sizes`: a Linux helper whose launcher has
+  looks must declare `REA_LOOK_SIZES`; the scaffold declares its three
+  looks' sizes.
+
+### Changed
+
+- **Play helper exit codes**: a start while our game runs (`--play`, and
+  the plain/settings start) exits **5** (`REA_EXIT_RUNNING`) instead of 0.
+  The settings window's 5 (the launchers' `ALREADY_RUNNING`) prints
+  "another launcher (or its game) is already running; nothing started"
+  and the helper exits 5. After a 5 or a 3, no `wineserver -w` (CMR1
+  83dacbb's workaround is now built in). The inner script exits 5 without
+  waiting for, or `wineserver -k`-ing, another launcher's game when the
+  launcher refuses a play run with 5.
+- `REA_FLAG_SWITCHES` default adds `--help --version`.
+- `rea_game_alive` ignores a process whose environment names another
+  `WINEPREFIX`/`WINECONFIGDIR` (only that value is read, nothing printed;
+  unreadable or prefix-less environments still count, so the wait never
+  ends early). The inner script gets `REA_GAME_PREFIX`.
+- wine-test exports `LANG=C.UTF-8 LC_ALL=C.UTF-8`.
+- appimage-wine.sh reads the Wine version from the archive's top folder
+  first (a `file://` pin named by its checksum builds offline).
+- `scripts/new-launcher` stamps `sdk/VERSION` with the tag it pins
+  (`sdk-sync --tag`), also from an untagged SDK checkout.
+- Template: the `game` option's description no longer names the game (so
+  the `launcher.cfg` snapshot doesn't depend on the title's length); the
+  program tests run with `--linux` (under Wine a player's run shows
+  dialogs, which would hang a headless test); a bad command line is
+  reported as a command (terminal, or a dialog when nobody sees one).
+
+### Fixed
+
+- `wine::remove_app_dll_overrides` deleted a value the player had set when
+  it equalled the launcher's (DiRT review). Ownership is now recorded when
+  the launcher writes, and only recorded, unchanged values are removed; a
+  value of ours the player changed becomes theirs.
+- Light palettes (CMR2005) got dark-grey egui widgets under dark text
+  (~1.5:1) that `contrast_problems` could not see. Light bases now start
+  from `Visuals::light()` with widgets filled from `panel` (hover +6 % ink,
+  pressed +12 %), ink strokes and links; `Palette::pairs` checks ink on
+  every egui widget fill and state, tooltips, and the link colour.
+- Disabled controls write their reason on the window (pad players never
+  hover): under a chip row, under a switch's label, in place of a card's
+  note/subtitle, in place of a spec row's description.
+- A disabled switch shows its saved value (it looked off).
+- A look card's description no longer doubles the full stop when the note
+  ends with "." and a reason is appended (SCR); spec-row descriptions are
+  `description. reason` (were `description reason`).
+- sdk-bump no longer clones into `~/.cache`: `$REA_SDK_CACHE`, else the
+  launcher's ignored `.work/sdk-checkout`, else a temp folder it removes;
+  it no longer rewrites Cargo.toml files under `.work/`, `target/` or other
+  ignored folders (SCR).
+- sdk-sync `--check` with an SDK checkout at the recorded commit but with
+  uncommitted changes compared with the dirty tree (false drift); it now
+  goes through a clone of the recorded commit.
+
+### Documentation
+
+- Wine replaces a DLL whose version resource names Microsoft as the vendor
+  with its builtin even from the program folder; bundled redistributables
+  (`d3dx9_*`, `d3dcompiler_*`, `xinput1_3`, `msvcp140`, …) need
+  `app_dll_overrides`. Other vendors' DLLs (DXVK, dgVoodoo, Xidi) win by
+  default (Sega Rally Revo's finding). In the win32 README and the `wine`
+  module docs.
+
 ## [0.3.3] - 2026-11-02
 
 Wine DLL overrides that actually reach the game, found in a real-game run.
