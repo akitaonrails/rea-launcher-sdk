@@ -45,6 +45,8 @@ REA_WAIT=${@PREFIX@_WAIT:-}
 [ -n "${@PREFIX@_GPU+set}" ] && REA_GPU=$@PREFIX@_GPU   # @PREFIX@_GPU= for no GPU choice
 REA_CFG_APPDATA=@LAUNCHER_NAME@       # AppData\Local\@LAUNCHER_NAME@\launcher.cfg
 REA_WINEDBG_OFF=1                     # a fault ends the game, no hidden debugger
+# What size each look gives gamescope (config.rs Look::picture; keep in step):
+REA_LOOK_SIZES="original=original recommended=screen steam_deck=1280x800"
 # Game choices to make once the game is known (sdk shell/README.md, "Game
 # differences kept as settings"):
 #   REA_ORIGINAL_SIZE=640x480         what resolution = original means

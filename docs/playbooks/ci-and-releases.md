@@ -158,4 +158,7 @@ reaching GitHub.
 
 If the release job fails after the tag was pushed, fix forward with a new
 patch version; never move a published tag. The fix-forward release's notes
-include the unpublished version's section (`release-notes.sh --since`).
+include the unpublished version's section: pass `notes-since: vX.Y.Z`
+(the tag that never published) to `launcher-release`, or
+`notes-since: latest-release`, for that one release; it runs
+`release-notes.sh --since`.

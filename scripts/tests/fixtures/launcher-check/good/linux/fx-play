@@ -1,0 +1,4 @@
+#!/bin/sh
+# The fixture launcher's Linux helper (only what launcher-check reads).
+. "$(dirname "$0")/../sdk/rea-play.sh"
+REA_LOOK_SIZES="original=original recommended=screen steam_deck=1280x800"

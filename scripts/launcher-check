@@ -51,7 +51,7 @@ RULES='snapshots snapshot-version snapshot-helper audience instance instance-uni
 window-lookup native-report native-pad glx-restart light-widgets ms-dll-overrides
 own-fix-draft readme-sections readme-order readme-contributing readme-links
 readme-versions agents-pointer agents-duplicate sdk-workflows sdk-tag lld
-wine-tests look-flag option-tests quit-paths issue-unknown-edition
+wine-tests look-flag look-sizes option-tests quit-paths issue-unknown-edition
 issue-bug-report sdk-update drm-exception waivers'
 
 # rule ID: sets SEV (error|warn), SINCE (SDK tag or empty), FIX and WHY.
@@ -133,6 +133,9 @@ rule() {
     look-flag) SEV=error
       WHY='Every launcher has a --look flag that sets all of a look'"'"'s values (STANDARDS "Family consistency"); CMR3 lacks it.'
       FIX='add a "look" option to the option table (Original, recommended, Steam Deck)' ;;
+    look-sizes) SEV=error SINCE=$NEW_API_SINCE
+      WHY='gamescope must open at the size the look gives the game; CMR1, CMR4, OR, CMR2005 and DiRT Rally each wrote their own sizing, and Steam Deck looks opened at 640x480 with garbled colours.'
+      FIX='declare the looks in the Linux helper: REA_LOOK_SIZES="original=original recommended=screen steam_deck=1280x800" (sdk shell/README.md)' ;;
     option-tests) SEV=error
       WHY='Every window option and CLI flag is tested end to end (STANDARDS "Every option is tested end to end"). The check looks for each key or flag in the test code.'
       FIX='add a test per option: control or flag -> launcher.cfg key -> the game file, registry value or environment it changes' ;;
@@ -564,6 +567,13 @@ if [ ! -s "$T/keys" ]; then
   emit option-tests "$CONFIG_RS" "no option table (rea_launcher::cfg OptionSpec::new) found, so the option tests can't be checked"
 else
   grep -qx look "$T/keys" || emit look-flag "$CONFIG_RS" "the option table has no look option (--look)"
+  if grep -qx look "$T/keys"; then
+    for play in "$R"/linux/*-play; do
+      [ -f "$play" ] && grep -q 'rea-play\.sh' "$play" || continue
+      grep -q '^[[:space:]]*REA_LOOK_SIZES=' "$play" ||
+        emit look-sizes "linux/${play##*/}" "the Linux helper never says what size each look gives gamescope (REA_LOOK_SIZES)"
+    done
+  fi
   untested=$(awk -v tests="$T/tests.txt" '
     BEGIN { while ((getline l < tests) > 0) { sub(/^[^:]*:[0-9]+:/, "", l); body = body "\n" l } }
     function word(text, w,   p, rest, before, after) {

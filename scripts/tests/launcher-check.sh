@@ -195,6 +195,8 @@ expect "Windows code never run under Wine" error wine-tests
 # --- options -------------------------------------------------------------------------------------
 fresh; replace "$L/crates/fx-launcher/src/config.rs" '"look",' '"preset",'
 expect "no --look (CMR3, Screamer)" error look-flag
+fresh; drop_line "$L/linux/fx-play" 'REA_LOOK_SIZES='
+expect "looks don't size gamescope (CMR1, CMR4, OR, CMR2005)" error look-sizes
 fresh; replace "$L/crates/fx-launcher/tests/snapshots.rs" '"--frame-cap"' '"--other"'
 expect "an option no test names" error option-tests
 printf '%s\n' "$out" | grep -q 'frame_cap' && ok "... names the option" || bad "option not named: $out"
