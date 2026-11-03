@@ -48,17 +48,23 @@ pub fn harness<'a, S>(
 }
 
 /// [`harness`] at `size` (the launcher's own design size, e.g. OR's
-/// 880×760). Widgets below a scrolling tab's fold are in the AccessKit
-/// tree but a click lands outside the window: scroll to them first,
+/// 880×760).
+///
+/// **Below the fold.** A widget below a scrolling tab's fold is in the
+/// AccessKit tree, but a click on it lands outside the window and is
+/// silently lost (the test then fails on the state, not on the click).
+/// Use [`click_in_view`], or by hand: `scroll_to_me`, `run()` (the scroll
+/// area moves), query the node again (the old one has the old position),
+/// `click`, `run()`:
 ///
 /// ```text
-/// let node = ui.get_by_label("Manual gearbox by default");
-/// node.scroll_to_me();
+/// ui.get_by_label("Manual gearbox by default").scroll_to_me();
 /// ui.run();
 /// ui.get_by_label("Manual gearbox by default").click();
+/// ui.run();
 /// ```
 ///
-/// or give the harness a taller size so the whole tab fits.
+/// Or give the harness a taller size so the whole tab fits.
 pub fn harness_sized<'a, S>(
     palette: &Palette,
     metrics: &Metrics,
@@ -74,6 +80,16 @@ pub fn harness_sized<'a, S>(
         .build_ui_state(app, state);
     harness.run();
     harness
+}
+
+/// Scrolls the control with `role` and `label` into view, clicks it and
+/// runs the frames that follow: the safe click for anything that may be
+/// below a tab's fold (see [`harness_sized`]).
+pub fn click_in_view<S>(ui: &mut Harness<'_, S>, role: egui::accesskit::Role, label: &str) {
+    ui.get_by_role_and_label(role, label).scroll_to_me();
+    ui.run();
+    ui.get_by_role_and_label(role, label).click();
+    ui.run();
 }
 
 /// Whether a radio button, switch, tab or card is checked/selected.
@@ -289,6 +305,32 @@ mod tests {
         ui.key_press(egui::Key::ArrowRight);
         ui.run();
         assert_eq!(*ui.state(), 90);
+    }
+
+    #[test]
+    fn a_control_below_the_fold_is_scrolled_to_then_clicked() {
+        let draw = |ui: &mut Ui, on: &mut bool| {
+            widgets::tab_body(ui, "tab", |ui| {
+                for row in 0..40 {
+                    widgets::note(ui, &format!("Row {row}"));
+                }
+                widgets::toggle(ui, on, "Manual gearbox", None);
+            });
+        };
+        // Without scrolling, the click lands outside the window.
+        let mut ui = harness(&Palette::default(), &Metrics::DEFAULT, false, draw);
+        ui.get_by_label("Manual gearbox").click();
+        ui.run();
+        assert!(!*ui.state(), "clicked below the fold: missed");
+        // The recipe: scroll_to_me, run, query again, click, run.
+        ui.get_by_label("Manual gearbox").scroll_to_me();
+        ui.run();
+        ui.get_by_label("Manual gearbox").click();
+        ui.run();
+        assert!(*ui.state());
+        // The same in one call.
+        click_in_view(&mut ui, Role::Switch, "Manual gearbox");
+        assert!(!*ui.state());
     }
 
     // ------------------------------------------------- v0.2.1 additions
