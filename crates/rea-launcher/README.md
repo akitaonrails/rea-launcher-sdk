@@ -308,13 +308,15 @@ let _instance = match rea_launcher::instance::single("rea-dirt-rally") {
     Ok(guard) => guard,
     Err(running) => {
         eprintln!("{running}"); // "the launcher is already running"
-        std::process::exit(3); // an action flag; the plain start may exit 0
+        std::process::exit(running.exit_code()); // ALREADY_RUNNING = 5
     }
 };
 ```
 
 The same `Result<Guard, AlreadyRunning>` as `rea_launcher_win32::instance`
-(use that one on Windows: it can bring the window forward). The lock is
+(use that one on Windows: it can bring the window forward), and the same
+exit code, `instance::ALREADY_RUNNING` (5), which `rea-play.sh` reads as
+"nothing started". The lock is
 `$XDG_RUNTIME_DIR/rea-launcher-<name>.lock`; the kernel drops it when the
 process ends, so a killed launcher leaves no stale lock.
 

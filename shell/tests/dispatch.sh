@@ -41,12 +41,17 @@ check "window closed: exit 0, no game" "$(main)" 0
 echo 4 > "$T/rc"; rm -f "$T/ran"
 main > /dev/null
 [ -e "$T/ran" ] && ok "no window possible: the game with saved settings" || fail "exit 4 did not play"
+echo 5 > "$T/rc"; rm -f "$T/ran"
+check "the launcher refuses (another one runs, exit 5): exit 5" "$(main)" 5
+[ -e "$T/ran" ] && fail "a refused start played" || ok "a refused start starts nothing"
+echo 1 > "$T/rc"; rm -f "$T/ran"
+check "a failed window still exits 0 (as before)" "$(main)" 0
 
 own() { setsid sleep 30 & S=$!; sleep 0.2; st=$(rea_proc_stat "$S"); printf '%s %s\n' "$S" "${st#* }" > "$REA_LOCK"; }
 own
-check "already running: no second window" "$(main; cat "$T/out")" "0
+check "already running: no second window, exit 5" "$(main; cat "$T/out")" "5
 already running"
-check "already running: --play starts nothing and fails (exit 3)" "$(main --play; cat "$T/out")" "3
+check "already running: --play starts nothing, exit 5" "$(main --play; cat "$T/out")" "5
 already running"
 rm -f "$T/ran"; main play > /dev/null
 [ -e "$T/ran" ] && fail "a second play started the game" || ok "a second play starts nothing"

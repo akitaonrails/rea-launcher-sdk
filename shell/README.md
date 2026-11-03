@@ -88,8 +88,8 @@ own `set -f` is kept.
 
 | Command | What it does |
 |---|---|
-| *(none)*, `--settings`, `settings` | the settings window, then the game. Arguments go to the window. Already running: says so and exits 0 |
-| `--play`, `play`, `start` | the game with the saved settings, no window. Arguments go to the launcher after `REA_PLAY_ARGS`. Already running: says so, starts nothing and exits **3** (v0.4.0; it was 0, which a script or shortcut read as a game that ran) |
+| *(none)*, `--settings`, `settings` | the settings window, then the game. Arguments go to the window. Already running: says so and exits **5** (`REA_EXIT_RUNNING`, v0.4.0; it was 0) |
+| `--play`, `play`, `start` | the game with the saved settings, no window. Arguments go to the launcher after `REA_PLAY_ARGS`. Already running: says so, starts nothing and exits **5** (v0.4.0; it was 0, which a script or shortcut read as a game that ran) |
 | `stop`, `--stop` | ends the session this helper started, then `wineserver -k` in the prefix (Wine mode). Prints `stopped` |
 | `status`, `--status` | `running` or `idle` |
 | `-h`, `--help`, `help` | usage, plus `rea_hook_usage` |
@@ -103,14 +103,18 @@ meaning for any word, the built-in aliases included (Screamer passes
 
 Settings-window exit codes: `0` Play, then start. `4` no window could open,
 so it plays with the saved settings and says so. `3` closed without Play:
-it says so and nothing starts. Anything else counts as a failure and points
-at `settings.log`. The window's stderr always goes to
+it says so and nothing starts. `5` (the launchers' `ALREADY_RUNNING`,
+v0.4.0): another launcher or its game holds the prefix; it says so,
+nothing starts and the helper exits 5. Anything else counts as a failure
+and points at `settings.log`. The window's stderr always goes to
 `$REA_STATE/settings.log` (the SRR behaviour). In Wine mode,
 `wineserver -w` runs after the window, so the game cannot join the
-desktop's wineserver outside gamescope, except after a `3`: that is also
-"another launcher holds this prefix", whose wineserver serves that
-launcher's game, and nothing starts after it anyway (v0.4.0; CMR1 had a
-local workaround).
+desktop's wineserver outside gamescope, except after a `5` or a `3`
+(older launchers' "another launcher holds this prefix"): that prefix's
+wineserver serves the other launcher's game, and nothing starts after
+either (v0.4.0; CMR1 had a local workaround). The inner script likewise
+ends with 5, without waiting for the game or `wineserver -k`, when the
+launcher exits 5 on a play run.
 
 ## Configuration variables
 

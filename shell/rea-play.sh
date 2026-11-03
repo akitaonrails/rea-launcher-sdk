@@ -125,6 +125,9 @@ rea_run() {
 }
 
 REA_WINEBUS_KEY='HKLM\System\CurrentControlSet\Services\winebus'
+# The exit code of a refused second start: the launchers' ALREADY_RUNNING
+# (rea_launcher::instance, rea_launcher_win32::instance), and this helper's.
+REA_EXIT_RUNNING=5
 
 # --- hooks the game script may override ------------------------------------
 
@@ -672,6 +675,10 @@ if [ "${REA_INNER_MODE:-wine}" = native ]; then
 fi
 trap 'wineserver -k; exit' INT TERM HUP
 wine "$@"
+_rc=$?
+# 5: the launcher refused to start because another one (or its game) holds
+# this prefix. Nothing of ours runs: never wait for, or kill, its game.
+[ "$_rc" = 5 ] && exit 5
 if [ -n "${REA_GAME_PROCS:-}" ]; then
   # The launcher can return before the game it started (an isolated Wine
   # desktop hands back early): wait for the game itself.
@@ -900,15 +907,22 @@ rea_settings() {
   rea_glob
   rea_run env "$@" 2>"$REA_STATE/settings.log"
   _rea_rc=$?
-  # Exit 3 is also "another launcher holds this prefix" (a second start):
-  # the prefix's wineserver then serves that launcher's game, and waiting
-  # for it would block until that game ends (CMR1 83dacbb). Nothing starts
-  # after a 3, so nothing waits.
-  [ "$REA_MODE" = wine ] && [ "$_rea_rc" != 3 ] && rea_wineserver_wait
+  # Exit 5 (REA_EXIT_RUNNING; older launchers used 3, which also means a
+  # plain close) is "another launcher holds this prefix": the prefix's
+  # wineserver then serves that launcher's game, and waiting for it would
+  # block until that game ends (CMR1 83dacbb). Nothing starts after a 3 or
+  # a 5, so nothing waits.
+  case $_rea_rc in
+    3|"$REA_EXIT_RUNNING") ;;
+    *) [ "$REA_MODE" = wine ] && rea_wineserver_wait ;;
+  esac
   case $_rea_rc in
     0) return 0 ;;
     4) echo "no settings window could open; playing with the saved settings"; return 0 ;;
     3) echo "settings window closed without Play; nothing started" ;;
+    "$REA_EXIT_RUNNING")
+      echo "another launcher (or its game) is already running; nothing started"
+      return "$REA_EXIT_RUNNING" ;;
     *) echo "settings window failed (exit $_rea_rc); see $REA_STATE/settings.log" ;;
   esac
   return 1
@@ -991,18 +1005,23 @@ rea_usage() {
 }
 
 # Settings window, then the game (arguments go to the window).
+# A start while our game runs (our session lock), or that the launcher
+# refuses because another one holds the prefix, starts nothing and exits
+# REA_EXIT_RUNNING (5, rea_launcher_win32::instance::ALREADY_RUNNING): a
+# script or a Steam shortcut must not read it as a game that ran.
 rea_cmd_default() {
-  if rea_running; then echo "already running"; exit 0; fi
+  if rea_running; then echo "already running"; exit "$REA_EXIT_RUNNING"; fi
   rea_require_exe || exit 1
-  rea_settings "$@" || exit 0
+  rea_settings "$@" || {
+    _rea_rc=$?
+    [ "$_rea_rc" = "$REA_EXIT_RUNNING" ] && exit "$REA_EXIT_RUNNING"
+    exit 0
+  }
   rea_start
 }
 
-# --play while our game runs starts nothing and says so with exit 3 (a
-# script or a Steam shortcut must not read it as a game that ran). The
-# plain start (the window) still exits 0: a person sees the message.
 rea_cmd_play() {
-  if rea_running; then echo "already running"; return 3; fi
+  if rea_running; then echo "already running"; return "$REA_EXIT_RUNNING"; fi
   rea_start "$@"
 }
 

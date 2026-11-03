@@ -8,16 +8,16 @@
 //! on Windows): `Ok(Guard)` to keep for the launcher's lifetime, or
 //! `Err(AlreadyRunning)`. A native window can't be brought forward from
 //! here, so the second start says the launcher (or its game) is running and
-//! exits; an action flag exits non-zero, as on Windows.
+//! exits [`ALREADY_RUNNING`] (5, the same code as on Windows and in the
+//! play helper; never 0, which a script reads as a game that ran).
 //!
 //! ```no_run
 //! use rea_launcher::instance;
-//! # let action = false;
 //! let _instance = match instance::single("rea-dirt-rally") {
 //!     Ok(guard) => guard,
 //!     Err(running) => {
 //!         eprintln!("DiRT Rally: {running}");
-//!         std::process::exit(if action { 3 } else { 0 });
+//!         std::process::exit(running.exit_code());
 //!     }
 //! };
 //! // ... the launcher, waiting for the game; the guard drops at exit
@@ -53,9 +53,21 @@ impl Guard {
     }
 }
 
+/// The exit code of a refused second start, everywhere in the family:
+/// `rea_launcher_win32::instance::ALREADY_RUNNING` and the play helper's
+/// (`rea-play.sh` treats a launcher's 5 as "nothing started, don't wait").
+pub const ALREADY_RUNNING: i32 = 5;
+
 /// Another launcher with the same name is running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AlreadyRunning;
+
+impl AlreadyRunning {
+    /// [`ALREADY_RUNNING`]: the code a refused start exits with.
+    pub fn exit_code(&self) -> i32 {
+        ALREADY_RUNNING
+    }
+}
 
 impl std::fmt::Display for AlreadyRunning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -159,6 +171,11 @@ mod tests {
         let second = single_at(&path).unwrap_err();
         assert_eq!(second, AlreadyRunning);
         assert_eq!(second.to_string(), "the launcher is already running");
+        assert_eq!(second.exit_code(), ALREADY_RUNNING);
+        assert!(
+            !(0..=4).contains(&ALREADY_RUNNING),
+            "not a window exit code"
+        );
         drop(first);
         let third = single_at(&path).unwrap();
         assert!(third.is_held());
