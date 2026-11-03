@@ -28,6 +28,7 @@ made that copy the reference.
 | `pad` | XInput state parsing and settings-window navigation by edges |
 | `log` | `launcher.log` with a size cap |
 | `args` | Windows command-line quoting |
+| `instance` | One launcher at a time without the play helper (native Linux): `instance::single`, a `flock` |
 | `testing` | Golden snapshots for launcher tests: `snapshot!`, version as `<version>`, CRLF-proof |
 
 ## Examples
@@ -300,6 +301,23 @@ files_total, bytes_done, bytes_total }` once the plan is known and after
 each file; `ProgressCounter` hands it from the worker thread to the
 window. No second thread measuring the runtime (DiRT Rally's 40 GB copy).
 
+### instance (native Linux)
+
+```rust,no_run
+let _instance = match rea_launcher::instance::single("rea-dirt-rally") {
+    Ok(guard) => guard,
+    Err(running) => {
+        eprintln!("{running}"); // "the launcher is already running"
+        std::process::exit(3); // an action flag; the plain start may exit 0
+    }
+};
+```
+
+The same `Result<Guard, AlreadyRunning>` as `rea_launcher_win32::instance`
+(use that one on Windows: it can bring the window forward). The lock is
+`$XDG_RUNTIME_DIR/rea-launcher-<name>.lock`; the kernel drops it when the
+process ends, so a killed launcher leaves no stale lock.
+
 ## One table for the window and the command line
 
 The rule: every window option has a flag and a `launcher.cfg` key, every
@@ -483,6 +501,8 @@ Behaviour not listed here is the same.
 - **v0.4.0:** a launcher that measured its runtime copy from a second
   thread (DiRT Rally `copy.rs`) calls `runtime::sync_with_progress` with a
   `ProgressCounter` instead. `runtime::sync` is unchanged.
+- **v0.4.0:** a native Linux launcher takes `rea_launcher::instance::single`
+  at start (DiRT Rally had no guard when run without the play helper).
 - **Temp files** are `.name.rea-new` (CMR3 used `.name.cmr3-new`, CMR4
   `.name.cmr4-new`, OR `name.tmp`, SRR `name.srr-tmp`). Remove old
   leftovers once with `fsx::remove_stale_temps(runtime, &[".cmr3-new"])`;
