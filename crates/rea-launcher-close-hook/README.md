@@ -16,9 +16,20 @@ variable, one per line (with `#` comments) in the file:
 | Key | Values | Default |
 |---|---|---|
 | `class` | the game window's class (case-insensitive) | any window of the game |
-| `close_on` | `sc_close`, `alt_f4`, `wm_close` | `sc_close, alt_f4` (`wm_close` off: CMR4 closes its movie window with it) |
+| `close_on` | `sc_close`, `alt_f4`, `wm_close`, `alt_f4_state` | `sc_close, alt_f4` (`wm_close` off: CMR4 closes its movie window with it; `alt_f4_state` off) |
 | `strategy` | `terminate` (TerminateProcess), `exit` (ExitProcess: exit handlers and DLL detach run), `quit` (PostQuitMessage), `post_quit` (WM_QUIT to the window), `keys: escape, 300, down, return` (SendInput, for DirectInput games), `post_keys: …` (WM_KEYDOWN/UP to the window) | `terminate` |
 | `code` | exit / quit code | 0 |
+
+**`alt_f4_state`: games with an exclusive DirectInput keyboard.** Such a
+game (CMR2005) takes the keyboard for itself, so Alt+F4 never reaches its
+window as a message and `alt_f4` can't see it. With `alt_f4_state` the hook
+reads the keyboard's state (`GetAsyncKeyState` of Alt and F4) on every
+message it sees from the game's loop, and acts on a new press of the chord
+while the game's window (this process's, of `class`) is in front; Alt+F4
+pressed in another program never counts, and a held chord counts once.
+Use it next to the others: `close_on = sc_close, alt_f4, alt_f4_state`.
+Tested under Wine (`tests/hook.rs`); on Windows record the real-game check
+in the launcher's `RUNTIME_NOTES.md`.
 
 In a key sequence, names are `escape`, `return`, `space`, `tab`,
 `up`/`down`/`left`/`right`, `f1`–`f12`, a letter or digit, or `0xNN`;
@@ -63,3 +74,16 @@ the host. `tests/hook.rs` runs every strategy under Wine
 CMR04; headless Wine needs its null graphics driver
 (`HKCU\Software\Wine\Drivers\Graphics = null`), which the tests select in
 the test prefix.
+
+## Migration
+
+### v0.4.0
+
+- `close_on = alt_f4_state` is new and off by default: existing
+  configurations behave as before. A game whose Alt+F4 does nothing while
+  `SC_CLOSE` works (CMR2005: `class=PC_CMR5;strategy=terminate`) adds it:
+  `close_on=sc_close,alt_f4,alt_f4_state`. Verify in the real game: Alt+F4
+  ends it, and Alt+F4 in another window while the game runs doesn't.
+- `Requests` has a new field, `alt_f4_state`: code that builds a
+  `Requests { … }` literal adds it (or uses `..Requests::default()`);
+  configurations parsed with `Config::parse` need nothing.

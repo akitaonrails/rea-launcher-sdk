@@ -17,7 +17,7 @@
 //!
 //! ```text
 //! class    = PC_CMR4              # the game window's class; empty: any window
-//! close_on = sc_close, alt_f4     # also: wm_close
+//! close_on = sc_close, alt_f4     # also: wm_close, alt_f4_state (DirectInput)
 //! strategy = terminate            # see Strategy
 //! code     = 0                    # exit / quit code
 //! ```
@@ -39,6 +39,8 @@ pub mod msg {
     pub const WM_SYSCOMMAND: u32 = 0x0112;
     pub const SC_CLOSE: usize = 0xF060;
     pub const VK_F4: usize = 0x73;
+    /// Alt.
+    pub const VK_MENU: usize = 0x12;
     /// `WM_SYSKEYDOWN` lParam bit 29: Alt was held.
     pub const ALT_DOWN: isize = 1 << 29;
 }
@@ -53,6 +55,12 @@ pub struct Requests {
     /// A posted `WM_CLOSE`. Off by default: CMR4 closes its intro-movie
     /// window with `WM_CLOSE` on the same thread.
     pub wm_close: bool,
+    /// Alt+F4 read from the keyboard state (`GetAsyncKeyState`) whenever
+    /// the hook sees a message while the game's window is in front, for
+    /// games that take the keyboard through DirectInput in exclusive
+    /// mode: their window never gets the `WM_SYSKEYDOWN` (CMR2005). Off by
+    /// default.
+    pub alt_f4_state: bool,
 }
 
 impl Default for Requests {
@@ -61,7 +69,28 @@ impl Default for Requests {
             sc_close: true,
             alt_f4: true,
             wm_close: false,
+            alt_f4_state: false,
         }
+    }
+}
+
+/// Alt+F4 held down, seen as one press: [`Chord::press`] is true once
+/// when both keys go down together, and again only after one was let go.
+/// A held chord (the hook sees many messages while the player holds the
+/// keys) closes the game once, not on every message.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Chord {
+    held: bool,
+}
+
+impl Chord {
+    /// Feeds the keys' state (`alt`, `f4`: held down now); true for a new
+    /// press of the chord.
+    pub fn press(&mut self, alt: bool, f4: bool) -> bool {
+        let both = alt && f4;
+        let new = both && !self.held;
+        self.held = both;
+        new
     }
 }
 
@@ -223,12 +252,14 @@ impl Config {
                         sc_close: false,
                         alt_f4: false,
                         wm_close: false,
+                        alt_f4_state: false,
                     };
                     for name in value.split(',').map(str::trim).filter(|n| !n.is_empty()) {
                         match name.to_ascii_lowercase().as_str() {
                             "sc_close" => requests.sc_close = true,
                             "alt_f4" => requests.alt_f4 = true,
                             "wm_close" => requests.wm_close = true,
+                            "alt_f4_state" => requests.alt_f4_state = true,
                             other => {
                                 return Err(ConfigError(format!("unknown request {other:?}")));
                             }
@@ -331,6 +362,7 @@ mod tests {
                 sc_close: false,
                 alt_f4: true,
                 wm_close: true,
+                alt_f4_state: false,
             },
             strategy: Strategy::Keys(vec![
                 Step::Key(0x1B),
@@ -356,12 +388,63 @@ mod tests {
     }
 
     #[test]
+    fn alt_f4_state_is_opt_in() {
+        // Existing configurations read as before.
+        for text in [
+            "",
+            "close_on = sc_close, alt_f4",
+            "class = PC_CMR4;strategy=terminate",
+        ] {
+            assert!(
+                !Config::parse(text).unwrap().requests.alt_f4_state,
+                "{text}"
+            );
+        }
+        let config = Config::parse("class=PC_CMR5;close_on=sc_close,alt_f4_state").unwrap();
+        assert_eq!(
+            config.requests,
+            Requests {
+                sc_close: true,
+                alt_f4: false,
+                wm_close: false,
+                alt_f4_state: true,
+            }
+        );
+        let file = "close_on = ALT_F4_STATE  # DirectInput keyboard\n";
+        assert!(Config::parse(file).unwrap().requests.alt_f4_state);
+        // The message matcher never fires for it: the state is read
+        // separately.
+        let state_only = Config::parse("close_on = alt_f4_state").unwrap().requests;
+        assert!(!state_only.matches(WM_SYSKEYDOWN, VK_F4, ALT_DOWN));
+        assert!(!state_only.matches(WM_SYSCOMMAND, SC_CLOSE, 0));
+    }
+
+    #[test]
+    fn a_held_chord_is_one_press() {
+        let mut chord = Chord::default();
+        assert!(!chord.press(false, false));
+        assert!(!chord.press(true, false)); // Alt alone
+        assert!(chord.press(true, true)); // + F4
+        // Held across many messages: once.
+        assert!(!chord.press(true, true));
+        assert!(!chord.press(true, true));
+        // F4 let go and pressed again with Alt still down: again.
+        assert!(!chord.press(true, false));
+        assert!(chord.press(true, true));
+        // F4 alone never.
+        let mut chord = Chord::default();
+        assert!(!chord.press(false, true));
+        assert!(!chord.press(false, true));
+    }
+
+    #[test]
     fn mistakes_are_reported() {
         for text in [
             "strategy = explode",
             "strategy = keys: 300",
             "strategy = keys: hyperspace",
             "close_on = double_click",
+            "close_on = alt_f4_status",
             "code = soon",
             "colour = red",
             "class",

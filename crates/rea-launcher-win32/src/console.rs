@@ -23,7 +23,8 @@
 //! when there is no console (and no redirected output) and the run is
 //! interactive (a double-click, not a script).
 //!
-//! **For messages to the player use [`crate::report`]**: under Wine stdout
+//! **For messages to the player use [`crate::report`]** (with
+//! `report::audience` for who is watching): under Wine stdout
 //! is always redirected to a log, so `output` picks `Terminal` and a
 //! play-time error would never reach the player. `report` decides with
 //! Wine in mind and always shows play-time errors in a dialog.

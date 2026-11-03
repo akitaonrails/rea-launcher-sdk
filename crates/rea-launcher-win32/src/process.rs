@@ -364,6 +364,79 @@ pub fn top_level_windows(pid: u32) -> Vec<HWND> {
     search.found
 }
 
+/// The full path of process `pid`'s executable, as Windows (or Wine)
+/// reports it; `None` when the process is gone or can't be opened.
+pub fn image_path(pid: u32) -> Option<String> {
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
+    };
+    // SAFETY: a query-only handle, closed before returning; the buffer and
+    // its length outlive the call.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let mut buffer = vec![0u16; 32768];
+        let mut len = buffer.len() as u32;
+        let ok =
+            QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut len);
+        CloseHandle(process);
+        (ok != 0).then(|| String::from_utf16_lossy(&buffer[..len as usize]))
+    }
+}
+
+/// The ids of the running processes whose executable is `image` (the
+/// same file path, compared as [`crate::instance::same_image`] does). Use
+/// it before Play with the runtime copy's game exe: a launcher that was
+/// killed released the instance mutex, but its game may still run from
+/// that copy. Processes this user can't open are not counted.
+pub fn find_running(image: &Path) -> Vec<u32> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    let wanted = image.to_string_lossy();
+    let Some(file_name) = image.file_name().map(|name| name.to_string_lossy()) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    // SAFETY: a process snapshot walked with a correctly sized entry, and
+    // closed once.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return found;
+        }
+        let mut entry = PROCESSENTRY32W {
+            dwSize: size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            // The snapshot names the file only (Wine: sometimes the path).
+            let name = name.rsplit(['\\', '/']).next().unwrap_or(&name);
+            if name.eq_ignore_ascii_case(&file_name)
+                && image_path(entry.th32ProcessID)
+                    .is_some_and(|path| crate::instance::same_image(&path, &wanted))
+            {
+                found.push(entry.th32ProcessID);
+            }
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    found
+}
+
 /// An installed hook, removed on drop: bind it (`let _hook = …`), since
 /// `let _ = …` would remove it at once.
 #[derive(Debug)]
