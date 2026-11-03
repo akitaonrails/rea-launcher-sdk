@@ -137,6 +137,8 @@ has "weekly SDK update at the tag" "$L/.github/workflows/sdk-update.yml" \
 has "sdk/VERSION names the pinned tag" "$L/sdk/VERSION" "tag=$TAG"
 has "the window title is not the game's" "$L/crates/exr-launcher/src/lib.rs" \
   "pub const WINDOW_TITLE: &str = \"Example Rally: Driver's Cut Launcher\";"
+# launcher-ci runs the vendored copy (sdk/scripts/launcher-check).
+if [ -x "$L/sdk/scripts/launcher-check" ]; then ok "launcher-check is vendored and executable"; else bad "sdk/scripts/launcher-check missing or not executable"; fi
 # The family's rules (scripts/launcher-check): a fresh scaffold has no errors.
 if sh "$ROOT/scripts/launcher-check" "$L" > "$T/check" 2>&1; then
   ok "launcher-check: no errors in a fresh scaffold"

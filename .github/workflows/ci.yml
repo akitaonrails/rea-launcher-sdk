@@ -180,6 +180,9 @@ jobs:
         run: |
           cargo build --release --workspace --target i686-pc-windows-gnu
           sh sdk/packaging/check-imports.sh target/i686-pc-windows-gnu/release/*.exe
+      - name: The family's rules (the vendored launcher-check, as launcher-ci runs it)
+        working-directory: ${{ runner.temp }}/rea-example
+        run: sh sdk/scripts/launcher-check --github
       - name: Windows-target tests under Wine (headless, the vendored wine-test)
         working-directory: ${{ runner.temp }}/rea-example
         run: sh sdk/scripts/wine-test --workspace
