@@ -100,6 +100,20 @@ Before v0.4.0 a player's `d3d9=native,builtin` was removed with ours
 because the two looked the same (DiRT review). A Wine test proves every
 case (`wine::tests`).
 
+**Microsoft's DLLs need the override; others don't.** With no override,
+Wine's loader replaces a DLL whose version resource names Microsoft as the
+vendor with its own builtin, *even when the DLL sits in the program
+folder* (`WINEDEBUG=+module` logs `version_heuristics got default vendor
+"Microsoft Corporation"`, then `find_builtin_dll`). So a bundled
+Microsoft redistributable — `d3dx9_*`, `d3dcompiler_*`, `xinput1_3`,
+`msvcp140`, `vcruntime140`, `xaudio2_*` — loads as Wine's unless
+`app_dll_overrides` sets it to `native` / `native,builtin`. A DLL from
+anyone else (DXVK's `d3d9`/`dxgi`, dgVoodoo, Xidi's `dinput8`, an ASI
+loader) wins from the program folder by default; set its override anyway
+when the launcher depends on it (the player may run under a prefix that
+overrides it). Found by Sega Rally Revo (its `d3dx9_35` loaded as
+builtin; `docs/RUNTIME_NOTES.md` there, 2026-11-02).
+
 ## Use
 
 ```toml

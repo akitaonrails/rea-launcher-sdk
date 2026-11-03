@@ -25,6 +25,17 @@
 //! environment block changes nothing; the AppDefaults key set to `builtin`
 //! loads Wine's.
 //!
+//! **Microsoft's DLLs are replaced by Wine's unless overridden.** The
+//! stand-in above has no version resource, so its copy wins. A DLL whose
+//! version resource names Microsoft as the vendor (`d3dx9_*`,
+//! `d3dcompiler_*`, `xinput1_3`, `msvcp140`, `vcruntime140`, `xaudio2_*`…)
+//! is replaced by Wine's builtin even from the program folder
+//! (`WINEDEBUG=+module`: `version_heuristics got default vendor "Microsoft
+//! Corporation"`, then `find_builtin_dll`; Sega Rally Revo's `d3dx9_35`).
+//! So every bundled Microsoft redistributable needs `app_dll_overrides`
+//! (`native` or `native,builtin`). Others' DLLs (DXVK, dgVoodoo, Xidi)
+//! win by default; override them too when the launcher relies on them.
+//!
 //! **Only what we wrote is ever removed.** `app_dll_overrides` records
 //! each value it writes under [`owned_key`] (same prefix, exact text);
 //! `remove_app_dll_overrides` deletes a value only while it still equals
