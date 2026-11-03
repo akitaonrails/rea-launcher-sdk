@@ -297,7 +297,7 @@ Here is an alternative verified fixbox for analogue triggers:
 ```wikitext
 {{Fixbox|description=Use Xidi for analogue trigger pedals|ref=<ref>{{Refcheck|user=OWNER|date=2026-11-02|comment=Xidi 4.3.1, 8BitDo Ultimate 2; full stages driven.}}</ref>|fix=
 {{ii}} The game reads one DirectInput axis for both pedals. This mapping puts RT/LT on that axis and keeps the stick and buttons in the standard layout.
-# Download [https://github.com/samuelgr/Xidi/releases Xidi] and copy its 32-bit {{file|dinput8.dll}} next to {{file|cmr4.exe}}.
+# Download [https://github.com/samuelgr/Xidi/releases/tag/v4.3.1 Xidi 4.3.1] and copy its 32-bit {{file|dinput8.dll}} (from {{file|Win32}}) next to {{file|cmr4.exe}}. Xidi 5 also needs its {{file|Xidi.32.dll}} next to the game, and no <code>[Import]</code> section in {{file|Xidi.ini}}.
 # Create {{file|Xidi.ini}} next to it with:
 <pre>
 [Mapper]
@@ -314,7 +314,8 @@ TriggerLT = Axis(Y, +)
 }}
 ```
 
-Notes: tested only with Xidi 4.3.1 and one pad. The launcher's full INI also
+Notes: tested only with Xidi 4.3.1 and one pad. Xidi 5.0.0 (2026) moved its code into
+`Xidi.32.dll` and rejects `[Import]`; CMR3 runs it in the real game with that setup. The launcher's full INI also
 sets 5% stick and 0% trigger deadzones and `ActiveVirtualControllerMask = 0x01`;
 the lines above are the part that matters. Choosing the controller in the
 game's menu froze the game twice under Wine, although the choice was saved.

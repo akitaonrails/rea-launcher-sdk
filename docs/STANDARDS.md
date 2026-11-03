@@ -545,6 +545,10 @@ an SDK **Migration** item, never be regenerated blindly.
   never runs `cfg(windows)` code.
 - **Running the real game in a test** (allowed, from the player's own
   install outside the repo; never modify it):
+  - opt-in only: the script does nothing and exits 0 unless a variable
+    such as `<ID>_E2E=1` asks for it, so a loop over the test folder never
+    starts the game (CMR3's e2e.sh opened a visible 4K window on the
+    owner's desktop, 2026-11-02; `launcher-check` rule `real-game-gated`);
   - inside the container that has Wine/gamescope, with a finite timeout
     *inside* it and a supervisor that waits for the actual game process —
     never `timeout` around `distrobox enter`, never a live launcher piped
@@ -568,6 +572,15 @@ an SDK **Migration** item, never be regenerated blindly.
   print `env`, `printenv` or `/proc/*/environ` contents — to find a task
   process by environment, test for one variable without printing values —
   and before finishing, scan scratch output for key patterns (paths only).
+  Other processes' **command lines** are secrets too: another session's
+  `docker exec -e …` carries the owner's keys, and a harness's
+  `ps -eo pid,stat,args` printed them into a log (2026-11-02). Find
+  processes with `pgrep -x NAME` (pids only) or `ps -o pid,stat,comm`;
+  match `/proc/PID/cmdline` against our runtime path without printing it.
+  Never `ps aux`/`-ef`/`-o args`, `pgrep -a`, or `cat /proc/*/cmdline`
+  (`launcher-check` rule `process-listing`; harnesses in `.work/` too).
+  A leak that stayed on this machine is scrubbed and reported; nothing
+  secret ever goes into a commit, release, issue or post.
 - **The real game stays outside the repository** and outside ordinary host
   tests. Env-gated tests (`<GAME>_GAME_DIR=... cargo test -- --ignored`)
   may use it.

@@ -7,6 +7,40 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [Unreleased]
+
+### Migration
+
+- `launcher-check` has five new rules; run it after bumping. Errors:
+  `release-notes` (no `notes: generate` in build.yml), `watch-pins` (a
+  watched component pinned to anything but its release's uploaded file),
+  `process-listing` (scripts that print other processes' command lines or
+  environments), `real-game-gated` (a test that runs the real game without
+  an opt-in variable, or with a visible gamescope). Warning:
+  `unwatched-pins` (a pinned GitHub release with no weekly watch; add it
+  to `packaging/upstream-watch.txt` and copy the template's
+  `.github/workflows/watch-upstream.yml`). Of the released launchers, CMR4,
+  CMR2005, DiRT and Sega Rally Revo get that warning; none gets an error.
+
+### Added
+
+- `Ledger::known_with_earlier(rel, current, earlier_digests)`: after a
+  component update, a file an earlier release installed before the ledger
+  still counts as the launcher's own, so it is replaced instead of refused
+  (from CMR3's Xidi 4.3.1 → 5.0.0 update).
+- The launcher template has a weekly `watch-upstream` workflow and an
+  empty `packaging/upstream-watch.txt`.
+- STANDARDS: real-game tests are opt-in; other processes' command lines
+  are secrets like environments. The components playbook says which file
+  to pin and lists the steps for moving a pin to a new version.
+
+### Fixed
+
+- `upstream-watch.yml` no longer reports a component as updated every
+  week when its pin is a commit or tag archive rather than the file the
+  release uploads (CMR3's vkBasalt); it skips such a pin with a warning in
+  the run summary.
+
 ## [0.4.1] - 2026-11-02
 
 Fixes found by v0.4.0's CI. Launchers bumping from v0.3.x go straight to
