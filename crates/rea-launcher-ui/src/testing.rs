@@ -212,6 +212,8 @@ mod tests {
         glide.click();
         ui.run();
         assert_eq!(ui.state().renderer, 0);
+        // The reason is on the window too: a pad player never hovers.
+        assert!(ui.query_by_label("Glide: Needs the 3dfx build").is_some());
     }
 
     #[test]

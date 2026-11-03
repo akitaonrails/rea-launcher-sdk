@@ -6,7 +6,7 @@ look with each game's colours, art and tabs left to the launcher.
 | Module | What |
 |---|---|
 | `theme` | `Palette` (colour roles: base, panel, line, ink, muted, action, select, error, disabled, focus, selection; `tint` for a const translucent colour), `Metrics` (sizes and style choices, below), `install`/`install_with`, `visuals` (the egui style: dark, or light with palette-filled widgets when `Palette::is_light`), `palette`/`metrics`, `contrast`, `contrast_problems(&Palette, &Metrics)` / `Palette::pairs`, Barlow fonts (`body`, `semibold`, `condensed`, `decal`) |
-| `widgets` | `chips`/`chips_with`/`chips_sized` (disabled reasons, `ChipSize::Compact`, one focus stop stepped with ←/→), `toggle`, `look_card` + `fit_title`, `game_card`, `outline_button`, `primary_button`, `progress_bar`, `folder_field`, `heading`/`field`/`note`/`error_note`, `heading_focused`/`field_focused`/`focus_bar` (SCR's row focus), `tabs_bar`, `play_plate`/`footer`, `tab_body`, `gradient`, `stripes`, `decode_jpeg`/`load_jpeg`/`hero_image`/`photo_caption`, `name_control` |
+| `widgets` | `chips`/`chips_with`/`chips_sized` (disabled reasons written under the row, `disabled_reasons`, `ChipSize::Compact`, one focus stop stepped with ←/→), `toggle` (disabled: keeps the saved value, reason under the label), `join_sentences`, `look_card` + `fit_title`, `game_card`, `outline_button`, `primary_button`, `progress_bar`, `folder_field`, `heading`/`field`/`note`/`error_note`, `heading_focused`/`field_focused`/`focus_bar` (SCR's row focus), `tabs_bar`, `play_plate`/`footer`, `tab_body`, `gradient`, `stripes`, `decode_jpeg`/`load_jpeg`/`hero_image`/`photo_caption`, `name_control` |
 | `window` | `WindowFit` (final size at creation under Wine with Wine's DPI divided out; opt-in `with_native_fit` DPI fit + recentre off Wine; `screen()` in pixels), `window_zoom`, `creation_zoom`, `SIZE`, `Layout` |
 | `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_row_with(…, RowOptions { disabled, steps })` / `spec_path_row(…, pick)` (an `unset_label` option adds an "As the game" chip): one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
 | `download` | `download_row(ui, &Download { label, size, state })` → `Option<DownloadAction>` (Start / Cancel / Remove); `DownloadState` (Missing{partial}, Connecting, Downloading{done,total,rate}, Verifying, Unpacking, Installed, Failed(msg)), `DownloadState::from_phase(Option<&Phase>, installed, partial)` + `with_rate`; `describe`, `size_text`, `time_left` |
@@ -108,6 +108,23 @@ if state.running() { ui.ctx().request_repaint_after(std::time::Duration::from_mi
 ```
 
 ## Accessibility and GUI tests
+
+**A disabled control says why, on the window.** A pad player never
+hovers, so a tooltip or the screen-reader description is not enough
+(OR's lesson). Since v0.4.0 every widget writes the reason where the eye
+already is, in `muted` (AA on the base):
+
+| Control | Where the reason goes |
+|---|---|
+| `chips*` | a note under the row; the reason alone when every chip shares it, else `Label, Label: reason` per reason (`widgets::disabled_reasons`) |
+| `toggle` | a second line under its label |
+| `look_card` / `game_card` | in place of the note / subtitle |
+| `spec_row_with(… RowOptions { disabled })` | in place of the row's description (the row keeps its height) |
+
+Disabled chips and switches keep showing the saved value (a dimmed
+`select` outline, the knob where it was). Accessible descriptions join
+the note and the reason with `widgets::join_sentences`, so a note that
+ends in "." no longer gets a second one.
 
 Every widget reports its role, name, state and disabled reason to
 AccessKit: chips are radio buttons in a radio group (the group's value is
@@ -211,3 +228,17 @@ Behaviour not listed is the same.
   `palette::light_widgets` (and its call after `install_with`); keep the
   palette test, which now also checks those fills. Dark palettes: no
   change.
+- **Disabled reasons are visible.** A disabled chip row, switch, look or
+  game card, or spec row now writes its reason on the window (table under
+  "Accessibility and GUI tests"); rows grow by one note line where a
+  launcher used a disabled chip row or switch outside spec rows. Remove a
+  local copy that already shows it (OR's `chip_row`/`bool_row` write
+  `disabled.unwrap_or(row.description)`: pass `row.description` only, or
+  move to `spec_row_with`; Screamer's `pad_off_reason` note under a
+  disabled row), or the reason shows twice. Keep reasons full sentences.
+- **A disabled switch shows its saved value** (knob on the right, dimmed
+  outline) instead of looking off. Tests that read `checked` on a
+  disabled switch now see the saved value.
+- **Accessible descriptions**: a disabled spec row's description is
+  `description. reason` (it was `description reason`); a look card's
+  `note. reason` no longer doubles the full stop.

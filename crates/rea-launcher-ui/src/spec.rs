@@ -73,8 +73,10 @@ pub fn toggle_text(on: bool) -> &'static str {
 /// How a row is drawn beyond what its [`OptionSpec`] says.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RowOptions<'a> {
-    /// Why the option can't be changed now: the control is disabled and
-    /// shows the reason on hover and to screen readers (as chips do).
+    /// Why the option can't be changed now: the control is disabled (still
+    /// showing the saved value) and the reason is written in place of the
+    /// description, where a pad player sees it; also on hover and, after
+    /// the description, to screen readers.
     pub disabled: Option<&'a str>,
     /// For a `Range`: chips with these `(value, label)` steps instead of a
     /// slider (OR's draw distance: `(0, "Game's own"), (4, "4"), (8, "8")`).
@@ -128,7 +130,7 @@ fn row(
         match spec.kind {
             Kind::Toggle if spec.unset.is_none() => {
                 let mut on = matches!(spec.parse(value), Ok(Value::Toggle(true)));
-                let response = widgets::toggle(ui, &mut on, spec.label, disabled);
+                let response = widgets::toggle_noted(ui, &mut on, spec.label, disabled, false);
                 if response.changed() {
                     *value = toggle_text(on).to_owned();
                 }
@@ -148,7 +150,7 @@ fn row(
                         .iter()
                         .map(|(v, label)| Chip::new(*v, label).disabled(disabled))
                         .collect();
-                    let response = widgets::chips_with(ui, &chips, &mut current);
+                    let response = quiet_chips(ui, &chips, &mut current);
                     if response.changed() {
                         *value = current.unwrap_or_default().to_owned();
                     }
@@ -169,7 +171,7 @@ fn row(
                                 .iter()
                                 .map(|(v, label)| Chip::new(Some(*v), label).disabled(disabled))
                                 .collect();
-                            let response = widgets::chips_with(ui, &chips, &mut current);
+                            let response = quiet_chips(ui, &chips, &mut current);
                             if response.changed()
                                 && let Some(n) = current
                             {
@@ -229,17 +231,21 @@ fn row(
         if !value.trim().is_empty() && spec.parse(value).is_err() {
             widgets::error_note(ui, &format!("{}: needs {}", spec.label, spec.needs()));
         }
-        if !spec.description.is_empty() {
-            widgets::note(ui, spec.description);
+        // A pad never hovers: the reason takes the description's place, so
+        // the row keeps its height when it is disabled.
+        match disabled.filter(|why| !why.is_empty()) {
+            Some(why) => {
+                widgets::note(ui, why);
+            }
+            None if !spec.description.is_empty() => {
+                widgets::note(ui, spec.description);
+            }
+            None => {}
         }
     });
     if let Some(control) = &control {
         // The row's description, and why it is disabled when it is.
-        let description = match (disabled, spec.description) {
-            (Some(why), "") => why.to_owned(),
-            (Some(why), what) => format!("{what} {why}"),
-            (None, what) => what.to_owned(),
-        };
+        let description = widgets::join_sentences(spec.description, disabled.unwrap_or_default());
         widgets::name_control(control, Some(spec.label), Some(&description));
         if let Some(why) = disabled
             && !matches!(spec.kind, Kind::Toggle | Kind::Choice(_))
@@ -252,6 +258,15 @@ fn row(
         inner.response.mark_changed();
     }
     inner.response
+}
+
+/// Chips whose disabled reasons the row writes itself.
+fn quiet_chips<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    chips: &[Chip<'_, T>],
+    current: &mut T,
+) -> Response {
+    widgets::chips_noted(ui, chips, current, widgets::ChipSize::Normal, false)
 }
 
 /// The chips a `Toggle` or `Choice` row offers: the unset choice first
@@ -508,6 +523,55 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_row_writes_its_reason_in_place_of_the_description() {
+        const ROWS: &[OptionSpec] = &[
+            OptionSpec::new(
+                "vsync",
+                Kind::Toggle,
+                "VSync",
+                "Waits for the screen's refresh.",
+            ),
+            OptionSpec::new(
+                "display_mode",
+                Kind::Choice(MODES),
+                "Display",
+                "How the game shows.",
+            ),
+            OptionSpec::new("name", Kind::Text, "Profile", "The driver's name."),
+        ];
+        let ui = testing::harness(
+            &Palette::default(),
+            &Metrics::DEFAULT,
+            vec![String::from("on"), "window".into(), "Colin".into()],
+            |ui, values: &mut Vec<String>| {
+                for (spec, value) in ROWS.iter().zip(values.iter_mut()) {
+                    spec_row_with(
+                        ui,
+                        spec,
+                        value,
+                        RowOptions {
+                            disabled: Some("Needs DXVK."),
+                            ..RowOptions::default()
+                        },
+                    );
+                }
+            },
+        );
+        // Every row shows the reason once, and not its description.
+        assert_eq!(ui.get_all_by_label("Needs DXVK.").count(), 3);
+        assert!(ui.query_by_label("How the game shows.").is_none());
+        // The switch still shows the saved value.
+        let vsync = ui.get_by_role_and_label(Role::Switch, "VSync");
+        assert!(testing::checked(&vsync));
+        assert!(testing::disabled(&vsync));
+        // Screen readers get both, as two sentences.
+        assert_eq!(
+            testing::description(&vsync).as_deref(),
+            Some("Waits for the screen's refresh. Needs DXVK.")
+        );
+    }
+
+    #[test]
     fn rows_can_be_disabled_and_ranges_drawn_as_steps() {
         let mut ui = testing::harness(
             &Palette::default(),
@@ -523,6 +587,8 @@ mod tests {
             testing::description(&display).as_deref(),
             Some("Needs DXVK")
         );
+        // Written on the window, once (not only on hover).
+        assert_eq!(ui.get_all_by_label("Needs DXVK").count(), 1);
         let window = ui.get_by_label("Window");
         assert!(testing::disabled(&window));
         ui.get_by_label("Fullscreen").click();

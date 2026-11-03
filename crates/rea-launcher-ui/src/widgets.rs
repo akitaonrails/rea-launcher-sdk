@@ -70,8 +70,8 @@ pub fn focus_ring(painter: &Painter, rect: Rect, color: Color32) {
 pub struct Chip<'a, T> {
     pub value: T,
     pub label: &'a str,
-    /// Why it cannot be chosen now (shown on hover, and to screen readers);
-    /// `None` when it can.
+    /// Why it cannot be chosen now (shown under the row, on hover and to
+    /// screen readers); `None` when it can.
     pub disabled: Option<&'a str>,
 }
 
@@ -164,8 +164,10 @@ pub fn chips<T: PartialEq + Clone, S: AsRef<str>>(
 /// A row of choice chips. The row is one focus stop: ←/→ (or the pad's
 /// left/right) step to the previous/next enabled choice and Space steps
 /// forward, so a pad never has to visit every chip. Clicks pick a chip.
-/// Disabled chips ignore clicks and show their reason on hover. The row's
-/// response is `changed()` when the value changed.
+/// Disabled chips ignore clicks; their reasons are written under the row
+/// (a pad never hovers: [`disabled_reasons`]) and shown on hover. The saved
+/// value stays outlined while disabled ([`ChipState::SavedDisabled`]). The
+/// row's response is `changed()` when the value changed.
 ///
 /// Accessibility: the row is a radio group whose value is the chosen
 /// label; each chip is a radio button (checked when chosen, disabled with
@@ -185,13 +187,79 @@ pub fn chips_sized<T: PartialEq + Clone>(
     current: &mut T,
     size: ChipSize,
 ) -> Response {
+    chips_noted(ui, options, current, size, true)
+}
+
+/// What a chip row writes under itself about its disabled chips, one line
+/// per reason: the reason alone when every chip is disabled for it,
+/// otherwise the chips' labels first ("Glide, Vulkan: Needs the 3dfx
+/// build."). Empty when every chip can be chosen.
+pub fn disabled_reasons<T>(options: &[Chip<'_, T>]) -> Vec<String> {
+    let mut reasons: Vec<(&str, Vec<&str>)> = Vec::new();
+    for chip in options {
+        let Some(why) = chip.disabled.filter(|why| !why.is_empty()) else {
+            continue;
+        };
+        match reasons.iter_mut().find(|(seen, _)| *seen == why) {
+            Some((_, labels)) => labels.push(chip.label),
+            None => reasons.push((why, vec![chip.label])),
+        }
+    }
+    let all = reasons.len() == 1 && reasons[0].1.len() == options.len();
+    reasons
+        .into_iter()
+        .map(|(why, labels)| {
+            if all {
+                why.to_owned()
+            } else {
+                format!("{}: {why}", labels.join(", "))
+            }
+        })
+        .collect()
+}
+
+/// A chip row, with its [`disabled_reasons`] under it when `noted` (spec
+/// rows write the reason in place of their description instead).
+pub(crate) fn chips_noted<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    options: &[Chip<'_, T>],
+    current: &mut T,
+    size: ChipSize,
+    noted: bool,
+) -> Response {
+    // The focus id stays the same whether or not a note follows.
+    let id = ui.next_auto_id().with("rea-chips");
+    let reasons = if noted {
+        disabled_reasons(options)
+    } else {
+        Vec::new()
+    };
+    if reasons.is_empty() {
+        return chip_row(ui, id, options, current, size);
+    }
+    ui.vertical(|ui| {
+        let row = chip_row(ui, id, options, current, size);
+        for line in &reasons {
+            note(ui, line);
+        }
+        row
+    })
+    .inner
+}
+
+fn chip_row<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: egui::Id,
+    options: &[Chip<'_, T>],
+    current: &mut T,
+    size: ChipSize,
+) -> Response {
     let p = palette(ui);
     let m = metrics(ui);
     let (pad, gap) = match size {
         ChipSize::Normal => (m.chip_pad, m.chip_gap),
         ChipSize::Compact => (m.compact_chip_pad, m.compact_chip_gap),
     };
-    let id = ui.next_auto_id().with("rea-chips");
     let mut changed = false;
     let row = ui
         .horizontal_wrapped(|ui| {
@@ -314,9 +382,23 @@ pub fn chips_sized<T: PartialEq + Clone>(
 
 /// A switch: knob left and outlined is off, knob right on `select` is on.
 /// Long labels wrap to the width left when [`Metrics::toggle_wrap`]. With a
-/// `disabled` reason it ignores clicks and shows the reason on hover.
-/// Accessibility: a switch named by its label.
+/// `disabled` reason it ignores clicks, keeps showing the saved value
+/// (knob where it is, a dimmed outline) and writes the reason under its
+/// label, where a pad player sees it (also on hover).
+/// Accessibility: a switch named by its label, the reason its description.
 pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str, disabled: Option<&str>) -> Response {
+    toggle_noted(ui, on, text, disabled, true)
+}
+
+/// [`toggle`]; the reason under the label only when `noted` (spec rows
+/// write it in place of their description instead).
+pub(crate) fn toggle_noted(
+    ui: &mut Ui,
+    on: &mut bool,
+    text: &str,
+    disabled: Option<&str>,
+    noted: bool,
+) -> Response {
     let p = palette(ui);
     let enabled = disabled.is_none();
     let label = if enabled { p.ink } else { p.disabled_ink };
@@ -328,7 +410,19 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str, disabled: Option<&str>) ->
         ui.painter()
             .layout_no_wrap(text.to_owned(), body(size::LABEL), label)
     };
-    let size = vec2(46.0 + 12.0 + galley.size().x, 30.0_f32.max(galley.size().y));
+    // The reason always wraps: it can be a sentence.
+    let reason = disabled.filter(|why| noted && !why.is_empty()).map(|why| {
+        let wrap = (ui.available_width() - 58.0).max(100.0);
+        ui.painter()
+            .layout(why.to_owned(), body(size::NOTE), p.muted, wrap)
+    });
+    let line = 30.0_f32.max(galley.size().y);
+    let below = reason.as_ref().map_or(0.0, |r| r.size().y + 2.0);
+    let width = galley
+        .size()
+        .x
+        .max(reason.as_ref().map_or(0.0, |r| r.size().x));
+    let size = vec2(46.0 + 12.0 + width, line + below);
     let (rect, mut response) = ui.allocate_exact_size(
         size,
         if enabled {
@@ -341,12 +435,18 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str, disabled: Option<&str>) ->
         *on = !*on;
         response.mark_changed();
     }
-    let active = enabled && *on;
-    let t = ui.ctx().animate_bool(response.id, active);
-    let track = Rect::from_min_size(pos2(rect.left(), rect.center().y - 13.0), vec2(46.0, 26.0));
+    // Disabled, the knob still shows the saved value (SRR's chips).
+    let t = ui.ctx().animate_bool(response.id, *on);
+    let middle = rect.top() + line / 2.0;
+    let track = Rect::from_min_size(pos2(rect.left(), middle - 13.0), vec2(46.0, 26.0));
     let painter = ui.painter();
-    let (fill, stroke, knob) = match (enabled, active) {
-        (false, _) => (Color32::TRANSPARENT, p.disabled_line, p.disabled_ink),
+    let (fill, stroke, knob) = match (enabled, *on) {
+        (false, true) => (
+            Color32::TRANSPARENT,
+            p.select.gamma_multiply(0.5),
+            p.disabled_ink,
+        ),
+        (false, false) => (Color32::TRANSPARENT, p.disabled_line, p.disabled_ink),
         (true, true) => (p.select, p.select, p.on_select),
         (true, false) => (Color32::TRANSPARENT, p.muted, p.muted),
     };
@@ -359,14 +459,11 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str, disabled: Option<&str>) ->
     );
     let x = egui::lerp(track.left() + 13.0..=track.right() - 13.0, t);
     painter.circle_filled(pos2(x, track.center().y), 9.0, knob);
-    painter.galley(
-        pos2(
-            track.right() + 12.0,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        label,
-    );
+    let text_x = track.right() + 12.0;
+    painter.galley(pos2(text_x, middle - galley.size().y / 2.0), galley, label);
+    if let Some(reason) = reason {
+        painter.galley(pos2(text_x, rect.top() + line + 2.0), reason, p.muted);
+    }
     if response.has_focus() {
         focus_ring(painter, track, p.focus);
     }
@@ -378,6 +475,23 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str, disabled: Option<&str>) ->
     match disabled {
         Some(reason) => response.on_hover_text(reason),
         None => response.on_hover_cursor(CursorIcon::PointingHand),
+    }
+}
+
+/// `first` and `second` as two sentences: a full stop between them unless
+/// `first` already ends one (". ", "! ", "? ", "… "); either may be empty.
+pub fn join_sentences(first: &str, second: &str) -> String {
+    let (first, second) = (first.trim_end(), second.trim());
+    if first.is_empty() {
+        return second.to_owned();
+    }
+    if second.is_empty() {
+        return first.to_owned();
+    }
+    if first.ends_with(['.', '!', '?', '…', ':']) {
+        format!("{first} {second}")
+    } else {
+        format!("{first}. {second}")
     }
 }
 
@@ -397,8 +511,9 @@ pub struct LookCard<'a> {
     /// From [`fit_title`], so every card's title has the same size; 0 uses
     /// [`theme::CardMetrics::title`].
     pub title_size: f32,
-    /// Why it can't be chosen now: dimmed, ignores clicks, shows the reason
-    /// on hover and to screen readers.
+    /// Why it can't be chosen now: dimmed, ignores clicks, and the reason
+    /// is written in place of the note (a pad never hovers), shown on hover
+    /// and given to screen readers after the note.
     pub disabled: Option<&'a str>,
 }
 
@@ -497,23 +612,23 @@ pub fn look_card(ui: &mut Ui, size: Vec2, card: &LookCard<'_>) -> Response {
         painter.rect_filled(tab, CornerRadius::same(4), p.action);
         painter.galley(tab.min + vec2(c.badge_pad, 1.0), galley, p.on_action);
     }
-    let galley = painter.layout(
-        card.note.to_owned(),
-        body(c.note),
-        muted,
-        size.x - 2.0 * c.pad,
-    );
+    // Disabled, the reason takes the note's place, readable in `muted`.
+    let (shown, color) = match card.disabled.filter(|why| !why.is_empty()) {
+        Some(why) => (why, p.muted),
+        None => (card.note, muted),
+    };
+    let galley = painter.layout(shown.to_owned(), body(c.note), color, size.x - 2.0 * c.pad);
     painter.galley(
         rect.left_top() + vec2(c.pad, c.pad + c.note_top),
         galley,
-        muted,
+        color,
     );
-    let mut description = match (card.badge, card.detail) {
-        (badge, Some(detail)) => format!("{}{}. {detail}", badge_prefix(badge), card.note),
-        (badge, None) => format!("{}{}", badge_prefix(badge), card.note),
-    };
+    let mut description = join_sentences(card.badge.unwrap_or_default(), card.note);
+    if let Some(detail) = card.detail {
+        description = join_sentences(&description, detail);
+    }
     if let Some(why) = card.disabled {
-        description = format!("{description}. {why}");
+        description = join_sentences(&description, why);
     }
     accessible(
         &response,
@@ -544,10 +659,6 @@ fn finish_card(response: Response, hover: Option<&str>, enabled: bool) -> Respon
     }
 }
 
-fn badge_prefix(badge: Option<&str>) -> String {
-    badge.map(|badge| format!("{badge}. ")).unwrap_or_default()
-}
-
 /// One game in a multi-game launcher (SCR's trilogy picker).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GameCard<'a> {
@@ -558,7 +669,8 @@ pub struct GameCard<'a> {
     /// Whether the game was found: the dot is `select` when it was,
     /// `disabled_ink` (and the subtitle dimmed) when not.
     pub installed: bool,
-    /// Why it can't be chosen now (see [`LookCard::disabled`]).
+    /// Why it can't be chosen now: written in place of the subtitle (see
+    /// [`LookCard::disabled`]).
     pub disabled: Option<&'a str>,
 }
 
@@ -591,10 +703,14 @@ pub fn game_card(ui: &mut Ui, size: Vec2, card: &GameCard<'_>) -> Response {
         (p.disabled_ink, p.disabled_ink)
     };
     painter.circle_filled(pos2(rect.right() - c.pad, rect.top() + 18.0), 4.0, dot);
+    let (subtitle, sub) = match card.disabled.filter(|why| !why.is_empty()) {
+        Some(why) => (why, p.muted),
+        None => (card.subtitle, sub),
+    };
     painter.text(
         rect.left_top() + vec2(c.pad, c.pad + 24.0),
         Align2::LEFT_TOP,
-        card.subtitle,
+        subtitle,
         body(c.note),
         sub,
     );
@@ -605,7 +721,7 @@ pub fn game_card(ui: &mut Ui, size: Vec2, card: &GameCard<'_>) -> Response {
     };
     let mut description = format!("{}; {state}", card.subtitle);
     if let Some(why) = card.disabled {
-        description = format!("{description}. {why}");
+        description = join_sentences(&description, why);
     }
     accessible(
         &response,
@@ -1493,6 +1609,124 @@ mod tests {
         assert_eq!(color_of(&texts, "1995"), p.muted);
         assert_eq!(color_of(&texts, "Two"), p.ink);
         assert_eq!(color_of(&texts, "1996"), p.disabled_ink);
+    }
+
+    #[test]
+    fn sentences_join_with_one_full_stop() {
+        // SCR: a note ending in "." plus a reason gave "look.. Needs".
+        assert_eq!(
+            join_sentences("The game's look.", "Needs DXVK"),
+            "The game's look. Needs DXVK"
+        );
+        assert_eq!(
+            join_sentences("Buttons", "Needs axes"),
+            "Buttons. Needs axes"
+        );
+        assert_eq!(join_sentences("Really?", "Yes."), "Really? Yes.");
+        assert_eq!(join_sentences("", "Needs DXVK"), "Needs DXVK");
+        assert_eq!(join_sentences("Note.", ""), "Note.");
+        assert_eq!(join_sentences("Note. ", " why"), "Note. why");
+    }
+
+    #[test]
+    fn disabled_reasons_name_the_chips_unless_all_share_one() {
+        let all = [
+            Chip::new(1, "a").disabled(Some("Needs DXVK.")),
+            Chip::new(2, "b").disabled(Some("Needs DXVK.")),
+        ];
+        assert_eq!(disabled_reasons(&all), ["Needs DXVK."]);
+        let some = [
+            Chip::new(0, "Off"),
+            Chip::new(1, "Bloom").disabled(Some("Needs Vulkan on.")),
+            Chip::new(2, "CRT").disabled(Some("Needs Vulkan on.")),
+            Chip::new(3, "Glide").disabled(Some("Needs the 3dfx build.")),
+        ];
+        assert_eq!(
+            disabled_reasons(&some),
+            [
+                "Bloom, CRT: Needs Vulkan on.",
+                "Glide: Needs the 3dfx build."
+            ]
+        );
+        assert!(disabled_reasons(&[Chip::new(0, "Off")]).is_empty());
+        assert!(disabled_reasons(&[Chip::new(0, "Off").disabled(Some(""))]).is_empty());
+    }
+
+    #[test]
+    fn disabled_controls_say_why_where_a_pad_player_looks() {
+        let p = crate::theme::tests::OR;
+        let texts = texts(&p, &Metrics::DEFAULT, |ui| {
+            let mut fps = 60u32;
+            chips(
+                ui,
+                &[(60u32, "60"), (120, "120")],
+                &mut fps,
+                Some("Needs DXVK."),
+            );
+            let mut on = true;
+            toggle(ui, &mut on, "Rumble", Some("Plug in a pad first."));
+            look_card(
+                ui,
+                vec2(220.0, 100.0),
+                &LookCard {
+                    title: "Custom",
+                    note: "Your own buttons.",
+                    disabled: Some("Turn the pad on first."),
+                    ..LookCard::default()
+                },
+            );
+            game_card(
+                ui,
+                vec2(220.0, 64.0),
+                &GameCard {
+                    title: "Screamer 2",
+                    subtitle: "1996",
+                    disabled: Some("Not in this folder."),
+                    ..GameCard::default()
+                },
+            );
+        });
+        // Drawn on screen, in a colour that passes AA on the base.
+        for reason in [
+            "Needs DXVK.",
+            "Plug in a pad first.",
+            "Turn the pad on first.",
+            "Not in this folder.",
+        ] {
+            assert_eq!(color_of(&texts, reason), p.muted, "{reason}");
+        }
+        // The reason sits under the switch's label, not beside it.
+        assert!(rect_of(&texts, "Plug in a pad first.").top() > rect_of(&texts, "Rumble").bottom());
+        // The card's reason replaces its note (still in the description).
+        assert!(
+            texts
+                .iter()
+                .all(|(t, ..)| t != "Your own buttons." && t != "1996")
+        );
+    }
+
+    #[test]
+    fn a_disabled_toggle_keeps_showing_the_saved_value() {
+        let knob_x = |on: bool| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx, &Palette::default());
+            let mut x = 0.0;
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let mut on = on;
+                    toggle(ui, &mut on, "Saved", Some("Locked."));
+                });
+                output.textures_delta.clear();
+                for clipped in output.shapes {
+                    if let Shape::Circle(circle) = clipped.shape {
+                        x = circle.center.x;
+                    }
+                }
+            }
+            x
+        };
+        // On stays on the right while disabled (v0.3 drew it off).
+        assert!(knob_x(true) > knob_x(false) + 10.0);
     }
 
     #[test]
