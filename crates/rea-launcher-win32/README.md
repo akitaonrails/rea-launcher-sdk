@@ -18,7 +18,7 @@ state parsing and button bits (`rea_launcher::pad`) — live in the portable
 | `display` | `monitors` (physical modes, as `rea_launcher::display::Monitor`), `displays` (+ refresh rate, `\\.\DISPLAYn` device, adapter name), `adapters` (GPU names, attached/primary), `screen_size`, `mode_supported`, `wine_dpi_scale` (Wine only; 1.0 and untouched DPI awareness on Windows) | CMR4 + SCR + SRR + OR |
 | `gpu` | `prefer_fast_gpu` (`GpuPreference=2;`), `prefer_glx` (Wine `UseEGL=N`) | all four |
 | `dialog` | `message`, `pick_folder`, `open_url` | all four |
-| `report` | `fatal`/`note(title, text, Mode::{Command, Play})`: print and/or dialog by the rule below; `route`, `route_here`, `Terminal` | CMR3/CMR4 regression |
+| `report` | `audience(Run { command, no_window, settings_only, linux })` → `Audience { command, interactive }` and `.mode()` (who is watching; pure `Audience::of(run, wine)`, `Run::from_args(args, extra_commands)`, `COMMAND_FLAGS`); `fatal`/`note(title, text, Mode::{Command, Play})`: print and/or dialog by the rule below; `route`, `route_here`, `Terminal` | CMR3/CMR4/DiRT regression, CMR1 `audience.rs` |
 | `console` | `attach_parent()` (attach to the starting terminal's console and point stdout/stderr at it, keeping redirections), `stdout_usable()`, `output(attached, usable, interactive)` → Terminal / Dialog / Nowhere | new |
 | `disk` | `free_space` | OR |
 | `http` | `WinHttp::new(agent)`: `impl rea_launcher::download::Fetch` (HTTPS through WinHTTP, ranged resume, redirects, streamed) — pass it to `download::install`; pure `split_https`, `range_header`, `body_starts_at_from` | OR |
@@ -42,6 +42,24 @@ warning)`:
 |---|---|---|
 | `Mode::Command { interactive }` — `--help`, `--check`, `--list`… | when there is a console or a redirect | only when nobody sees the terminal (no console, and stdout goes nowhere or, under Wine, to a log) and `interactive` |
 | `Mode::Play { interactive }` — unknown edition, game folder not found, already running, a failed install… | when there is a console or a redirect | always when `interactive` (not `--no-window` from a script) |
+
+**Never compute `interactive` yourself.** Take the mode from the run's
+flags: `report::audience(run).mode()`, where `run` is a `report::Run`
+filled from the parsed command line (or `Run::from_args`). The rule it
+applies:
+
+| Run | A person may be watching (`interactive`) |
+|---|---|
+| the window, then the game; any run under Wine; any `--linux` play run (`--no-window --linux`) | yes |
+| `--no-window` on native Windows without `--linux` | no: a script |
+| `--settings --linux` (the helper's settings window) | no: the window shows its own messages; exit code 4 makes the helper play, and that run reports |
+| a command (`--help`, `--check`…) | yes, unless `--no-window` on native Windows or `--linux` (the helper reads the output) |
+
+`interactive = !no_window` was the v0.3.x mistake in CMR3, CMR4 and DiRT:
+the Linux helper always starts the game run with `--no-window`, so a wrong
+game folder or "already running" under Wine looked like a game that never
+started. `Audience::of` is tested for all 32 combinations of the four
+flags and Wine.
 
 `report::route(mode, Terminal { attached, redirected, wine })` is the
 decision table (pure, tested on the host); `report::route_here(mode)`
