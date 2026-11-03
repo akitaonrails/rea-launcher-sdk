@@ -70,6 +70,15 @@ on:
         description: Arguments for sdk/scripts/wine-test (the target is added from rust-target).
         type: string
         default: --locked --workspace
+      wine-test-exclude:
+        description: >-
+          Crates (space-separated) left out of the Wine tests, e.g. a no_std
+          hook DLL whose tests only build for the host (CMR1's cmr-hooks).
+          Better: mark the crate itself ([package.metadata.rea] wine-test =
+          false in its Cargo.toml), which sdk/scripts/wine-test (v0.4.0+)
+          reads for --workspace runs and local runs alike.
+        type: string
+        default: ""
       audit:
         description: >-
           Run cargo audit and cargo deny check. Needs a deny.toml that allows
@@ -416,12 +425,17 @@ jobs:
         shell: sh
         env:
           WINE_TEST_ARGS: ${{ inputs.wine-test-args }}
+          WINE_TEST_EXCLUDE: ${{ inputs.wine-test-exclude }}
         run: |
           case $WINE_TEST_ARGS in *[!A-Za-z0-9_=,.:/\ -]*) echo "::error::unexpected characters in wine-test-args"; exit 1 ;; esac
+          case $WINE_TEST_EXCLUDE in *[!A-Za-z0-9_\ -]*) echo "::error::unexpected characters in wine-test-exclude"; exit 1 ;; esac
           [ -f "$SDK_DIR/scripts/wine-test" ] || { echo "::error::no $SDK_DIR/scripts/wine-test: re-run scripts/sdk-sync from SDK v0.2.0 or later"; exit 1; }
           set -f
+          # The excludes go first: WINE_TEST_ARGS may end with "-- test args".
+          set -- --target "$RUST_TARGET"
+          for crate in $WINE_TEST_EXCLUDE; do set -- "$@" --exclude "$crate"; done
           # shellcheck disable=SC2086 # split the argument list on purpose
-          sh "$SDK_DIR/scripts/wine-test" --target "$RUST_TARGET" $WINE_TEST_ARGS
+          sh "$SDK_DIR/scripts/wine-test" "$@" $WINE_TEST_ARGS
 
       - name: Imports test
         if: inputs.imports-test != ''

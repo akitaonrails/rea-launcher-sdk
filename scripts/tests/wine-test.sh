@@ -51,7 +51,7 @@ cat > "$T/bin/cargo" <<'F'
   echo "runner_i686=${CARGO_TARGET_I686_PC_WINDOWS_GNU_RUNNER:-}"
   echo "runner_x86_64=${CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER:-}"
   echo "prefix=$WINEPREFIX"; echo "target_dir=$CARGO_TARGET_DIR"
-  echo "display=${DISPLAY:-}"; } > "$FAKE_RECORD"
+  echo "display=${DISPLAY:-}"; echo "lang=${LANG:-} lc_all=${LC_ALL:-}"; } > "$FAKE_RECORD"
 case $FAKE_MODE in
   pass) echo 'test result: ok. 3 passed; 0 failed'; exit 0 ;;
   fail) cat "$FAKE_LOG"; exit 101 ;;
@@ -109,5 +109,34 @@ if run fail --workspace; then bad "failing run exits non-zero"; else ok "failing
 check "every failing test named (listed and from the aborted binary)" "FAIL ini::keeps_bom
 FAIL ini::trims_keys
 FAIL abi::two" "$(grep '^FAIL' "$T/out")"
+
+# The locale is C.UTF-8 whatever the caller's.
+(cd "$T/ws" && FAKE_MODE=pass LANG= LC_ALL=POSIX sh "$WT" --workspace >/dev/null 2>&1)
+grep -qx 'lang=C.UTF-8 lc_all=C.UTF-8' "$T/record" && ok "LANG and LC_ALL are C.UTF-8" || bad "locale: $(grep lang "$T/record")"
+
+# Host-only crates opt out with [package.metadata.rea] wine-test = false.
+mkdir -p "$T/ws/crates/hooks" "$T/ws/crates/game" "$T/ws/target/x" "$T/ws/.work/y"
+printf '[package]\nname = "cmr-hooks"\n\n[package.metadata.rea]\nwine-test = false\n' > "$T/ws/crates/hooks/Cargo.toml"
+printf '[package]\nname = "game"\n\n[package.metadata.rea]\nwine-test = true\n' > "$T/ws/crates/game/Cargo.toml"
+printf '[package]\nname = "stale"\n[package.metadata.rea]\nwine-test = false\n' > "$T/ws/target/x/Cargo.toml"
+cp "$T/ws/target/x/Cargo.toml" "$T/ws/.work/y/Cargo.toml"
+run pass --locked --workspace
+check "an opted-out crate is excluded from --workspace" \
+  "args: [test] [--target] [i686-pc-windows-gnu] [--no-fail-fast] [--locked] [--workspace] [--exclude] [cmr-hooks] [--] [--test-threads=1]" \
+  "$(sed -n 1p "$T/record")"
+grep -q 'leaving out cmr-hooks' "$T/err" && ok "and says so" || bad "no note: $(cat "$T/err")"
+run pass --workspace -- --nocapture
+check "...also with test arguments" \
+  "args: [test] [--target] [i686-pc-windows-gnu] [--no-fail-fast] [--workspace] [--exclude] [cmr-hooks] [--] [--nocapture] [--test-threads=1]" \
+  "$(sed -n 1p "$T/record")"
+run pass -p game
+check "without --workspace nothing is excluded" \
+  "args: [test] [--target] [i686-pc-windows-gnu] [--no-fail-fast] [-p] [game] [--] [--test-threads=1]" \
+  "$(sed -n 1p "$T/record")"
+run pass --workspace --exclude other
+check "an explicit --exclude is kept" \
+  "args: [test] [--target] [i686-pc-windows-gnu] [--no-fail-fast] [--workspace] [--exclude] [other] [--exclude] [cmr-hooks] [--] [--test-threads=1]" \
+  "$(sed -n 1p "$T/record")"
+rm -rf "$T/ws/crates" "$T/ws/.work"
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

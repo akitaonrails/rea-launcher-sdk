@@ -236,6 +236,17 @@ notes() { # notes-since [latest]
 S=$(step launcher-release.yml "Release notes exist") || exit 1
 if (cd "$R/w" && NOTES=changelog CHANGELOG=CHANGELOG.md SDK_DIR=sdk NOTES_SINCE='x;y' GITHUB_REF_NAME=v0.2.2 sh -e "$S") >/dev/null 2>&1; then bad "release notes: a bad notes-since is refused"; else ok "release notes: a bad notes-since is refused"; fi
 
+# Wine tests: wine-test-exclude reaches wine-test as --exclude, before the
+# arguments (which may end with "-- test args").
+W=$T/wt
+mkdir -p "$W/sdk/scripts"
+printf '#!/bin/sh\nprintf "[%%s]" "$@" > "%s/args"\n' "$W" > "$W/sdk/scripts/wine-test"
+S=$(step launcher-ci.yml "Windows-target tests under Wine (headless)") || exit 1
+(cd "$W" && SDK_DIR=sdk RUST_TARGET=i686-pc-windows-gnu WINE_TEST_ARGS='--locked --workspace -- --nocapture' WINE_TEST_EXCLUDE='cmr-hooks other' sh -e "$S") >"$T/out" 2>&1
+[ "$(cat "$W/args")" = "[--target][i686-pc-windows-gnu][--exclude][cmr-hooks][--exclude][other][--locked][--workspace][--][--nocapture]" ] \
+  && ok "wine tests: wine-test-exclude as --exclude, before the args" || bad "wine tests: $(cat "$W/args" "$T/out")"
+if (cd "$W" && SDK_DIR=sdk RUST_TARGET=i686-pc-windows-gnu WINE_TEST_ARGS='' WINE_TEST_EXCLUDE='a;b' sh -e "$S") >/dev/null 2>&1; then bad "wine tests: a bad exclude is refused"; else ok "wine tests: a bad exclude is refused"; fi
+
 # No status-swallowing "check && echo" anywhere in the workflows.
 if grep -n '&& echo' "$WF"/*.yml; then bad "no '&& echo' checks in workflows"; else ok "no '&& echo' checks in workflows"; fi
 
