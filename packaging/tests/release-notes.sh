@@ -74,4 +74,36 @@ refuses "a missing version fails" v0.9.0 "$T/kac.md"
 refuses "an empty section fails" v0.3.0 "$T/empty.md"
 refuses "a missing changelog fails" v0.1.0 "$T/none.md"
 refuses "no arguments fails"
+# --since: a fix-forward release (0.2.1 tagged, never published; 0.2.2).
+cat > "$T/ff.md" <<'MD'
+# Changelog
+
+## [Unreleased]
+
+- next
+
+## [0.2.2] - 2026-12-03
+
+### Fixed
+
+- the release build
+
+## [0.2.1] - 2026-12-02
+
+### Added
+
+- a feature
+
+## [0.2.0] - 2026-12-01
+
+- older
+
+[0.2.2]: https://example.com
+MD
+check "--since: every unpublished section, newest first, with headings" "$(printf '## [0.2.2] - 2026-12-03\n\n### Fixed\n\n- the release build\n\n## [0.2.1] - 2026-12-02\n\n### Added\n\n- a feature')" "$(sh "$NOTES" --since v0.2.0 v0.2.2 "$T/ff.md")"
+check "--since the previous version: only the version, with its heading" "$(printf '## [0.2.2] - 2026-12-03\n\n### Fixed\n\n- the release build')" "$(sh "$NOTES" --since 0.2.1 v0.2.2 "$T/ff.md")"
+check "--since an older version than any: up to the oldest" "3" "$(sh "$NOTES" --since v0.0.1 v0.2.2 "$T/ff.md" | grep -c '^## ')"
+check "without --since: unchanged" "$(printf '### Fixed\n\n- the release build')" "$(sh "$NOTES" v0.2.2 "$T/ff.md")"
+refuses "--since still needs the version's own section" --since v0.2.0 v0.2.3 "$T/ff.md"
+refuses "--since without a value" --since
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

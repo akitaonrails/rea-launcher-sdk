@@ -11,7 +11,7 @@ busybox) and is vendored into each launcher by `scripts/sdk-sync`.
 | `appimage/tools.pins` | Pins for Wine, appimagetool and the dated type2 runtime |
 | `appimage/wine/` | Wine's licence and source notes, shipped in every Wine AppImage |
 | `smoke-package.sh` | Checks a package folder or zip against an allowlist |
-| `release-notes.sh` | Prints a version's CHANGELOG section |
+| `release-notes.sh` | Prints a version's CHANGELOG section; `--since vX` adds every section after vX (a fix-forward release) |
 | `../.github/workflows/launcher-ci.yml` | Reusable: checks, build, package, allowlist, upload |
 | `../.github/workflows/launcher-release.yml` | Reusable: tag/version check, SHA256SUMS, attestation, release |
 | `../.github/workflows/upstream-watch.yml` | Reusable: opens an issue when an upstream release no longer matches its pin |

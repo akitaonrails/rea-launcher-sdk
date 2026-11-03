@@ -216,6 +216,26 @@ grep -q hunter2 "$T/out" && bad "secret scan: gitleaks' output was shown" || ok 
 echo '[extend]' > "$G/w/.gitleaks.toml"; : > "$G/log"; scan
 grep -q -- "-c $G/w/.gitleaks.toml" "$G/log" && ok "secret scan: a repository's .gitleaks.toml wins" || bad "secret scan: repo config: $(cat "$G/log")"
 
+# launcher-release notes: notes-since (a fix-forward release).
+R=$T/rel
+mkdir -p "$R/w/sdk/packaging" "$R/bin" "$R/rt"
+cp "$HERE/../../packaging/release-notes.sh" "$R/w/sdk/packaging/"
+printf '# Changelog\n\n## [0.2.2] - d\n\n- fix\n\n## [0.2.1] - d\n\n- feature\n\n## [0.2.0] - d\n\n- old\n' > "$R/w/CHANGELOG.md"
+printf '#!/bin/sh\necho "${GH_LATEST:-}"\n[ -n "${GH_LATEST:-}" ]\n' > "$R/bin/gh"; chmod +x "$R/bin/gh"
+S=$(step launcher-release.yml "Release notes") || exit 1
+notes() { # notes-since [latest]
+  (cd "$R/w" && PATH="$R/bin:$PATH" NOTES=changelog CHANGELOG=CHANGELOG.md SDK_DIR=sdk NOTES_SINCE=$1 GH_LATEST=${2:-} \
+    GITHUB_REF_NAME=v0.2.2 GITHUB_REPOSITORY=o/r RUNNER_TEMP="$R/rt" sh -e "$S") > "$T/out" 2>&1
+  grep -c '^- ' "$R/rt/notes.md"
+}
+[ "$(notes '')" = 1 ] && ok "release notes: only the tag's section by default" || bad "release notes: default: $(cat "$R/rt/notes.md")"
+[ "$(notes v0.2.0)" = 2 ] && ok "release notes: notes-since a tag" || bad "release notes: since: $(cat "$R/rt/notes.md")"
+[ "$(notes latest-release v0.2.0)" = 2 ] && ok "release notes: since the latest published release" || bad "release notes: latest: $(cat "$R/rt/notes.md" "$T/out")"
+[ "$(notes latest-release)" = 1 ] && ok "release notes: no release yet: the tag's section" || bad "release notes: none yet: $(cat "$R/rt/notes.md")"
+[ "$(notes latest-release v0.2.2)" = 1 ] && ok "release notes: the latest is this tag: its section" || bad "release notes: same tag"
+S=$(step launcher-release.yml "Release notes exist") || exit 1
+if (cd "$R/w" && NOTES=changelog CHANGELOG=CHANGELOG.md SDK_DIR=sdk NOTES_SINCE='x;y' GITHUB_REF_NAME=v0.2.2 sh -e "$S") >/dev/null 2>&1; then bad "release notes: a bad notes-since is refused"; else ok "release notes: a bad notes-since is refused"; fi
+
 # No status-swallowing "check && echo" anywhere in the workflows.
 if grep -n '&& echo' "$WF"/*.yml; then bad "no '&& echo' checks in workflows"; else ok "no '&& echo' checks in workflows"; fi
 
