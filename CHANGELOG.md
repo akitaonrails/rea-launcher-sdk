@@ -7,6 +7,21 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.4.1] - 2026-11-02
+
+CI fixes for v0.4.0's release commit; no change for launchers' code.
+Launchers bumping from v0.3.x go straight to v0.4.1 (v0.4.0's Migration
+section applies).
+
+### Fixed
+
+- The close hook's in-front `alt_f4_state` test prints SKIPPED with the
+  reason where Wine can't bring a window to the front or let `SendInput`
+  reach `GetAsyncKeyState` (Ubuntu's Wine on CI runners), instead of
+  failing; it still runs in the gaming box.
+- The SDK's scaffold job runs `launcher-check` on the scaffold as
+  generated, before its SDK dependencies point at the checkout.
+
 ## [0.4.0] - 2026-11-02
 
 Mistakes the family made, turned into SDK functions a launcher can't get
