@@ -10,7 +10,7 @@ state parsing and button bits (`rea_launcher::pad`) — live in the portable
 
 | Module | What | From |
 |---|---|---|
-| `wine` | `is_wine` (export + env fallback), `seed_winebus`, `app_dll_overrides`/`remove_app_dll_overrides(exe, &[(dll, DllMode)])` → `Applied { written, ours, player }`; pure `DllMode`, `app_defaults_key`, `plan` | CMR4 / OR / SRR |
+| `wine` | `is_wine` (export + env fallback), `seed_winebus`, `app_dll_overrides`/`remove_app_dll_overrides(exe, &[(dll, DllMode)])` → `Applied { written, ours, matching, player }`, ownership recorded under `owned_key(exe)`; pure `DllMode`, `app_defaults_key`, `owned_key`, `step` → `Step`, `removable` (`plan` kept for old callers) | CMR4 / OR / SRR / DiRT |
 | `reg` | pure: `Error`, `seed_missing`, `virtual_store_path`, `uses_32_bit_view`; RAII `Key`: `open_read` and `Key::read_machine` (read-only, never create; VirtualStore value first, as the game sees it); `dword`/`string`/`has`/`set_*`/`*_if_missing`/`seed_dwords`; `Key::machine_or_virtual_store` (HKLM — 32-bit view under `SOFTWARE` only — or HKCU VirtualStore on access denied; `Place::describe` gives the launchers' log labels "HKLM 32-bit view" / "HKCU VirtualStore") | CMR4 |
 | `process` | `Launch` builder (args, cwd, env, hidden) → `Running` (`wait`, `is_alive`, `exit_code`, `close_gracefully(timeout)` → `Closed::{AlreadyExited, Closed, Terminated}`, `message_hook` for a close-hook DLL such as `rea-launcher-close-hook`; `#[must_use]` hook); `top_level_windows(pid)` | CMR4 + CMR3 |
 | `instance` | `single(name) -> Result<Guard, AlreadyRunning>` (named mutex in `Local\`), `AlreadyRunning::bring_to_front(Window::Title/Class)`, `is_window_found`, `mutex_name` | new |
@@ -87,8 +87,18 @@ Wine's. Before starting the game, under Wine, call
 `HKCU\Software\Wine\AppDefaults\<exe>\DllOverrides` in the current prefix
 (only where no value exists; the player's values are kept) and is a no-op
 on Windows. When a component is turned off,
-`wine::remove_app_dll_overrides` removes only the values still equal to
-ours. A Wine test proves both halves (`wine::tests`).
+`wine::remove_app_dll_overrides` removes only the values the launcher
+wrote.
+
+**Ownership is recorded, not guessed.** Each value `app_dll_overrides`
+writes is also recorded, with the exact text, under
+`HKCU\Software\rea-launcher\DllOverrides\<exe>` (`wine::owned_key`), in
+the same prefix. Removal deletes a value only while it still equals the
+record; a value the player set — even one equal to ours — has no record and
+is never deleted, and a value of ours the player changed loses its record.
+Before v0.4.0 a player's `d3d9=native,builtin` was removed with ours
+because the two looked the same (DiRT review). A Wine test proves every
+case (`wine::tests`).
 
 ## Use
 
@@ -132,3 +142,29 @@ fn play(runtime: &std::path::Path) -> Result<u32, String> {
 
 Game knowledge (which registry values, which DLLs to override, winebus
 values) stays in the launcher; this crate provides the mechanisms.
+
+## Migration
+
+What changes for a launcher moving to this version of the crate.
+
+### v0.4.0
+
+- **`report::Audience`** — replace any hand-made `interactive`
+  (`!no_window`, `!linux`, a local `audience.rs`) with
+  `report::audience(Run { command, no_window, settings_only, linux }).mode()`
+  from the parsed flags, and delete the local copy (CMR1, CMR3, DiRT have
+  one). Behaviour changes only where the local rule was wrong: a
+  `--no-window` game run under Wine or with `--linux` now gets its
+  play-time dialog; `--settings --linux` and `--check --linux` don't.
+  Verify: the launcher's tests call `report::Audience::of` for its
+  helper's command lines (`--no-window`, `--no-window --linux`,
+  `--settings --linux`).
+- **`wine::app_dll_overrides` ownership** — no code change. From now on
+  the values it writes are recorded under `owned_key(exe)`, and
+  `remove_app_dll_overrides` deletes only recorded ones. Values written by
+  a v0.3.x launcher have no record: they are reported in
+  `Applied::matching` and are no longer removed when the component is
+  turned off (with the component's DLL gone from the runtime, a leftover
+  `native,builtin` falls back to Wine's builtin, which is what "off"
+  meant). A launcher that constructs `Applied` by hand adds `matching`.
+  Log `matching` next to `ours`.

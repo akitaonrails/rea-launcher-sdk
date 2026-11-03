@@ -24,6 +24,11 @@
 //! program folder's copy loads; `WINEDLLOVERRIDES=d3dx9_35=b` in the
 //! environment block changes nothing; the AppDefaults key set to `builtin`
 //! loads Wine's.
+//!
+//! **Only what we wrote is ever removed.** `app_dll_overrides` records
+//! each value it writes under [`owned_key`] (same prefix, exact text);
+//! `remove_app_dll_overrides` deletes a value only while it still equals
+//! that record, so a player's value is kept even when it equals ours.
 
 /// How Wine should load one DLL for a program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +90,64 @@ pub fn app_defaults_key(exe: &str) -> String {
     format!(r"Software\Wine\AppDefaults\{name}\DllOverrides")
 }
 
-/// What `app_dll_overrides` does with one DLL, given the value there.
+/// Where the launcher records the overrides it wrote for `exe`:
+/// `HKCU\Software\rea-launcher\DllOverrides\<exe file name>`, one string
+/// value per DLL holding the exact value written. It lives in the same
+/// prefix as the overrides, so it travels with them.
+pub fn owned_key(exe: &str) -> String {
+    let name = exe.rsplit(['\\', '/']).next().unwrap_or(exe);
+    format!(r"Software\rea-launcher\DllOverrides\{name}")
+}
+
+/// Whether two registry values are the same text (Wine reads them
+/// without case; surrounding spaces don't count).
+fn same_value(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// What `app_dll_overrides` does with one DLL, from the value there
+/// (`existing`), what the launcher recorded writing (`recorded`, see
+/// [`owned_key`]) and the mode it wants now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Absent: write ours and record it.
+    Write,
+    /// Ours (recorded, unchanged) and already the mode we want.
+    Ours,
+    /// Ours (recorded, unchanged) in an older mode: rewrite and record.
+    Update,
+    /// Equal to our mode but not written by us (the player's, or written
+    /// before the SDK recorded ownership): kept, and never removed.
+    Matching,
+    /// Another value: the player's choice, kept. A record of ours for it
+    /// is dropped, so the value is never removed later.
+    Player,
+}
+
+/// The [`Step`] for one DLL.
+pub fn step(existing: Option<&str>, recorded: Option<&str>, ours: DllMode) -> Step {
+    let Some(value) = existing else {
+        return Step::Write;
+    };
+    let owned = recorded.is_some_and(|recorded| same_value(recorded, value));
+    let our_mode = DllMode::parse(value) == Some(ours);
+    match (owned, our_mode) {
+        (true, true) => Step::Ours,
+        (true, false) => Step::Update,
+        (false, true) => Step::Matching,
+        (false, false) => Step::Player,
+    }
+}
+
+/// Whether removing our override for one DLL deletes the value: only when
+/// the value there is exactly what the launcher recorded writing.
+pub fn removable(existing: Option<&str>, recorded: Option<&str>) -> bool {
+    matches!((existing, recorded), (Some(value), Some(recorded)) if same_value(value, recorded))
+}
+
+/// What `app_dll_overrides` (before v0.4.0) did with one DLL, given the
+/// value there. It can't tell the player's value from ours when they are
+/// equal; `app_dll_overrides` now uses [`step`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plan {
     /// Absent: write ours.
@@ -108,10 +170,13 @@ pub fn plan(existing: Option<&str>, ours: DllMode) -> Plan {
 /// What `app_dll_overrides` found and did, by DLL name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Applied {
-    /// Written now.
+    /// Written now (absent before, or ours in an older mode).
     pub written: Vec<String>,
-    /// Already set to our mode.
+    /// Ours from an earlier run, already in our mode.
     pub ours: Vec<String>,
+    /// Already our mode, but not written by this launcher (the player's,
+    /// or a launcher built on SDK v0.3.x): kept, never removed.
+    pub matching: Vec<String>,
     /// Set to something else by the player, and kept: `(dll, value)`.
     pub player: Vec<(String, String)>,
 }
@@ -121,7 +186,7 @@ pub use windows::*;
 
 #[cfg(windows)]
 mod windows {
-    use super::{Applied, DllMode, Plan, app_defaults_key, plan};
+    use super::{Applied, DllMode, Step, app_defaults_key, owned_key, removable, step};
 
     use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 
@@ -145,35 +210,60 @@ mod windows {
     }
 
     /// Sets Wine's per-program DLL overrides for `exe` (its file name)
-    /// under Wine: each DLL without a value gets ours; a value already
-    /// there is kept (the player's, or ours from an earlier run). Call it
-    /// before starting the game, every time. Does nothing (and returns an
-    /// empty [`Applied`]) on native Windows.
+    /// under Wine: each DLL without a value gets ours, and the launcher
+    /// records what it wrote ([`owned_key`](super::owned_key)); a value it
+    /// didn't write is kept (the player's). Call it before starting the
+    /// game, every time. Does nothing (and returns an empty [`Applied`])
+    /// on native Windows.
     pub fn app_dll_overrides(exe: &str, dlls: &[(&str, DllMode)]) -> Result<Applied, Error> {
         let mut applied = Applied::default();
         if !is_wine() || dlls.is_empty() {
             return Ok(applied);
         }
         let key = Key::create(Hive::CurrentUser, &app_defaults_key(exe))?;
+        let owned = Key::create(Hive::CurrentUser, &owned_key(exe))?;
         for &(dll, mode) in dlls {
             let existing = key.string(dll)?;
-            match plan(existing.as_deref(), mode) {
-                Plan::Write => {
+            let recorded = owned.string(dll)?;
+            match step(existing.as_deref(), recorded.as_deref(), mode) {
+                Step::Write | Step::Update => {
+                    // Record first: a value of ours is never left
+                    // unrecorded (it would read as the player's).
+                    owned.set_string(dll, mode.value())?;
                     key.set_string(dll, mode.value())?;
                     applied.written.push(dll.to_owned());
                 }
-                Plan::Ours => applied.ours.push(dll.to_owned()),
-                Plan::Player => applied
-                    .player
-                    .push((dll.to_owned(), existing.unwrap_or_default())),
+                Step::Ours => applied.ours.push(dll.to_owned()),
+                Step::Matching => {
+                    forget(&owned, dll, recorded.is_some())?;
+                    applied.matching.push(dll.to_owned());
+                }
+                Step::Player => {
+                    forget(&owned, dll, recorded.is_some())?;
+                    applied
+                        .player
+                        .push((dll.to_owned(), existing.unwrap_or_default()));
+                }
             }
         }
         Ok(applied)
     }
 
+    /// Drops the record of a value the player has changed since.
+    fn forget(owned: &Key, dll: &str, recorded: bool) -> Result<(), Error> {
+        if recorded {
+            owned.delete_value(dll)?;
+        }
+        Ok(())
+    }
+
     /// Removes the overrides [`app_dll_overrides`] wrote for `exe` (a
-    /// component turned off): only values still equal to our mode go; the
-    /// player's are kept. Returns the DLLs removed. Native Windows: nothing.
+    /// component turned off): only values still exactly what it recorded
+    /// writing go; the player's are kept, also when equal to ours, and so
+    /// are values written before v0.4.0 (no record). `dlls`' modes are not
+    /// needed any more (the record says what was written); the list says
+    /// which DLLs to remove. Returns the DLLs removed. Native Windows:
+    /// nothing.
     pub fn remove_app_dll_overrides(
         exe: &str,
         dlls: &[(&str, DllMode)],
@@ -182,15 +272,20 @@ mod windows {
         if !is_wine() {
             return Ok(removed);
         }
-        let Some(key) = Key::open_read(Hive::CurrentUser, &app_defaults_key(exe))? else {
+        let Some(owned) = Key::open_read(Hive::CurrentUser, &owned_key(exe))? else {
             return Ok(removed);
         };
-        drop(key);
+        drop(owned);
+        let owned = Key::create(Hive::CurrentUser, &owned_key(exe))?;
         let key = Key::create(Hive::CurrentUser, &app_defaults_key(exe))?;
-        for &(dll, mode) in dlls {
-            if plan(key.string(dll)?.as_deref(), mode) == Plan::Ours && key.delete_value(dll)? {
+        for &(dll, _) in dlls {
+            let Some(recorded) = owned.string(dll)? else {
+                continue;
+            };
+            if removable(key.string(dll)?.as_deref(), Some(&recorded)) && key.delete_value(dll)? {
                 removed.push(dll.to_owned());
             }
+            owned.delete_value(dll)?;
         }
         Ok(removed)
     }
@@ -244,6 +339,56 @@ mod tests {
         assert_eq!(plan(Some("builtin"), DllMode::Native), Plan::Player);
         assert_eq!(plan(Some(""), DllMode::Native), Plan::Player);
         assert_eq!(plan(Some("garbage"), DllMode::Native), Plan::Player);
+    }
+
+    #[test]
+    fn the_record_says_which_values_are_ours() {
+        assert_eq!(
+            owned_key(r"C:\Games\SRR\SEGA Rally.exe"),
+            r"Software\rea-launcher\DllOverrides\SEGA Rally.exe"
+        );
+        let nb = DllMode::NativeThenBuiltin;
+        // Absent: write it (also when a stale record says we did).
+        assert_eq!(step(None, None, nb), Step::Write);
+        assert_eq!(step(None, Some("native,builtin"), nb), Step::Write);
+        // Ours from an earlier run.
+        assert_eq!(
+            step(Some("native,builtin"), Some("native,builtin"), nb),
+            Step::Ours
+        );
+        assert_eq!(
+            step(Some("Native,Builtin "), Some("native,builtin"), nb),
+            Step::Ours
+        );
+        // Ours in the mode an older launcher wanted: updated.
+        assert_eq!(step(Some("native"), Some("native"), nb), Step::Update);
+        // The player's value that equals ours (or one SDK v0.3.x wrote
+        // without a record): kept, never ours.
+        assert_eq!(step(Some("native,builtin"), None, nb), Step::Matching);
+        assert_eq!(
+            step(Some("n,b"), Some("native,builtin"), nb),
+            Step::Matching
+        );
+        // The player's other value, also over our record.
+        assert_eq!(step(Some("builtin"), None, nb), Step::Player);
+        assert_eq!(
+            step(Some("builtin"), Some("native,builtin"), nb),
+            Step::Player
+        );
+        assert_eq!(step(Some(""), Some("native,builtin"), nb), Step::Player);
+    }
+
+    #[test]
+    fn only_a_value_we_recorded_is_ever_removed() {
+        assert!(removable(Some("native,builtin"), Some("native,builtin")));
+        assert!(removable(Some("NATIVE,BUILTIN"), Some("native,builtin")));
+        // The player's value equal to ours, with no record: kept.
+        assert!(!removable(Some("native,builtin"), None));
+        // Changed since we wrote it: the player's now.
+        assert!(!removable(Some("n,b"), Some("native,builtin")));
+        assert!(!removable(Some("builtin"), Some("native,builtin")));
+        assert!(!removable(None, Some("native,builtin")));
+        assert!(!removable(None, None));
     }
 
     /// Windows/Wine: a game-like program loading `d3dx9_35.dll` from its
@@ -352,7 +497,31 @@ mod tests {
         assert_eq!(applied.player, [("d3dx9_35".to_owned(), "n,b".to_owned())]);
         assert!(remove_app_dll_overrides(&file, &ours).unwrap().is_empty());
         assert_eq!(key.string("d3dx9_35").unwrap().as_deref(), Some("n,b"));
+
+        // Nor when it equals ours: the player set `builtin` themselves.
+        key.set_string("d3dx9_35", "builtin").unwrap();
+        let applied = app_dll_overrides(&file, &ours).unwrap();
+        assert_eq!(applied.matching, ["d3dx9_35"]);
+        assert!(remove_app_dll_overrides(&file, &ours).unwrap().is_empty());
+        assert_eq!(key.string("d3dx9_35").unwrap().as_deref(), Some("builtin"));
+        assert_eq!(probe::run(&exe, None), probe::BUILTIN, "the player's value");
+
+        // Ours, then changed by the player: kept, and no longer ours.
         key.delete_value("d3dx9_35").unwrap();
+        assert_eq!(
+            app_dll_overrides(&file, &ours).unwrap().written,
+            ["d3dx9_35"]
+        );
+        key.set_string("d3dx9_35", "native").unwrap();
+        assert!(app_dll_overrides(&file, &ours).unwrap().player.len() == 1);
+        key.set_string("d3dx9_35", "builtin").unwrap();
+        assert!(remove_app_dll_overrides(&file, &ours).unwrap().is_empty());
+        assert_eq!(key.string("d3dx9_35").unwrap().as_deref(), Some("builtin"));
+
+        key.delete_value("d3dx9_35").unwrap();
+        let owned =
+            crate::reg::Key::create(crate::reg::Hive::CurrentUser, &owned_key(&file)).unwrap();
+        assert_eq!(owned.string("d3dx9_35").unwrap(), None, "no record left");
         let _ = std::fs::remove_dir_all(exe.parent().unwrap());
     }
 }
