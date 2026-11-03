@@ -1920,6 +1920,7 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "jpeg-decoder",
+ "libc",
  "rea-launcher",
 ]
 

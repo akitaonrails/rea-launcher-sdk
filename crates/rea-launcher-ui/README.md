@@ -5,13 +5,14 @@ look with each game's colours, art and tabs left to the launcher.
 
 | Module | What |
 |---|---|
-| `theme` | `Palette` (colour roles: base, panel, line, ink, muted, action, select, error, disabled, focus, selection; `tint` for a const translucent colour), `Metrics` (sizes and style choices, below), `install`/`install_with`, `palette`/`metrics`, `contrast`, `contrast_problems(&Palette, &Metrics)` / `Palette::pairs`, Barlow fonts (`body`, `semibold`, `condensed`, `decal`) |
-| `widgets` | `chips`/`chips_with`/`chips_sized` (disabled reasons, `ChipSize::Compact`, one focus stop stepped with ←/→), `toggle`, `look_card` + `fit_title`, `game_card`, `outline_button`, `primary_button`, `progress_bar`, `folder_field`, `heading`/`field`/`note`/`error_note`, `heading_focused`/`field_focused`/`focus_bar` (SCR's row focus), `tabs_bar`, `play_plate`/`footer`, `tab_body`, `gradient`, `stripes`, `decode_jpeg`/`load_jpeg`/`hero_image`/`photo_caption`, `name_control` |
+| `theme` | `Palette` (colour roles: base, panel, line, ink, muted, action, select, error, disabled, focus, selection; `tint` for a const translucent colour), `Metrics` (sizes and style choices, below), `install`/`install_with`, `visuals` (the egui style: dark, or light with palette-filled widgets when `Palette::is_light`), `palette`/`metrics`, `contrast`, `contrast_problems(&Palette, &Metrics)` / `Palette::pairs`, Barlow fonts (`body`, `semibold`, `condensed`, `decal`) |
+| `widgets` | `chips`/`chips_with`/`chips_sized` (disabled reasons written under the row, `disabled_reasons`, `ChipSize::Compact`, one focus stop stepped with ←/→), `toggle` (disabled: keeps the saved value, reason under the label), `join_sentences`, `look_card` + `fit_title`, `game_card`, `outline_button`, `primary_button`, `progress_bar`, `folder_field`, `heading`/`field`/`note`/`error_note`, `heading_focused`/`field_focused`/`focus_bar` (SCR's row focus), `tabs_bar`, `play_plate`/`footer`, `tab_body`, `gradient`, `stripes`, `decode_jpeg`/`load_jpeg`/`hero_image`/`photo_caption`/`photo_caption_plated` (wrapped lines on a solid `panel` plate, OR's caption), `name_control` |
 | `window` | `WindowFit` (final size at creation under Wine with Wine's DPI divided out; opt-in `with_native_fit` DPI fit + recentre off Wine; `screen()` in pixels), `window_zoom`, `creation_zoom`, `SIZE`, `Layout` |
-| `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_row_with(…, RowOptions { disabled, steps })` / `spec_path_row(…, pick)` (an `unset_label` option adds an "As the game" chip): one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
+| `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_row_with(…, RowOptions { disabled, steps, notes, sizes })` (`steps`: chips for a `Range`, the `unset_label` chip first, `step_choices`; `notes`: per-value notes by cfg text, shown for the chosen value in place of the description; `sizes: Some(SizeChips { screen })`: a `Size` row as chips — `Screen W×H`, `COMMON_SIZES` 1080p/1440p/4K, a saved other size, Custom with a field — `size_choices`) / `spec_path_row(…, pick)` (an `unset_label` option adds an "As the game" chip): one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
 | `download` | `download_row(ui, &Download { label, size, state })` → `Option<DownloadAction>` (Start / Cancel / Remove); `DownloadState` (Missing{partial}, Connecting, Downloading{done,total,rate}, Verifying, Unpacking, Installed, Failed(msg)), `DownloadState::from_phase(Option<&Phase>, installed, partial)` + `with_rate`; `describe`, `size_text`, `time_left` |
-| `testing` (feature) | `harness(&Palette, &Metrics, state, ui)`, `harness_sized(…, size, …)` (scroll with `node.scroll_to_me()` below the fold) on `egui_kittest`, `checked`/`disabled`/`description`/`value`, re-exported `Queryable` |
-| `pad` | `inject` and `key_for`, plus `Nav`/`PadNav` re-exported from `rea_launcher::pad` (edge detection on XInput button masks; the bits are `rea_launcher::pad::DPAD_UP` …). `inject`: d-pad → Tab/Shift+Tab/arrows, A → Space; Start, LB/RB and B come back to the launcher |
+| `testing` (feature) | `harness(&Palette, &Metrics, state, ui)`, `harness_sized(…, size, …)`, `click_in_view(&mut ui, role, label)` (below the fold: `scroll_to_me`, `run()`, query again, `click`, `run()` — a plain click there is silently lost) on `egui_kittest`, `checked`/`disabled`/`description`/`value`, re-exported `Queryable` |
+| `report` | A native (Linux) launcher's messages: `audience(Mode, Native) -> Audience` (`Terminal` / `Window` / `LogOnly`; `Native::here()` reads stdin/stderr `IsTerminal` and `DISPLAY`/`WAYLAND_DISPLAY`), `Message { title, text, link: Option<Link { label, url }>, details }`, `fatal(&Palette, &Metrics, &Message, Mode) -> Audience` (prints to stderr, then the window when the audience is `Window`), `show`/`show_with` (the window alone, pad navigation included), `message_ui` + `MessageState` + `Action` for drawing it inside another window or a test |
+| `pad` | `inject` and `key_for`, plus `Nav`/`PadNav` re-exported from `rea_launcher::pad` (edge detection on XInput button masks; the bits are `rea_launcher::pad::DPAD_UP` …). `inject`: d-pad → Tab/Shift+Tab/arrows, A → Space; Start, LB/RB and B come back to the launcher ; Linux: `pad::joystick::Joysticks` (`new()`, `buttons()` → the XInput mask from every `/dev/input/js*` pad, read without blocking, rescanned every 2 s; `with_scan` for fake devices in tests) |
 
 `eframe` and `egui` are re-exported (`rea_launcher_ui::egui`), so a
 launcher needs no eframe dependency of its own.
@@ -55,10 +56,44 @@ lightening of `line` (towards white) that passes:
 | SRR | `#1f4a84` | 1.95 / 1.62 | `#5475a1` |
 | OR | `#3d3430` | 1.61 / 1.40 | `#6d6663` |
 
+### Light palettes
+
+A palette whose `base` is light (`Palette::is_light`: black contrasts with
+it more than white, as CMR2005's white menu band) gets egui's light style,
+and egui's own widgets — sliders, number boxes, egui buttons, combo
+boxes, tooltips — are filled from the palette: `panel` at rest, `panel`
+tinted 6 % towards `ink` when hovered or open and 12 % when pressed, `ink`
+strokes and links (`theme::visuals`). `contrast_problems` checks `ink` on
+every one of those fills, in every state, and the link colour on `base`.
+Before v0.4.0 every palette started from egui's dark style, so a light
+palette's dark text sat on dark-grey widgets (1.5:1) and the check could
+not see it. Dark palettes keep egui's dark fills.
+
 Text sizes: body text (labels, notes, chips, buttons) is at least 13 pt
 and nothing is under 11 pt (`theme::size`, `Metrics::text_sizes`); keep
 `assert!(theme::text_size_problems(&METRICS).is_empty())` next to the
 contrast test.
+
+## Native messages (no Windows message box)
+
+`rea_launcher_win32::report` covers Windows and Wine. A native Linux
+launcher calls `rea_launcher_ui::report::fatal` for every error before
+or instead of the settings window (game not found, unknown edition,
+refused home), so an AppImage double-click never exits silently:
+
+| Mode | Terminal attached | Desktop | Audience |
+|---|---|---|---|
+| `Play { interactive: true }` | any | yes | `Window` |
+| `Command { interactive }` | yes | any | `Terminal` |
+| `Command { interactive: true }` | no | yes | `Window` |
+| any | yes | no | `Terminal` |
+| otherwise (scripts, the helper's log, no desktop) | | | `LogOnly` |
+
+The text is always printed to stderr too (the helper and the AppImage log
+it). The window: the title, the text (scrolls when long), the link's
+address in full, then **Copy details** (title, text, `details`, address),
+the link's button (opens the browser) and **OK**, which has the focus so
+Enter, Space or the pad's A close it; Escape, B and Start close it too.
 
 ## A download (core job → row → actions)
 
@@ -95,6 +130,23 @@ if state.running() { ui.ctx().request_repaint_after(std::time::Duration::from_mi
 ```
 
 ## Accessibility and GUI tests
+
+**A disabled control says why, on the window.** A pad player never
+hovers, so a tooltip or the screen-reader description is not enough
+(OR's lesson). Since v0.4.0 every widget writes the reason where the eye
+already is, in `muted` (AA on the base):
+
+| Control | Where the reason goes |
+|---|---|
+| `chips*` | a note under the row; the reason alone when every chip shares it, else `Label, Label: reason` per reason (`widgets::disabled_reasons`) |
+| `toggle` | a second line under its label |
+| `look_card` / `game_card` | in place of the note / subtitle |
+| `spec_row_with(… RowOptions { disabled })` | in place of the row's description (the row keeps its height) |
+
+Disabled chips and switches keep showing the saved value (a dimmed
+`select` outline, the knob where it was). Accessible descriptions join
+the note and the reason with `widgets::join_sentences`, so a note that
+ends in "." no longer gets a second one.
 
 Every widget reports its role, name, state and disabled reason to
 AccessKit: chips are radio buttons in a radio group (the group's value is
@@ -183,4 +235,53 @@ fn show(wine: bool, screen: Option<(u32, u32)>, wine_scale: f32) -> eframe::Resu
 It depends on the portable `rea-launcher` crate (for `pad`), not on
 `rea-launcher-win32`: the folder picker is a
 closure passed to `folder_field`, and the pad reads a plain XInput button
-mask, so SCR's native Linux build can feed it from `/dev/input/js*`.
+mask: on Windows from `rea_launcher_win32::xinput::buttons()`, in a
+native Linux window from `pad::joystick::Joysticks::buttons()`.
+
+## Migration
+
+What changes for a launcher when it moves to a new version of this crate.
+Behaviour not listed is the same.
+
+### v0.4.0
+
+- **Light palettes** (CMR2005): `theme::install`/`set_palette` now give
+  egui's own widgets light, palette-filled backgrounds and set egui's
+  light theme. Delete a local fix such as CMR2005's
+  `palette::light_widgets` (and its call after `install_with`); keep the
+  palette test, which now also checks those fills. Dark palettes: no
+  change.
+- **Disabled reasons are visible.** A disabled chip row, switch, look or
+  game card, or spec row now writes its reason on the window (table under
+  "Accessibility and GUI tests"); rows grow by one note line where a
+  launcher used a disabled chip row or switch outside spec rows. Remove a
+  local copy that already shows it (OR's `chip_row`/`bool_row` write
+  `disabled.unwrap_or(row.description)`: pass `row.description` only, or
+  move to `spec_row_with`; Screamer's `pad_off_reason` note under a
+  disabled row), or the reason shows twice. Keep reasons full sentences.
+- **A disabled switch shows its saved value** (knob on the right, dimmed
+  outline) instead of looking off. Tests that read `checked` on a
+  disabled switch now see the saved value.
+- **Accessible descriptions**: a disabled spec row's description is
+  `description. reason` (it was `description reason`); a look card's
+  `note. reason` no longer doubles the full stop.
+- **Native Linux pads** (DiRT Rally): replace the local `jspad` module
+  with `rea_launcher_ui::pad::joystick::Joysticks` (same events, mapping
+  and 2-second rescan); `Pads::buttons()` becomes `Joysticks::buttons()`
+  and the `libc` dependency can go if nothing else uses it.
+- **Native Linux errors** (DiRT Rally): call
+  `report::fatal(&PALETTE, &METRICS, &Message { … }, Mode::Play {
+  interactive: !no_window })` where `linux::run` now only `eprintln!`s an
+  error (bad home, `cli::check` failing, unknown edition — give that one
+  the issue form as `link`), keeping the log line. `--help`/`--check`
+  output uses `Mode::Command`.
+- **New, opt-in spec rows** (no change unless used): resolution chips
+  (`RowOptions::sizes`; replaces SRR's `option_row`, OR's `chip_row` and
+  CMR3's `option_chips` for resolution — keep launcher words such as
+  CMR3's "Original 640×480" as an `unset_label` or a local row), stepped
+  rows with the unset chip first (CMR3's `FOVS` + `with_saved`), and
+  per-value notes (CMR3's `xidi::note`). `photo_caption_plated` replaces
+  OR's hand-drawn plate.
+- **Stepped rows** (`RowOptions::steps`) now show a saved value that is
+  none of the steps as its own chip (it showed no chip chosen), and put
+  the spec's `unset_label` chip first when the spec has one.

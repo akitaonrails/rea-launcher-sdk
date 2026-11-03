@@ -8,6 +8,8 @@
 //! - [`window`]: window sizing that survives XWayland under Wine (and, opted
 //!   in, fits the DPI on Windows), plus the common page layout.
 //! - [`pad`]: XInput buttons → egui focus navigation.
+//! - [`report`]: a native launcher's message window and who sees a
+//!   message (terminal, window or log only).
 //! - [`download`]: a download row (progress, Download/Cancel/Remove).
 //! - [`spec`]: window rows from the core option table, with a parity check.
 //! - `testing` (feature `testing`): headless GUI tests through AccessKit.
@@ -23,6 +25,7 @@ pub use eframe::egui;
 
 pub mod download;
 pub mod pad;
+pub mod report;
 pub mod spec;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

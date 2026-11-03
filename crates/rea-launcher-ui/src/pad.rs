@@ -2,7 +2,8 @@
 //!
 //! The button mask is XInput's `wButtons` layout (`rea_launcher::pad`'s
 //! constants; what `rea_launcher_win32::xinput::buttons()` returns, and
-//! what a native Linux launcher maps its joystick into, as SCR does). Edge
+//! what `joystick::Joysticks` reads from `/dev/input/js*` for a native
+//! Linux window, `cfg(target_os = "linux")`). Edge
 //! detection ([`PadNav`], one step per press, never per frame held) lives
 //! in `rea_launcher::pad` and is re-exported here. This module turns the
 //! steps into egui keys: SCR's model expressed as keys, so
@@ -47,6 +48,9 @@
 use eframe::egui::{self, Key, Modifiers};
 
 pub use rea_launcher::pad::{Nav, PadNav};
+
+#[cfg(target_os = "linux")]
+pub mod joystick;
 
 /// The key a step becomes inside egui; `None` for the launcher's own
 /// steps. `typing` (a text field has focus) keeps A from typing a space.
