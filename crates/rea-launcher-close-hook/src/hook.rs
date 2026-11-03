@@ -6,21 +6,25 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use std::sync::Mutex;
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
     GetModuleFileNameW, GetModuleHandleExW,
 };
 use windows_sys::Win32::System::Threading::{ExitProcess, GetCurrentProcess, TerminateProcess};
+
+use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+    GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GA_ROOT, GetAncestor, GetClassNameW, HC_ACTION, MSG, PM_REMOVE, PostMessageW,
-    PostQuitMessage, WM_KEYDOWN, WM_KEYUP, WM_NULL, WM_QUIT,
+    CallNextHookEx, GA_ROOT, GetAncestor, GetClassNameW, GetForegroundWindow,
+    GetWindowThreadProcessId, HC_ACTION, MSG, PM_REMOVE, PostMessageW, PostQuitMessage, WM_KEYDOWN,
+    WM_KEYUP, WM_NULL, WM_QUIT,
 };
 
-use crate::{Config, Step, Strategy};
+use crate::{Chord, Config, Step, Strategy, msg};
 
 /// The configuration: `REA_CLOSE_HOOK`, else `<dll>.ini` next to the DLL,
 /// else the defaults. `None` when the text doesn't parse: a broken
@@ -151,6 +155,36 @@ fn quit(config: &Config, hwnd: HWND) {
     }
 }
 
+/// Whether a virtual key is held down now (the keyboard's state, which
+/// DirectInput's exclusive mode doesn't hide).
+fn key_down(vk: usize) -> bool {
+    // SAFETY: a plain keyboard-state query.
+    (unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000) != 0
+}
+
+/// `alt_f4_state`: the game's window in front (this process's, of the
+/// configured class) and a new Alt+F4 press; that window. Alt+F4 pressed
+/// in another program never counts.
+fn alt_f4_pressed(config: &Config) -> Option<HWND> {
+    static CHORD: Mutex<Chord> = Mutex::new(Chord { held: false });
+    let (alt, f4) = (key_down(msg::VK_MENU), key_down(msg::VK_F4));
+    let mut chord = CHORD.lock().ok()?;
+    if !chord.press(alt, f4) {
+        return None;
+    }
+    // SAFETY: plain window queries.
+    let front = unsafe { GetForegroundWindow() };
+    if front.is_null() {
+        return None;
+    }
+    let mut pid = 0u32;
+    // SAFETY: as above, into a local.
+    unsafe { GetWindowThreadProcessId(front, &mut pid) };
+    // SAFETY: a plain process query.
+    let ours = pid == unsafe { GetCurrentProcessId() };
+    (ours && config.is_game_class(&root_class(front))).then_some(front)
+}
+
 /// The `WH_GETMESSAGE` hook the launcher installs.
 ///
 /// # Safety
@@ -173,6 +207,11 @@ pub unsafe extern "system" fn close_hook(code: i32, wparam: WPARAM, lparam: LPAR
                 // included).
                 msg.message = WM_NULL;
                 quit(config, msg.hwnd);
+            } else if config.requests.alt_f4_state
+                && let Some(window) = alt_f4_pressed(config)
+            {
+                // Any message will do: the keyboard's state says Alt+F4.
+                quit(config, window);
             }
         }
         CallNextHookEx(null_mut(), code, wparam, lparam)

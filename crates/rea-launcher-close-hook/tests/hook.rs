@@ -36,12 +36,22 @@ fn headless_wine_windows() {
 /// Starts the stand-in game with `config` and the hook; returns it with
 /// its window.
 fn game(config: &str) -> (Running, usize, rea_launcher_win32::process::MessageHook) {
+    game_with(config, false)
+}
+
+/// [`game`], its window shown and in front when `show`.
+fn game_with(
+    config: &str,
+    show: bool,
+) -> (Running, usize, rea_launcher_win32::process::MessageHook) {
     headless_wine_windows();
     let dir = build_dir();
-    let game = Launch::new(dir.join("examples").join("hooked_game.exe"))
-        .env(rea_close_hook::ENV, config)
-        .spawn()
-        .unwrap();
+    let mut launch =
+        Launch::new(dir.join("examples").join("hooked_game.exe")).env(rea_close_hook::ENV, config);
+    if show {
+        launch = launch.env("REA_HOOKED_GAME_SHOW", "1");
+    }
+    let game = launch.spawn().unwrap();
     let mut window = None;
     for _ in 0..200 {
         if let Some(&hwnd) = top_level_windows(game.pid()).first() {
@@ -131,4 +141,67 @@ fn another_window_class_is_left_alone() {
         game.close_gracefully(Duration::from_millis(200)).unwrap(),
         Closed::Terminated { windows: 1 }
     );
+}
+
+/// Presses (`up`: releases) Alt and F4 through `SendInput`: the keyboard
+/// state every process sees.
+fn alt_f4(up: bool) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_F4, VK_MENU,
+    };
+    let key = |vk| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs = if up {
+        [key(VK_F4), key(VK_MENU)]
+    } else {
+        [key(VK_MENU), key(VK_F4)]
+    };
+    // SAFETY: two initialised keyboard INPUTs and their size.
+    unsafe {
+        SendInput(2, inputs.as_ptr(), size_of::<INPUT>() as i32);
+    }
+}
+
+/// `close_on = alt_f4_state` (a game whose exclusive DirectInput keyboard
+/// keeps Alt+F4 from its window): the keyboard's state ends the game when
+/// it is in front, on any message the hook sees; never when it isn't.
+/// One test, since the keyboard state is shared.
+#[test]
+fn alt_f4_state_ends_the_game_only_when_in_front() {
+    const WM_NULL: u32 = 0;
+    const WM_TIMER: u32 = 0x0113;
+    // Not in front (hidden): Alt+F4 held elsewhere leaves it alone.
+    let (behind, window, _hook) = game("close_on = alt_f4_state;strategy=terminate;code=9");
+    alt_f4(false);
+    for _ in 0..5 {
+        post(window, WM_TIMER, 1, 0);
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    alt_f4(true);
+    std::thread::sleep(Duration::from_millis(200));
+    let alive = behind.is_alive();
+    let _ = behind.close_gracefully(Duration::from_millis(200));
+    assert!(alive, "Alt+F4 in another program must not end the game");
+
+    // In front: the chord ends it, with no keyboard message needed.
+    let (front, window, _hook) =
+        game_with("close_on = alt_f4_state;strategy=terminate;code=9", true);
+    alt_f4(false);
+    post(window, WM_NULL, 0, 0);
+    let code = ended(&front);
+    alt_f4(true);
+    if code.is_none() {
+        let _ = front.close_gracefully(Duration::from_millis(200));
+    }
+    assert_eq!(code, Some(9));
 }
