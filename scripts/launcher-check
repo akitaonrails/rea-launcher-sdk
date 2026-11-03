@@ -226,7 +226,7 @@ emit() {
     return 0
   fi
   if [ "$e_sev" = error ]; then errors=$((errors + 1)); else warnings=$((warnings + 1)); fi
-  echo "$e_sev[$e_rule] $e_where: $e_msg"
+  echo "${e_sev}[$e_rule] $e_where: $e_msg"
   echo "  fix: $FIX"
   if [ -n "$GITHUB" ]; then
     e_file=${e_where%%:*} e_line=''

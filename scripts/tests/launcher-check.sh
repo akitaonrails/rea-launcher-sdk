@@ -32,7 +32,7 @@ expect() { # name level rule: the check fails (error) or passes with a warning
   if [ "$rc" -eq "$want_rc" ] && printf '%s\n' "$out" | grep -q "^$level\[$rule\] "; then
     ok "$name"
   else
-    bad "$name (rc $rc, want $level[$rule]): $out"
+    bad "$name (rc $rc, want ${level}[$rule]): $out"
   fi
 }
 replace() { # file old new: literal, first match per line
