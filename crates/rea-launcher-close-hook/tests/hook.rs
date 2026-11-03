@@ -190,8 +190,23 @@ fn alt_f4_state_ends_the_game_only_when_in_front() {
     alt_f4(true);
     std::thread::sleep(Duration::from_millis(200));
     let alive = behind.is_alive();
+    let code = behind.exit_code();
+    let visible =
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible(window as _) } != 0;
+    let front =
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() } as usize;
     let _ = behind.close_gracefully(Duration::from_millis(200));
-    assert!(alive, "Alt+F4 in another program must not end the game");
+    assert!(
+        alive,
+        "Alt+F4 in another program must not end the game (exit code {code:?}; window visible {visible}, foreground {})",
+        if front == window {
+            "the game"
+        } else if front == 0 {
+            "none"
+        } else {
+            "another window"
+        }
+    );
 
     // In front: the chord ends it, with no keyboard message needed.
     let (front, window, _hook) =
