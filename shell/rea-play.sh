@@ -39,7 +39,8 @@ REA_SDL_SETTINGS REA_GPU_ICD_PIN REA_GPU REA_DLL_OVERRIDES REA_WINEDBG_OFF
 REA_GAME_PROCS REA_GAME_SETTLE REA_WINEBUS_MARKER REA_WINEBUS_VALUES
 REA_DIRECT_NOTE REA_TEST REA_SYSFS REA_ICD_DIRS REA_NV_LIB_CHECK
 REA_GAMESCOPE_CHECK REA_LAUNCH_CMD REA_PROC REA_INITED REA_ORIGINAL_WORDS
-REA_FUNCTIONS_ONLY REA_PLAY_HERE REA_HELPER_KEYS REA_FLAG_SWITCHES REA_ONE_RUN'
+REA_FUNCTIONS_ONLY REA_PLAY_HERE REA_HELPER_KEYS REA_FLAG_SWITCHES REA_ONE_RUN
+REA_GAME_PREFIX'
 # shellcheck disable=SC2086
 unset $REA_CONFIG_VARS 2>/dev/null || true
 
@@ -140,6 +141,9 @@ rea_init() {
   if [ "$REA_MODE" = wine ]; then
     REA_PREFIX=${REA_PREFIX:-$HOME/.local/share/$REA_APP/prefix}
     mkdir -p "$REA_PREFIX"
+    REA_GAME_PREFIX=$(readlink -f "$REA_PREFIX")
+  else
+    REA_GAME_PREFIX=
   fi
   [ -n "$REA_EXE" ] || rea_find_exe
   [ -n "$REA_CFG" ] || rea_find_cfg
@@ -533,23 +537,44 @@ rea_seed_winebus_now() {
 
 # --- the game's own processes ----------------------------------------------------
 
-# True while a process named in REA_GAME_PROCS is alive. Zombies do not
-# count: a crashed session can leave one, which would block the wait loop
-# for good. Shared verbatim with the inner script (self-contained).
+# True while a process named in REA_GAME_PROCS is alive in this prefix.
+# Zombies do not count: a crashed session can leave one, which would block
+# the wait loop for good. A process whose environment names another Wine
+# prefix (WINEPREFIX or WINECONFIGDIR) is another copy of the game, not
+# ours (CMR3: a second install kept the wait loop going); only that one
+# value is read, and nothing of the environment is printed. A process
+# whose environment can't be read, or names no prefix, still counts, as
+# before. REA_GAME_PREFIX is the prefix (empty in native mode: every
+# process counts). Shared verbatim with the inner script (self-contained).
 REA_GAME_ALIVE_FN='rea_game_alive() {
   [ -n "${REA_GAME_PROCS:-}" ] || return 1
+  _ga_proc=/proc
+  [ "${REA_TEST:-}" = 1 ] && _ga_proc=${REA_PROC:-/proc}
   _ga_ifs=$IFS; IFS="|"; set -f
   set -- $REA_GAME_PROCS
   set +f; IFS=$_ga_ifs
   for _ga_name in "$@"; do
     for _ga_pid in $(pgrep -x "$_ga_name"); do
-      _ga_proc=/proc
-      [ "${REA_TEST:-}" = 1 ] && _ga_proc=${REA_PROC:-/proc}
       _ga_state=$(sed "s/.*) //" "$_ga_proc/$_ga_pid/stat" 2>/dev/null | cut -d" " -f1)
-      [ -n "$_ga_state" ] && [ "$_ga_state" != Z ] && return 0
+      [ -n "$_ga_state" ] && [ "$_ga_state" != Z ] || continue
+      rea_game_ours "$_ga_proc/$_ga_pid" && return 0
     done
   done
   return 1
+}
+rea_game_ours() {
+  [ -n "${REA_GAME_PREFIX:-}" ] || return 0
+  [ -r "$1/environ" ] || return 0
+  _ga_seen=
+  for _ga_var in WINEPREFIX WINECONFIGDIR; do
+    _ga_val=$(tr "\\000" "\\n" < "$1/environ" 2>/dev/null | sed -n "s/^$_ga_var=//p" | head -n 1)
+    [ -n "$_ga_val" ] || continue
+    _ga_seen=1
+    while [ "${_ga_val%/}" != "$_ga_val" ]; do _ga_val=${_ga_val%/}; done
+    [ "$_ga_val" = "$REA_GAME_PREFIX" ] && return 0
+    [ "$(readlink -f "$_ga_val" 2>/dev/null)" = "$REA_GAME_PREFIX" ] && return 0
+  done
+  [ -z "$_ga_seen" ]
 }'
 eval "$REA_GAME_ALIVE_FN"
 
@@ -562,6 +587,7 @@ eval "$REA_GAME_ALIVE_FN"
 #   REA_INNER_MODE      wine | native
 #   REA_GAME_ENV_FILE   NAME=VALUE lines for the game only (data, not sourced)
 #   REA_GAME_PROCS      the game's process names to wait for (Wine)
+#   REA_GAME_PREFIX     the prefix they must run in (canonical path)
 #   REA_GAME_SETTLE     seconds before that wait starts
 #   REA_TEST            the library's own REA_TEST (empty outside tests)
 rea_write_inner() {
@@ -866,6 +892,7 @@ rea_start() {
   fi
   set -- REA_INNER_MODE="$REA_MODE" REA_GAME_ENV_FILE="$REA_GAME_ENV_FILE" \
     REA_GAME_PROCS="$REA_GAME_PROCS" REA_GAME_SETTLE="$REA_GAME_SETTLE" \
+    REA_GAME_PREFIX="$REA_GAME_PREFIX" \
     REA_TEST="${REA_TEST:-}" "$@"
   if [ "$REA_MODE" = wine ]; then
     _rea_o=$(rea_dll_overrides)
