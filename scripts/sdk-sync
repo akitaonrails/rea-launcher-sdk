@@ -15,7 +15,8 @@
 # tree; a checkout with uncommitted changes is never the reference. --against-head always
 # compares with this work tree (the old behaviour).
 #
-# Layout: sdk/rea-play.sh (from shell/), sdk/scripts/{wine-test,sdk-bump,clean},
+# Layout: sdk/rea-play.sh (from shell/), sdk/scripts/{wine-test,sdk-bump,clean,
+# prepush-scan,release,launcher-check} (launcher-ci runs launcher-check),
 # sdk/packaging/... and sdk/docs/{STANDARDS.md,playbooks/*.md} (as in the
 # SDK), so a launcher refers to the SDK's wording instead of copying it.
 # sdk/ belongs to this script: never edit it by hand, re-run the sync.
@@ -88,7 +89,7 @@ fi
 files() {
   (
     cd "$SDK"
-    for f in shell/rea-play.sh scripts/wine-test scripts/sdk-bump scripts/clean scripts/prepush-scan scripts/release packaging/*.sh packaging/appimage/AppRun.in \
+    for f in shell/rea-play.sh scripts/wine-test scripts/sdk-bump scripts/clean scripts/prepush-scan scripts/release scripts/launcher-check packaging/*.sh packaging/appimage/AppRun.in \
       packaging/appimage/tools.pins packaging/appimage/wine/COPYING.LIB \
       packaging/appimage/wine/LICENSE packaging/appimage/wine/SOURCE.txt \
       docs/STANDARDS.md docs/playbooks/*.md; do

@@ -20,6 +20,9 @@ echo '# Playbook A' > "$S/docs/playbooks/a.md"
 echo '# Playbook B' > "$S/docs/playbooks/b.md"
 echo '# Design, not vendored' > "$S/docs/DESIGN.md"
 cp "$ROOT/scripts/sdk-sync" "$ROOT/scripts/wine-test" "$ROOT/scripts/sdk-bump" "$ROOT/scripts/clean" "$S/scripts/"
+# launcher-check (the guard lane's conformance check; launcher-ci runs
+# sdk/scripts/launcher-check --github): a stand-in, executable.
+printf '#!/bin/sh\n# launcher-check stand-in\nexit 0\n' > "$S/scripts/launcher-check"; chmod +x "$S/scripts/launcher-check"
 printf '# play library\n' > "$S/shell/rea-play.sh"
 (cd "$S" && git init -q && git add -A && git commit -qm sdk && git tag v9.9.9) || { echo "git setup failed"; exit 1; }
 SYNC=$S/scripts/sdk-sync
@@ -36,6 +39,8 @@ if cmp -s "$S/shell/rea-play.sh" "$L/sdk/rea-play.sh"; then ok "play library ven
   && ok "vendored scripts/wine-test (executable)" || bad "vendored scripts/wine-test (executable)"
 [ -x "$L/sdk/scripts/sdk-bump" ] && ok "vendored scripts/sdk-bump" || bad "vendored scripts/sdk-bump"
 [ -x "$L/sdk/scripts/clean" ] && cmp -s "$S/scripts/clean" "$L/sdk/scripts/clean" && ok "vendored scripts/clean" || bad "vendored scripts/clean"
+[ -x "$L/sdk/scripts/launcher-check" ] && cmp -s "$S/scripts/launcher-check" "$L/sdk/scripts/launcher-check" \
+  && ok "vendored scripts/launcher-check (executable, for launcher-ci's conformance step)" || bad "vendored scripts/launcher-check"
 [ ! -e "$L/sdk/scripts/sdk-sync" ] && ok "sdk-sync itself not vendored" || bad "sdk-sync itself not vendored"
 for f in packaging/pins.sh packaging/appimage-wine.sh packaging/smoke-package.sh \
   packaging/release-notes.sh packaging/appimage/AppRun.in packaging/appimage/tools.pins \
@@ -77,6 +82,12 @@ check_drift "edited play library is drift" "changed: sdk/rea-play.sh"
 sh "$SYNC" "$L" >/dev/null 2>&1
 chmod -x "$L/sdk/packaging/smoke-package.sh"
 check_drift "lost exec bit is drift" "mode differs: sdk/packaging/smoke-package.sh"
+echo "# local hack" >> "$L/sdk/scripts/launcher-check"
+check_drift "edited launcher-check is drift" "changed: sdk/scripts/launcher-check"
+sh "$SYNC" "$L" >/dev/null 2>&1
+rm "$L/sdk/scripts/launcher-check"
+check_drift "missing launcher-check is drift" "missing: sdk/scripts/launcher-check"
+sh "$SYNC" "$L" >/dev/null 2>&1; check_ok "re-sync brings launcher-check back"
 sh "$SYNC" "$L" >/dev/null 2>&1
 # A newer SDK commit: --check still compares with the version sdk/VERSION
 # records (v9.9.9), so a launcher pinned to it has no drift; --against-head
