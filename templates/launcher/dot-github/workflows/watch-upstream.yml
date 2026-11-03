@@ -1,0 +1,19 @@
+name: watch-upstream
+
+# Weekly: compares each third-party component's latest upstream release
+# (packaging/upstream-watch.txt) with its pin in packaging/third-party.txt
+# and opens one issue per component that changed. It never moves a pin:
+# play with the new release first, then update the pin in a pull request
+# (sdk/docs/playbooks/community-components.md). Pin the file the release
+# uploads, not a commit or tag archive, or the check can't compare it.
+on:
+  schedule: [{cron: "23 4 * * 1"}]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    permissions: {contents: read, issues: write}
+    uses: @SDK_REPO@/.github/workflows/upstream-watch.yml@@SDK_TAG@

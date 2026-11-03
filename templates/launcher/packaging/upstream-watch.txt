@@ -1,0 +1,7 @@
+# Components the weekly watch-upstream workflow checks, one per line:
+#
+#   name owner/repo asset-name-prefix
+#
+# `name` is a pin in packaging/third-party.txt whose url is a file that
+# owner/repo's releases upload (https://github.com/owner/repo/releases/download/…).
+# Every pin of a GitHub release belongs here (launcher-check unwatched-pins).

@@ -36,6 +36,7 @@ cat > "$T/want" <<'EOF'
 .github/ISSUE_TEMPLATE/unknown-edition.yml
 .github/workflows/build.yml
 .github/workflows/sdk-update.yml
+.github/workflows/watch-upstream.yml
 .gitignore
 AGENTS.md
 CHANGELOG.md
@@ -77,6 +78,7 @@ packaging/package.allow
 packaging/package.sh
 packaging/tests/package.sh
 packaging/third-party.txt
+packaging/upstream-watch.txt
 EOF
 (cd "$L" && find . -path ./sdk -prune -o -type f -print | sed 's|^\./||' | LC_ALL=C sort) > "$T/have"
 if LC_ALL=C sort "$T/want" | cmp -s - "$T/have"; then
