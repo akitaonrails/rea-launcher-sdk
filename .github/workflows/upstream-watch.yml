@@ -8,8 +8,10 @@ name: upstream-watch
 #
 # Watch list, one per line (# comments): name owner/repo asset-name-prefix
 # where name is a pin in the pin file (sdk/packaging/pins.sh format).
-# Names without a pin, malformed lines and unreachable repositories are
-# skipped with a warning in the run summary, never an issue (as CMR3's).
+# Names without a pin, pins that aren't a file the watched repository's
+# releases upload (a commit or tag archive), malformed lines and
+# unreachable repositories are skipped with a warning in the run summary,
+# never an issue.
 #
 # The calling job grants contents: read and issues: write; schedule it from
 # the launcher (on: schedule) as CMR3 does.
@@ -67,6 +69,14 @@ jobs:
             case $repo in */*) ;; *) skip "$name: bad repository '$repo'"; continue ;; esac
             case $repo in *[!A-Za-z0-9_./-]*) skip "$name: bad repository '$repo'"; continue ;; esac
             pinned=$(pin_sha "$name" 2>/dev/null) || { skip "$name: no pin in $PINS"; continue; }
+            # Only a pin of the release's own uploaded file can be compared
+            # by checksum: a commit or tag archive of the same release hashes
+            # differently and would be reported as an update every week
+            # (CMR3's vkBasalt). launcher-check's watch-pins rule says so too.
+            case $(pin_url "$name" 2>/dev/null) in
+              "https://github.com/$repo/releases/download/"*) ;;
+              *) skip "$name: the pin is not a release file of $repo, so its checksum can't be compared; pin the file the release uploads"; continue ;;
+            esac
             latest=$(gh api "repos/$repo/releases/latest") || { skip "$name: cannot read the latest release of $repo"; continue; }
             tag=$(printf '%s' "$latest" | jq -r .tag_name)
             url=$(printf '%s' "$latest" | jq -r --arg p "$prefix" \

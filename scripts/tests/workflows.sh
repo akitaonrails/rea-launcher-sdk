@@ -260,6 +260,44 @@ S=$(step launcher-ci.yml "Windows-target tests under Wine (headless)") || exit 1
   && ok "wine tests: wine-test-exclude as --exclude, before the args" || bad "wine tests: $(cat "$W/args" "$T/out")"
 if (cd "$W" && SDK_DIR=sdk RUST_TARGET=i686-pc-windows-gnu WINE_TEST_ARGS='' WINE_TEST_EXCLUDE='a;b' sh -e "$S") >/dev/null 2>&1; then bad "wine tests: a bad exclude is refused"; else ok "wine tests: a bad exclude is refused"; fi
 
+# Upstream watch: a pin of the release's own file is compared by checksum;
+# a pin of a commit archive is skipped, never reported as an update to
+# itself (CMR3's vkBasalt, 2026-11-03).
+U=$T/uw
+mkdir -p "$U/sdk/packaging" "$U/packaging" "$U/bin" "$U/tmp"
+cp "$HERE/../../packaging/pins.sh" "$U/sdk/packaging/pins.sh"
+printf 'same\n' > "$U/asset"
+same=$(sha256sum "$U/asset" | cut -d' ' -f1)
+cat > "$U/packaging/third-party.txt" <<PINS
+tool https://github.com/up/tool/releases/download/v1/tool-1.zip $same
+arch https://github.com/up/arch/archive/0123abcd.tar.gz $(printf 'archive\n' | sha256sum | cut -d' ' -f1)
+newer https://github.com/up/newer/releases/download/v1/newer-1.zip $same
+PINS
+printf 'tool up/tool tool-\narch up/arch arch-\nnewer up/newer newer-\n' > "$U/packaging/upstream-watch.txt"
+cat > "$U/bin/gh" <<'FAKE'
+#!/bin/sh
+# gh api repos/OWNER/REPO/releases/latest
+repo=${2#repos/}; repo=${repo%/releases/latest}; n=${repo#*/}
+printf '{"tag_name":"v2","assets":[{"name":"%s-2.zip","browser_download_url":"https://github.com/%s/releases/download/v2/%s-2.zip"}]}\n' "$n" "$repo" "$n"
+FAKE
+cat > "$U/bin/curl" <<FAKE
+#!/bin/sh
+# Every asset is "same" except newer's.
+while [ \$# -gt 1 ]; do case \$1 in -o) out=\$2; shift ;; esac; shift; done
+case \$1 in *newer*) printf 'changed\n' > "\$out" ;; *) cp "$U/asset" "\$out" ;; esac
+FAKE
+chmod +x "$U/bin/gh" "$U/bin/curl"
+S=$(step upstream-watch.yml "Compare upstream latest with the pins") || exit 1
+: > "$U/summary"; : > "$U/output"
+(cd "$U" && PATH="$U/bin:$PATH" RUNNER_TEMP="$U/tmp" GITHUB_STEP_SUMMARY="$U/summary" GITHUB_OUTPUT="$U/output" \
+  PINS=packaging/third-party.txt WATCH_LIST=packaging/upstream-watch.txt SDK_DIR=sdk sh -e "$S") >"$T/out" 2>&1
+r=$U/tmp/upstream-report.txt
+grep -q '^newer changed' "$r" && ok "upstream watch: a changed release file is reported" || bad "upstream watch: newer: $(cat "$T/out")"
+grep -q '^tool ' "$r" && bad "upstream watch: an unchanged release file is reported" || ok "upstream watch: an unchanged release file is quiet"
+if grep -q '^arch' "$r"; then bad "upstream watch: a commit-archive pin is reported as an update: $(cat "$r")"
+elif grep -q 'arch: the pin is not a release file of up/arch' "$U/summary"; then ok "upstream watch: a commit-archive pin is skipped with a warning"
+else bad "upstream watch: the skip is not in the summary: $(cat "$U/summary" "$T/out")"; fi
+
 # No status-swallowing "check && echo" anywhere in the workflows.
 if grep -n '&& echo' "$WF"/*.yml; then bad "no '&& echo' checks in workflows"; else ok "no '&& echo' checks in workflows"; fi
 
