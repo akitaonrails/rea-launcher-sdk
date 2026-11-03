@@ -28,6 +28,7 @@ made that copy the reference.
 | `pad` | XInput state parsing and settings-window navigation by edges |
 | `log` | `launcher.log` with a size cap |
 | `args` | Windows command-line quoting |
+| `testing` | Golden snapshots for launcher tests: `snapshot!`, version as `<version>`, CRLF-proof |
 
 ## Examples
 
@@ -266,6 +267,32 @@ assert_eq!(args::quote_windows(OsStr::new(r"C:\Games\")), r#""C:\Games\\""#);
 assert_eq!(args::command_line(OsStr::new("a.exe"), &["-d"]), r#""a.exe" "-d""#);
 ```
 
+### Golden snapshots (testing)
+
+Every launcher's `tests/snapshots.rs` compares `--help`, the
+`launcher.cfg` template and each look's plan with files under
+`tests/snapshots/` (docs/STANDARDS.md). Use the SDK's helper, not a local
+`check()`: a help text that printed the crate version broke the tag builds
+of CMR3, CMR4 and OR when the release commit bumped it.
+
+```rust,no_run
+# fn usage() -> String { String::new() }
+#[test]
+fn help() {
+    // tests/snapshots/help.txt; this crate's version is stored as <version>.
+    rea_launcher::snapshot!("help.txt", usage());
+}
+```
+
+- `REA_UPDATE_SNAPSHOTS=1 cargo test` writes them; review the diff.
+  `rea_launcher::snapshots!().update_var("CMR3_UPDATE_SNAPSHOTS")` keeps
+  a launcher's documented variable working too.
+- The caller's `CARGO_PKG_VERSION` becomes `<version>` (whole tokens only:
+  `10.3.3` stays). A stored snapshot that still holds the version fails
+  with "would fail at the next version bump".
+- CRLF and LF compare equal; a failure names the first differing line and
+  says when only version numbers differ.
+
 ## One table for the window and the command line
 
 The rule: every window option has a flag and a `launcher.cfg` key, every
@@ -441,6 +468,11 @@ Behaviour not listed here is the same.
 
 ### Every launcher
 
+- **v0.4.0:** golden snapshot tests use `rea_launcher::snapshot!(name,
+  text)` (or `snapshots!()` with `.update_var("<ID>_UPDATE_SNAPSHOTS")` to
+  keep the documented variable) in place of a local `check()`; drop the
+  local `.replace(env!("CARGO_PKG_VERSION"), "<version>")`. Stored
+  snapshots that hold the version literally now fail: write `<version>`.
 - **Temp files** are `.name.rea-new` (CMR3 used `.name.cmr3-new`, CMR4
   `.name.cmr4-new`, OR `name.tmp`, SRR `name.srr-tmp`). Remove old
   leftovers once with `fsx::remove_stale_temps(runtime, &[".cmr3-new"])`;

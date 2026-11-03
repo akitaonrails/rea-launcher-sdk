@@ -23,6 +23,7 @@ pub mod paths;
 pub mod pe;
 pub mod runtime;
 pub mod saves;
+pub mod testing;
 pub mod wine;
 
 /// A fresh, empty folder for one test.
