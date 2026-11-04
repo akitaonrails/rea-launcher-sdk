@@ -43,8 +43,12 @@ NATIVE_REPORT_API='rea_launcher_ui::report::fatal'
 # Linux pads in a native window; GLX on a fresh prefix.
 JOYSTICK_API='rea_launcher_ui::pad::joystick::Joysticks'
 GLX_API='rea_launcher_win32::gpu::prefer_glx_or_restart'
+# A bad command line reported like a command; the family's action flags.
+USAGE_API='rea_launcher_win32::report::Run::bad_command_line'
+ACTION_API='rea_launcher_win32::instance::is_action'
 # The SDK version these APIs arrive in.
 NEW_API_SINCE='v0.4.0'
+USAGE_API_SINCE='v0.4.2'
 WAIVERS_FILE='.rea-check-waivers'
 
 RULES='snapshots snapshot-version snapshot-helper audience instance instance-unix
@@ -52,7 +56,7 @@ window-lookup native-report native-pad glx-restart light-widgets ms-dll-override
 own-fix-draft readme-sections readme-order readme-contributing readme-links
 readme-versions agents-pointer agents-duplicate sdk-workflows sdk-tag lld
 wine-tests look-flag look-sizes option-tests quit-paths issue-unknown-edition
-issue-bug-report sdk-update release-notes watch-pins unwatched-pins process-listing
+issue-bug-report sdk-update windows-subsystem bad-command-line action-flags release-notes watch-pins unwatched-pins process-listing
 real-game-gated drm-exception waivers'
 
 # rule ID: sets SEV (error|warn), SINCE (SDK tag or empty), FIX and WHY.
@@ -152,6 +156,15 @@ rule() {
     sdk-update) SEV=warn
       WHY='The weekly sdk-update workflow opens the upgrade pull request when the SDK releases.'
       FIX='add .github/workflows/sdk-update.yml calling the SDK sdk-update.yml workflow (templates/launcher has it)' ;;
+    windows-subsystem) SEV=error
+      WHY='A console-subsystem launcher opens a black console window beside the settings window on a double click, loses --check output when the console closes, and reports a window close as an error (ScreamerLauncher 0.8.0, Windows 10 test 2026-11-03).'
+      FIX='start src/main.rs with #![cfg_attr(windows, windows_subsystem = "windows")] and attach to the parent console for commands (rea_launcher_win32::console::attach_parent, which report::fatal/note already do)' ;;
+    bad-command-line) SEV=error SINCE=$USAGE_API_SINCE
+      WHY='A command line that fails to parse is not a play run: reported as one it opens a modal box that a script waits on forever (CMR, CMR4, DiRT, SRR on Windows 10), and the family exit code for it is 2, not 1.'
+      FIX="report a parse error with report::audience($USAGE_API(&args)).mode() and exit report::BAD_COMMAND_LINE (2)" ;;
+    action-flags) SEV=error SINCE=$USAGE_API_SINCE
+      WHY='An action flag (--check, --setup, --download-*) that finds the window open must be refused with exit 5, never answered by bringing the window forward with exit 0: SRR'"'"'s --setup did nothing and reported success.'
+      FIX="pass $ACTION_API(&args, &[own actions]) as the action argument of second_start / SecondStart::decide, and take the instance for --check too" ;;
     release-notes) SEV=error
       WHY='launcher-release takes the release notes from the CHANGELOG section of the tag. notes: generate replaces them with GitHub'"'"'s commit list, and CMR4 v0.4.0 went out with only a "Full Changelog" link.'
       FIX='remove notes: generate from the launcher-release call in build.yml; keep a "## [X.Y.Z]" CHANGELOG section per release' ;;
@@ -629,6 +642,21 @@ elif ! grep -q 'type: checkboxes' $I/bug-report.yml || ! grep -qi 'what worked' 
 fi
 grep -lsqE 'rea-launcher-sdk/\.github/workflows/sdk-update\.yml@' .github/workflows/*.yml \
   || emit sdk-update .github/workflows/sdk-update.yml "no weekly SDK update workflow"
+
+# --- Windows command line: GUI subsystem, bad command lines, action flags ----------------------------
+# Any Windows target counts: Screamer packages its Windows build in a job
+# of its own, outside launcher-ci.
+if [ -s "$T/win-targets" ]; then
+  grep -E '(^|/)src/main\.rs$' "$T/rs" | tr '\n' '\0' | xargs -0 -r grep -lE 'windows_subsystem[ \t]*=[ \t]*"windows"' 2>/dev/null | grep -q . \
+    || emit windows-subsystem "$MAIN_RS" "the Windows build is a console program (no windows_subsystem = \"windows\")"
+  if grep -qE 'report::audience|Run::from_args|report::Run' "$T/code.txt" && ! grep -qF 'bad_command_line' "$T/code.txt"; then
+    emit bad-command-line "$MAIN_RS" "a command line that fails to parse is not reported with Run::bad_command_line (a modal box from a terminal, exit 1)"
+  fi
+  grep -E '(second_start|SecondStart::decide)\([ \t]*(false|true)[ \t]*,' "$T/code.txt" | head -n 1 | cut -d: -f1,2 > "$T/literal-action"
+  if [ -s "$T/literal-action" ]; then
+    emit action-flags "$(cat "$T/literal-action")" "the second start's action is a literal, not instance::is_action(&args, ..)"
+  fi
+fi
 
 # --- release notes from the CHANGELOG --------------------------------------------------------------
 if [ -n "$BUILD" ]; then

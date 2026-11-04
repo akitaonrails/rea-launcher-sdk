@@ -84,7 +84,7 @@ impl Invocation {
 }
 EOF
 expect "interactive = !self.linux (CMR2005, DiRT Rally)" error audience
-fresh; replace "$L/crates/fx-launcher/src/main.rs" 'report::audience(Run::from_args(&[] as &[&str], &[]))' 'Mode::Play { interactive: !no_window }'
+fresh; replace "$L/crates/fx-launcher/src/main.rs" 'report::audience(Run::from_args(&args, &[]))' 'Mode::Play { interactive: !no_window }'
 expect "Mode built by hand from --no-window" error audience
 fresh; printf 'fn say() { let _ = console::output(attached, true, interactive); }\n' >> "$L/crates/fx-launcher/src/main.rs"
 expect "console::output for player messages" error audience
@@ -211,6 +211,20 @@ fresh; printf 'name: Bug report\nbody: []\n' > "$L/.github/ISSUE_TEMPLATE/bug-re
 expect "bug report without a What worked checklist" warn issue-bug-report
 fresh; rm "$L/.github/workflows/sdk-update.yml"
 expect "no weekly SDK update" warn sdk-update
+
+# --- Windows command line ---------------------------------------------------------------------------
+fresh; drop_line "$L/crates/fx-launcher/src/main.rs" 'windows_subsystem'
+expect "a console-subsystem Windows build (ScreamerLauncher 0.8.0)" error windows-subsystem
+on_v042() { printf 'tag=v0.4.2\ncommit=0123456789abcdef0123456789abcdef01234567\n' > "$L/sdk/VERSION"
+  for f in Cargo.toml .github/workflows/build.yml .github/workflows/sdk-update.yml .github/workflows/watch-upstream.yml; do replace "$L/$f" v0.4.0 v0.4.2; replace "$L/$f" v0.4.0 v0.4.2; done; }
+fresh; on_v042; replace "$L/crates/fx-launcher/src/main.rs" 'Run::bad_command_line(&args)' 'Run::from_args(&args, &[])'
+expect "a parse error reported as a play run (a modal box from PowerShell: CMR, CMR4, DiRT, SRR)" error bad-command-line
+fresh; replace "$L/crates/fx-launcher/src/main.rs" 'Run::bad_command_line(&args)' 'Run::from_args(&args, &[])'
+expect "on an older SDK the same mistake only warns" warn bad-command-line
+fresh; on_v042; replace "$L/crates/fx-launcher/src/main.rs" 'second_start(action,' 'second_start(false,'
+expect "a literal action at the second start (SRR's --setup exited 0)" error action-flags
+fresh; on_v042; run "$L"
+[ "$rc" -eq 0 ] && ok "the good fixture on v0.4.2 passes" || bad "good on v0.4.2: $out"
 
 # --- release notes, third-party pins ----------------------------------------------------------------
 fresh; printf '      notes: generate\n' >> "$L/.github/workflows/build.yml"
