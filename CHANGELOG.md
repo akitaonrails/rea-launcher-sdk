@@ -7,7 +7,10 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
-## [Unreleased]
+## [0.4.2] - 2026-11-03
+
+From issue #1 (a native Windows 10 test of the eight Windows launchers)
+and CMR3's Xidi 5 and vkBasalt updates. Migration first.
 
 ### Migration
 
