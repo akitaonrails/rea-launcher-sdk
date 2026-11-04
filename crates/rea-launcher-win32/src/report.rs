@@ -56,6 +56,11 @@ pub struct Run {
 /// launcher's own on top (`--list`, `--controllers`…).
 pub const COMMAND_FLAGS: &[&str] = &["--help", "-h", "/?", "--check"];
 
+/// The exit code of a command line the launcher can't parse (an unknown
+/// flag, a bad value): docs/STANDARDS.md, "Family consistency". 1 is a
+/// refusal, 2 a bad command line, in every launcher.
+pub const BAD_COMMAND_LINE: i32 = 2;
+
 impl Run {
     /// The run `args` ask for (the launcher's arguments, program name
     /// excluded): [`COMMAND_FLAGS`] or one of `commands` make it a
@@ -70,6 +75,18 @@ impl Run {
             no_window: has("--no-window"),
             settings_only: has("--settings"),
             linux: has("--linux"),
+        }
+    }
+
+    /// The run of a command line that failed to parse: report the error
+    /// and the usage like a command (the terminal; a dialog only when
+    /// nobody sees it), never like a play run, whose dialog is modal and
+    /// would hang a script with a typo (a Windows 10 test of CMR, CMR4,
+    /// DiRT and SRR, 2026-11-03). Exit [`BAD_COMMAND_LINE`] afterwards.
+    pub fn bad_command_line<S: AsRef<str>>(args: &[S]) -> Run {
+        Run {
+            command: true,
+            ..Run::from_args(args, &[])
         }
     }
 }
@@ -388,6 +405,36 @@ mod tests {
         // Its game run that follows is watched.
         let game = Audience::of(Run::from_args(&["--no-window"], &[]), true);
         assert_eq!(route(game.mode(), UNDER_HELPER), r(true, true));
+    }
+
+    #[test]
+    fn a_bad_command_line_is_reported_like_a_command() {
+        let mode = |args: &[&str], wine| Audience::of(Run::bad_command_line(args), wine).mode();
+        let terminal = t(true, false, false);
+        let shortcut = t(false, false, false);
+        // From PowerShell: printed, no modal box to wait on.
+        let typo = mode(&["--bogus-flag"], false);
+        assert_eq!(route(typo, terminal), r(true, false));
+        assert_eq!(
+            route(mode(&["--look", "invalid"], false), terminal),
+            r(true, false)
+        );
+        // A shortcut with a bad argument: nobody sees a terminal, so a box.
+        assert_eq!(route(typo, shortcut), r(false, true));
+        // A script (--no-window on Windows) and the Linux helper: never a box.
+        assert_eq!(
+            route(mode(&["--no-window", "--bogus"], false), shortcut),
+            r(false, false)
+        );
+        let helper = t(false, true, true);
+        assert_eq!(
+            route(mode(&["--linux", "--bogus"], true), helper),
+            r(true, false)
+        );
+        // A play run with the same flags would have shown a box from a terminal.
+        let play = Audience::of(Run::from_args(&["--bogus-flag"], &[]), false).mode();
+        assert_eq!(route(play, terminal), r(true, true));
+        assert_eq!(BAD_COMMAND_LINE, 2);
     }
 
     #[test]

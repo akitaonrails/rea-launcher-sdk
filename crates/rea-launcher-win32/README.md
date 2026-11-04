@@ -165,6 +165,18 @@ values) stays in the launcher; this crate provides the mechanisms.
 
 What changes for a launcher moving to this version of the crate.
 
+### v0.4.2
+
+- **A bad command line** — when the command line fails to parse, report
+  it with `report::audience(Run::bad_command_line(&args)).mode()` and exit
+  `report::BAD_COMMAND_LINE` (2). A play-run mode showed a modal box from
+  PowerShell and the process waited for OK (CMR, CMR4, DiRT, SRR). Delete
+  a local `Run { command: true, .. }` for parse errors (CMR3, DiRT Rally).
+- **Action flags** — pass `instance::is_action(&args, &[own actions])` as
+  `second_start`'s `action` (it knows `--check`, `--setup`, `--download-*`)
+  and take the instance for `--check` too, so `--check` while the window
+  is open exits 5 like `--setup` and the downloads.
+
 ### v0.4.0
 
 - **`report::Audience`** — replace any hand-made `interactive`

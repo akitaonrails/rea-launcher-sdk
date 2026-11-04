@@ -103,6 +103,24 @@ pub fn is_own_window(title: &str, wanted: &str, process_image: &str, own_exe: &s
 /// without Play, 4 no window possible).
 pub const ALREADY_RUNNING: i32 = 5;
 
+/// The family's action flags: they do work without the settings window,
+/// so a second start with one is refused, never answered by bringing the
+/// open window forward (docs/STANDARDS.md, "Action flags and one
+/// instance"). Every `--download-*` flag is one too ([`is_action`]).
+pub const ACTION_FLAGS: &[&str] = &["--check", "--setup"];
+
+/// True when `args` (the launcher's arguments, program name excluded) hold
+/// an action flag: one of [`ACTION_FLAGS`], a `--download-*` flag, or one
+/// of the launcher's own `extra` actions. Pass it as `action` to
+/// [`SecondStart::decide`] / `AlreadyRunning::second_start`. SRR passed
+/// `false` for `--setup`, which then exited 0 silently while the window
+/// was open (Windows 10 test, 2026-11-03).
+pub fn is_action<S: AsRef<str>>(args: &[S], extra: &[&str]) -> bool {
+    args.iter().map(AsRef::as_ref).any(|arg| {
+        ACTION_FLAGS.contains(&arg) || arg.starts_with("--download-") || extra.contains(&arg)
+    })
+}
+
 /// What a second launcher start does (SRR's and DiRT's `instance.rs`, and
 /// CMR4's, made one).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -403,6 +421,27 @@ mod tests {
             "{text}"
         );
         assert!(second.log_line().contains("refused"));
+    }
+
+    #[test]
+    fn action_flags_are_the_familys() {
+        for args in [
+            &["--check"][..],
+            &["--setup"],
+            &["--game", "D:\\g", "--download-directx"],
+            &["--download-hd-pack"],
+            &["--list-mods"],
+        ] {
+            assert!(is_action(args, &["--list-mods"]), "{args:?}");
+        }
+        for args in [
+            &[][..],
+            &["--settings"],
+            &["--no-window"],
+            &["--game", "--check-x"],
+        ] {
+            assert!(!is_action(args, &[]), "{args:?}");
+        }
     }
 
     #[test]
