@@ -261,8 +261,20 @@ that: if a step could be done by the launcher, the launcher does it.
   mistake hid errors in CMR3, CMR4 and DiRT. A native Linux launcher shows
   its errors before the window with `rea_launcher_ui::report::fatal`.
 - **Action flags and one instance.** An action flag (`--download-*`,
-  `--check`) while another launcher instance is open is reported and exits
-  non-zero, never a silent exit 0.
+  `--check`, `--setup`) while another launcher instance is open is reported
+  and exits non-zero, never a silent exit 0. `--check` takes the instance
+  like any action. Decide it with `rea_launcher_win32::instance::is_action`
+  (`ACTION_FLAGS` plus the launcher's own); never a literal `false`
+  (`launcher-check` rule `action-flags`).
+- **A bad command line** (an unknown flag, a bad value) prints the error
+  and the usage and exits 2 (`report::BAD_COMMAND_LINE`). It is reported
+  like a command (`report::Run::bad_command_line`): a modal dialog from a
+  terminal would hang a script with a typo (rule `bad-command-line`).
+- **A GUI program on Windows.** `src/main.rs` starts with
+  `#![cfg_attr(windows, windows_subsystem = "windows")]`; commands reach
+  the terminal through `console::attach_parent` (rule
+  `windows-subsystem`). A console build opens a second, black window on a
+  double click and exits 3 when its window is closed.
 - **Owner checkpoints.** Stop and ask rather than guess on licence-less
   assets, official art, DRM, and anything public (push, release, posts).
 - **Screenshots and video** of the game in the README are fine (they show

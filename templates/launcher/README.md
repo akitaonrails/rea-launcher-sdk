@@ -83,7 +83,9 @@ Download from the
 
 1. Unzip `@LAUNCHER_NAME@-<version>.zip` anywhere outside the game folder.
    Keep its folders next to `@LAUNCHER_EXE@`.
-2. Run `@LAUNCHER_EXE@` and follow [First run](#first-run).
+2. Run `@LAUNCHER_EXE@` and follow [First run](#first-run). The launcher
+   isn't signed, so Windows may say "Windows protected your PC" the first
+   time: choose *More info*, then *Run anyway*.
 
 ### Steam Deck
 

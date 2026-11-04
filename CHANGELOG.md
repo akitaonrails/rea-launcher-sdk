@@ -11,7 +11,18 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ### Migration
 
-- `launcher-check` has five new rules; run it after bumping. Errors:
+- Windows command line (issue #1, a native Windows 10 test of the eight
+  Windows launchers): report a command line that fails to parse with
+  `report::audience(report::Run::bad_command_line(&args)).mode()` and exit
+  `report::BAD_COMMAND_LINE` (2); pass
+  `instance::is_action(&args, &[own actions])` as the second start's
+  `action`, `--check` included; build the Windows program with
+  `windows_subsystem = "windows"`. `launcher-check` rules
+  `bad-command-line` and `action-flags` (errors from v0.4.2) and
+  `windows-subsystem` check these. Verify: `Launcher.exe --bogus-flag`
+  from PowerShell prints the usage and exits 2 with no dialog; `--setup`
+  or `--check` with the window open exits 5.
+- `launcher-check` has five more new rules; run it after bumping. Errors:
   `release-notes` (no `notes: generate` in build.yml), `watch-pins` (a
   watched component pinned to anything but its release's uploaded file),
   `process-listing` (scripts that print other processes' command lines or
@@ -24,6 +35,13 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ### Added
 
+- `report::Run::bad_command_line` and `report::BAD_COMMAND_LINE`: a parse
+  error is reported like a command (the terminal; a dialog only when
+  nobody sees it) and exits 2 in every launcher.
+- `instance::ACTION_FLAGS` and `instance::is_action`: the family's action
+  flags (`--check`, `--setup`, `--download-*`) in one place.
+- The README playbook and template: a SmartScreen sentence for the
+  unsigned Windows build, and every registry entry in "Where things live".
 - `Ledger::known_with_earlier(rel, current, earlier_digests)`: after a
   component update, a file an earlier release installed before the ledger
   still counts as the launcher's own, so it is replaced instead of refused
