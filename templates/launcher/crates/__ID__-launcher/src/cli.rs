@@ -14,8 +14,8 @@ use crate::edition::{self, Found};
 pub const OK: i32 = 0;
 /// Refused: an unknown edition, no game folder, a failed `--check`.
 pub const REFUSED: i32 = 1;
-/// A bad command line.
-pub const USAGE_ERROR: i32 = 2;
+/// A bad command line (the family code, `report::BAD_COMMAND_LINE`).
+pub const USAGE_ERROR: i32 = rea_launcher_win32::report::BAD_COMMAND_LINE;
 /// `--settings`: the window was closed without Play.
 pub const WINDOW_CLOSED: i32 = 3;
 /// `--settings`: no window could be made (the helper then plays anyway).

@@ -96,10 +96,7 @@ mod app {
             Ok(invocation) => report::audience(invocation.run()),
             // A bad command line answers like a command: the terminal, or a
             // dialog when a person started it and sees no terminal.
-            Err(_) => report::audience(Run {
-                command: true,
-                ..Run::from_args(&args, &[])
-            }),
+            Err(_) => report::audience(Run::bad_command_line(&args)),
         };
         let out = Out {
             log,
