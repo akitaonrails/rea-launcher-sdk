@@ -38,7 +38,9 @@ information or icon.
 - `rea_launcher::pe::edit`: `add_section`, `add_import` (the address table
   optionally inside a fix section), `imports`, `fix_base`,
   `next_section_rva`. Checked by the Wine loader (`rea-launcher-win32`
-  tests `pe_import`).
+  tests `pe_import`) and by CMR1 in the real game (race, HD art, Alt+F4).
+  When bytes sit right after the section table (Rally.exe's build stamp),
+  the table moves to free header space and every other byte stays put.
 - `rea_close_hook::import_into`, `DLL`, `ATTACH_EXPORT`, `ATTACH_ENV`:
   the hook DLL loaded with the game and attaching itself, nothing crossing
   processes (tests `attach`).

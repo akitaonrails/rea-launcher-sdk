@@ -200,6 +200,47 @@ pub fn next_section_rva(bytes: &[u8]) -> Result<u32, EditError> {
     Ok(align_up(end, layout.section_align))
 }
 
+/// The section table's offset, with free (zero) room for one more header
+/// before `first_raw`. When the bytes after the table are taken (Rally.exe
+/// keeps a build stamp there, which the game may read from memory), the
+/// table moves to the first free run in the header area, and
+/// `SizeOfOptionalHeader` says where: no other byte moves. Errors when the
+/// headers have no such run.
+fn table_with_room(
+    bytes: &mut [u8],
+    layout: &Layout,
+    first_raw: usize,
+) -> Result<usize, EditError> {
+    let count = layout.sections;
+    let size = (count + 1) * 40;
+    let zero = |bytes: &[u8], at: usize, len: usize| {
+        bytes
+            .get(at..at + len)
+            .is_some_and(|run| run.iter().all(|&b| b == 0))
+    };
+    let next = layout.table + count * 40;
+    if next + 40 <= first_raw && zero(bytes, next, 40) {
+        return Ok(layout.table);
+    }
+    let start = (layout.table + count * 40).next_multiple_of(8);
+    let found = (start..first_raw.saturating_sub(size) + 1)
+        .step_by(8)
+        .find(|&at| zero(bytes, at, size))
+        .ok_or(EditError::NoRoomForHeader)?;
+    let optional_size = found - layout.optional;
+    let old = layout.table..layout.table + count * 40;
+    let headers = bytes[old.clone()].to_vec();
+    bytes[found..found + headers.len()].copy_from_slice(&headers);
+    bytes[old].fill(0);
+    let size_at = layout.optional - 4;
+    put_u16(
+        bytes,
+        size_at,
+        u16::try_from(optional_size).map_err(|_| EditError::NoRoomForHeader)?,
+    );
+    Ok(found)
+}
+
 /// Appends a section `name` holding `data` (its virtual size is
 /// `data.len()`), placed at [`next_section_rva`]. Returns the new image and
 /// the section. The new header goes in the zero bytes after the section
@@ -218,7 +259,6 @@ pub fn add_section(
     }
     let layout = Layout::read(bytes)?;
     let pe = Pe::parse(bytes)?;
-    let header = layout.table + layout.sections * 40;
     // The headers end where the first section's file bytes start.
     let first_raw = pe
         .sections
@@ -227,12 +267,9 @@ pub fn add_section(
         .map(|s| s.raw_offset as usize)
         .min()
         .unwrap_or(bytes.len());
-    let free = bytes
-        .get(header..header + 40)
-        .is_some_and(|slot| slot.iter().all(|&b| b == 0));
-    if header + 40 > first_raw || !free {
-        return Err(EditError::NoRoomForHeader);
-    }
+    let mut out = bytes.to_vec();
+    let table = table_with_room(&mut out, &layout, first_raw)?;
+    let header = table + layout.sections * 40;
     let rva = next_section_rva(bytes)?;
     let raw_offset = align_up(bytes.len() as u32, layout.file_align);
     let raw_size = align_up(data.len() as u32, layout.file_align);
@@ -244,7 +281,6 @@ pub fn add_section(
         raw_size,
         characteristics,
     };
-    let mut out = bytes.to_vec();
     let mut padded = [0u8; 8];
     padded[..name.len()].copy_from_slice(name.as_bytes());
     out[header..header + 8].copy_from_slice(&padded);
@@ -524,6 +560,35 @@ mod tests {
     }
 
     #[test]
+    fn bytes_after_the_table_stay_and_the_table_moves() {
+        // Rally.exe keeps "Colin Mcrae Rally EXECUTABLE Compiled on ..."
+        // right after its section table.
+        let mut before = with_imports(Format::Pe32);
+        let layout = Layout::read(&before).unwrap();
+        let stamp_at = layout.table + layout.sections * 40;
+        let stamp = b"Example EXECUTABLE Compiled on Jun  8 2000";
+        before[stamp_at..stamp_at + stamp.len()].copy_from_slice(stamp);
+        let (after, s) = add_section(&before, ".rea", &[0xcc; 0x10], SCN_CODE_RWX).unwrap();
+        assert_eq!(
+            &after[stamp_at..stamp_at + stamp.len()],
+            stamp,
+            "the stamp stays put"
+        );
+        let pe = Pe::parse(&after).unwrap();
+        let names: Vec<_> = pe.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, [".text", ".rdata", ".data", ".rea"]);
+        assert_eq!(pe.section(".rea"), Some(&s));
+        assert!(
+            Layout::read(&after).unwrap().table > stamp_at,
+            "the table moved past it"
+        );
+        // A second section (an import) fits too, and the old imports still read.
+        let out = add_import(&after, ".reaimp", "hooks.dll", &["f"], None).unwrap();
+        assert_eq!(imports(&out).unwrap().len(), 2);
+        assert_eq!(&out[stamp_at..stamp_at + stamp.len()], stamp);
+    }
+
+    #[test]
     fn a_section_needs_free_header_space_and_a_good_name() {
         let bytes = with_imports(Format::Pe32);
         for name in ["", ".toolongname", "é"] {
@@ -532,10 +597,12 @@ mod tests {
                 Err(EditError::BadSectionName(_))
             ));
         }
-        // Something already sits where the next header would go.
+        // No free run anywhere in the headers.
         let mut busy = bytes.clone();
         let layout = Layout::read(&busy).unwrap();
-        busy[layout.table + 3 * 40] = 1;
+        for at in (layout.table + 3 * 40..0x400).step_by(16) {
+            busy[at] = 1;
+        }
         assert_eq!(
             add_section(&busy, ".rea", &[1], DATA).unwrap_err(),
             EditError::NoRoomForHeader
