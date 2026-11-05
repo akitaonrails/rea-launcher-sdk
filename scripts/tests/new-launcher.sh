@@ -47,6 +47,7 @@ LICENSE-MIT
 README.md
 THIRD_PARTY.md
 crates/exr-launcher/Cargo.toml
+crates/exr-launcher/build.rs
 crates/exr-launcher/assets/README.md
 crates/exr-launcher/src/cli.rs
 crates/exr-launcher/src/config.rs

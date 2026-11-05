@@ -1,0 +1,10 @@
+[package]
+name = "rea-launcher-build"
+description = "build.rs helper for rea launchers: version info, icon and manifest in the Windows executable"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

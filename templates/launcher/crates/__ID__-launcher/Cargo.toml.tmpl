@@ -17,6 +17,9 @@ rea-launcher.workspace = true
 # Its Windows parts are cfg(windows); the console decision is portable.
 rea-launcher-win32.workspace = true
 
+[build-dependencies]
+rea-launcher-build.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 rea-launcher-ui.workspace = true
 

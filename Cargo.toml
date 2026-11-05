@@ -4,6 +4,7 @@ members = [
     "crates/rea-launcher-win32",
     "crates/rea-launcher-ui",
     "crates/rea-launcher-close-hook",
+    "crates/rea-launcher-build",
 ]
 resolver = "3"
 
@@ -21,3 +22,4 @@ windows-sys = "0.61"
 jpeg-decoder = { version = "0.3", default-features = false }
 egui_kittest = { version = "0.37", default-features = false }
 rea-launcher = { path = "crates/rea-launcher", version = "0.4.2" }
+rea-launcher-build = { path = "crates/rea-launcher-build", version = "0.4.2" }
