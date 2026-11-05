@@ -7,6 +7,48 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [Unreleased]
+
+Fewer antivirus false positives: a player's antivirus flagged CMRLauncher
+0.9.0 on Windows (Quiver feedback, 2026-11-04). It injected its hook DLL
+into the running game, and like every launcher it had no version
+information or icon.
+
+### Migration
+
+- Add a `build.rs` calling `rea_launcher_build::Resources` (product,
+  description, company, file name, the AppImage PNG as icon) and
+  `rea-launcher-build` in `[build-dependencies]`. The exe then carries
+  version information, an icon and a manifest. Verify:
+  `i686-w64-mingw32-windres -i <exe> -O rc` lists them. `launcher-check`
+  rule `exe-resources` (error from v0.4.3).
+- Launchers with the close hook (CMR4, CMR2005): replace
+  `Running::message_hook` with `rea_close_hook::import_into` on the
+  runtime copy's executable, the DLL next to it, and
+  `REA_CLOSE_HOOK_ATTACH=1` in the game's environment (crate README).
+  Verify Alt+F4 and window close in the real game. Rule `remote-injection`
+  (error from v0.4.3).
+- A launcher that injects a hook DLL or writes into the running game
+  (CMR1): move the fixes into the runtime copy's file with
+  `pe::edit::add_section` and the DLL into its imports with
+  `pe::edit::add_import` (rule `remote-injection`).
+
+### Added
+
+- `rea_launcher::pe::edit`: `add_section`, `add_import` (the address table
+  optionally inside a fix section), `imports`, `fix_base`,
+  `next_section_rva`. Checked by the Wine loader (`rea-launcher-win32`
+  tests `pe_import`).
+- `rea_close_hook::import_into`, `DLL`, `ATTACH_EXPORT`, `ATTACH_ENV`:
+  the hook DLL loaded with the game and attaching itself, nothing crossing
+  processes (tests `attach`).
+- `rea-launcher-build`: version information, icon (from a PNG) and manifest
+  for a launcher's exe, version information for hook DLLs. The close hook
+  DLL carries its own.
+- The template has the `build.rs`; STANDARDS has an "Antivirus" section;
+  the binary-patching playbook says never to write into the running game.
+- `launcher-check` rules `exe-resources` and `remote-injection`.
+
 ## [0.4.2] - 2026-11-03
 
 From issue #1 (a native Windows 10 test of the eight Windows launchers)
