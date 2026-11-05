@@ -43,24 +43,33 @@ leaves the game alone; check it in the launcher with the same parser
    rea-launcher-close-hook --target i686-pc-windows-gnu`) and ship
    `rea_close_hook.dll` next to the launcher (add it to the package
    allowlist).
-2. Start the game with the configuration and install the hook:
+2. Put the DLL in the game's import table: write the runtime copy of the
+   game's executable through `rea_close_hook::import_into` (only the
+   runtime copy, never the player's file), copy `rea_close_hook.dll` next
+   to it, and start the game with the configuration and
+   `REA_CLOSE_HOOK_ATTACH=1`. Windows loads the DLL with the game, and the
+   DLL installs the hook on the game's window thread itself:
 
 ```rust
 use rea_launcher_win32::process::Launch;
 
-let game = Launch::new(&exe)
+let exe = runtime.join("cmr4.exe");
+let bytes = std::fs::read(&exe)?;
+std::fs::write(&exe, rea_close_hook::import_into(&bytes)?)?;
+std::fs::copy(launcher_dir.join(rea_close_hook::DLL), runtime.join(rea_close_hook::DLL))?;
+let code = Launch::new(&exe)
     .cwd(&runtime)
     .env(rea_close_hook::ENV, "class=PC_CMR4;strategy=terminate")
-    .spawn()?;
-let _hook = match game.message_hook(&launcher_dir.join("rea_close_hook.dll"), c"close_hook") {
-    Ok(hook) => Some(hook),
-    Err(error) => { log(&format!("warning: {error}")); None }
-};
-let code = game.wait()?;
+    .env(rea_close_hook::ATTACH_ENV, "1")
+    .run()?;
 ```
 
-Keep the hook alive until `wait` returns. As a last resort the launcher
-can still call `Running::close_gracefully`.
+Nothing crosses processes: v0.4.2 and earlier installed the hook from the
+launcher (`Running::message_hook`, `SetWindowsHookExW` on the game's
+thread), which antivirus heuristics take for a keylogger. `message_hook`
+still works for tests; `launcher-check` (rule `remote-injection`) refuses
+it in launcher code from v0.4.3. As a last resort the launcher can still
+call `Running::close_gracefully`.
 
 CMR4 can move to this DLL with `class=PC_CMR4;strategy=terminate` (its own
 behaviour), dropping its `close-hook` crate.

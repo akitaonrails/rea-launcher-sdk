@@ -31,6 +31,33 @@ use std::fmt;
 pub const ENV: &str = "REA_CLOSE_HOOK";
 /// The export the launcher installs as the hook.
 pub const EXPORT: &str = "close_hook";
+/// The DLL's file name, next to the game's executable.
+pub const DLL: &str = "rea_close_hook.dll";
+/// The export a game's runtime copy imports so the loader maps the DLL at
+/// start-up ([`import_into`]).
+pub const ATTACH_EXPORT: &str = "rea_close_hook_attach";
+/// `1` in the game's environment: the DLL, loaded through the import
+/// table, installs the hook on the game's window thread itself.
+pub const ATTACH_ENV: &str = "REA_CLOSE_HOOK_ATTACH";
+
+/// The game executable `bytes` (the launcher's runtime copy, never the
+/// player's file) with [`DLL`] in its import table, so Windows loads the
+/// hook when the game starts. With [`ATTACH_ENV`]=1 in the game's
+/// environment and the DLL next to the executable, the hook then installs
+/// itself; the launcher never touches the running game. Antivirus
+/// heuristics take a launcher that installs a hook into another process
+/// for a keylogger; this way nothing crosses processes. Unchanged when the
+/// import is already there (a runtime copy from an earlier start).
+pub fn import_into(bytes: &[u8]) -> Result<Vec<u8>, rea_launcher::pe::edit::EditError> {
+    use rea_launcher::pe::edit;
+    if edit::imports(bytes)?
+        .iter()
+        .any(|import| import.dll.eq_ignore_ascii_case(DLL))
+    {
+        return Ok(bytes.to_vec());
+    }
+    edit::add_import(bytes, ".reahook", DLL, &[ATTACH_EXPORT], None)
+}
 
 /// Window messages and constants the pure parts need.
 pub mod msg {

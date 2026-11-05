@@ -220,3 +220,89 @@ pub unsafe extern "system" fn close_hook(code: i32, wparam: WPARAM, lparam: LPAR
         CallNextHookEx(null_mut(), code, wparam, lparam)
     }
 }
+
+/// What a game's runtime copy imports so the loader maps this DLL at
+/// start-up (`crate::import_into`); the attaching is done in `DllMain`.
+#[unsafe(no_mangle)]
+pub extern "system" fn rea_close_hook_attach() -> u32 {
+    1
+}
+
+/// `DLL_PROCESS_ATTACH`.
+const PROCESS_ATTACH: u32 = 1;
+
+/// With `REA_CLOSE_HOOK_ATTACH=1` (the game started by a launcher that put
+/// this DLL in the game's import table), a thread waits for the game's
+/// window and installs the hook on its thread. Never blocks the loader.
+///
+/// # Safety
+/// Called by the loader with this DLL's module handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn DllMain(
+    module: HMODULE,
+    reason: u32,
+    _reserved: *mut std::ffi::c_void,
+) -> i32 {
+    if reason == PROCESS_ATTACH && std::env::var(crate::ATTACH_ENV).is_ok_and(|value| value == "1")
+    {
+        let module = module as usize;
+        // A thread created here starts once the loader is done.
+        std::thread::spawn(move || attach(module as HMODULE));
+    }
+    1
+}
+
+/// Waits (up to ten minutes) for this process's top-level window of the
+/// configured class, installs the hook on that window's thread, then keeps
+/// running: a hook goes away with the thread that installed it.
+fn attach(module: HMODULE) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_GETMESSAGE};
+    let Some(config) = config() else { return };
+    for _ in 0..2400 {
+        if let Some(thread) = game_thread(config) {
+            // SAFETY: `close_hook` is this DLL's hook procedure, `module`
+            // this DLL, `thread` a thread of this process.
+            let hook =
+                unsafe { SetWindowsHookExW(WH_GETMESSAGE, Some(close_hook), module, thread) };
+            if hook.is_null() {
+                return;
+            }
+            loop {
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// The thread of this process's first top-level window of the game's class.
+fn game_thread(config: &Config) -> Option<u32> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
+    use windows_sys::core::BOOL;
+    struct Search<'a> {
+        config: &'a Config,
+        pid: u32,
+        thread: Option<u32>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam is the Search below, alive for EnumWindows' call.
+        let search = unsafe { &mut *(lparam as *mut Search) };
+        let mut pid = 0u32;
+        // SAFETY: a plain window query into a local.
+        let thread = unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        if pid == search.pid && search.config.is_game_class(&root_class(hwnd)) {
+            search.thread = Some(thread);
+            return 0;
+        }
+        1
+    }
+    let mut search = Search {
+        config,
+        // SAFETY: a plain process query.
+        pid: unsafe { GetCurrentProcessId() },
+        thread: None,
+    };
+    // SAFETY: the callback only reads windows and writes `search`.
+    unsafe { EnumWindows(Some(each), &mut search as *mut Search as LPARAM) };
+    search.thread
+}
