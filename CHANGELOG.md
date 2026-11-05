@@ -7,7 +7,7 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
-## [Unreleased]
+## [0.4.3] - 2026-11-05
 
 Fewer antivirus false positives: a player's antivirus flagged CMRLauncher
 0.9.0 on Windows (Quiver feedback, 2026-11-04). It injected its hook DLL
