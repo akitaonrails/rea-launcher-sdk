@@ -239,6 +239,27 @@ match identify::identify(b"some exe", &EDITIONS) {
 }
 ```
 
+### pe::edit (a runtime copy's sections and imports)
+
+`pe::edit::add_section` appends a section (a fix's code and data at a fixed
+address) and `pe::edit::add_import` adds a DLL to the import table, its
+address table optionally inside that section, so the loader maps a hook
+DLL and fills in its functions before the game runs. Only for the runtime
+copy. It replaces starting the game suspended and injecting
+(`VirtualAllocEx`/`WriteProcessMemory`/`CreateRemoteThread`), which
+antivirus heuristics flag. `pe::edit::fix_base` clears `DYNAMIC_BASE` so a
+fix section's absolute addresses hold; `pe::edit::imports` reads the table
+back.
+
+```rust
+use rea_launcher::pe::edit;
+# fn demo(game: &[u8]) -> Result<Vec<u8>, edit::EditError> {
+let (with_fix, fix) = edit::add_section(game, ".rea", &[0u8; 0x400], edit::SCN_CODE_RWX)?;
+// The loader writes hooks.dll's two functions at fix.rva + 0x100.
+edit::add_import(&with_fix, ".reaimp", "hooks.dll", &["one", "two"], Some(fix.rva + 0x100))
+# }
+```
+
 ### patch
 
 ```rust

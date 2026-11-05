@@ -5,7 +5,10 @@
 //! hard-coded `file offset = VA - 0x400000` for `.text` only; Screamer's LE
 //! images (DOS/4GW) have their own parser in that launcher. PE32 (the
 //! launchers' 32-bit games) and PE32+ are both read. Every read is checked;
-//! an error names the offset it could not read.
+//! an error names the offset it could not read. [`edit`] adds sections and
+//! imports to a runtime copy.
+
+pub mod edit;
 
 /// Why a file could not be read as a PE image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,6 +258,22 @@ pub mod synthetic {
         }
         let first_rva = sections.first().map_or(0x1000, |s| s.1);
         out[o + 16..o + 20].copy_from_slice(&first_rva.to_le_bytes());
+        // Alignments, sizes and the 16 data directories, as linkers write.
+        out[o + 32..o + 36].copy_from_slice(&0x1000u32.to_le_bytes());
+        out[o + 36..o + 40].copy_from_slice(&0x200u32.to_le_bytes());
+        let end = sections
+            .iter()
+            .map(|s| s.1 + (s.2.len() as u32).max(1))
+            .max()
+            .unwrap_or(0x1000);
+        out[o + 56..o + 60]
+            .copy_from_slice(&end.div_ceil(0x1000).saturating_mul(0x1000).to_le_bytes());
+        out[o + 60..o + 64].copy_from_slice(&0x200u32.to_le_bytes());
+        let count_at = match format {
+            Format::Pe32 => o + 92,
+            Format::Pe32Plus => o + 108,
+        };
+        out[count_at..count_at + 4].copy_from_slice(&16u32.to_le_bytes());
         let mut raw = 0x200usize;
         for (i, (name, rva, data, flags)) in sections.iter().enumerate() {
             let at = table + i * 40;
