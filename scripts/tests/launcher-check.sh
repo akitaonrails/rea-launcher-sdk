@@ -226,6 +226,22 @@ expect "a literal action at the second start (SRR's --setup exited 0)" error act
 fresh; on_v042; run "$L"
 [ "$rc" -eq 0 ] && ok "the good fixture on v0.4.2 passes" || bad "good on v0.4.2: $out"
 
+# --- antivirus: resources, no injection -------------------------------------------------------------
+on_v043() { printf 'tag=v0.4.3\ncommit=0123456789abcdef0123456789abcdef01234567\n' > "$L/sdk/VERSION"
+  for f in Cargo.toml .github/workflows/build.yml .github/workflows/sdk-update.yml .github/workflows/watch-upstream.yml; do replace "$L/$f" v0.4.0 v0.4.3; replace "$L/$f" v0.4.0 v0.4.3; done; }
+fresh; on_v043; rm "$L/crates/fx-launcher/build.rs"
+expect "a Windows exe without version info, icon or manifest (CMRLauncher 0.9.0)" error exe-resources
+fresh; rm "$L/crates/fx-launcher/build.rs"
+expect "on an older SDK the missing resources only warn" warn exe-resources
+for call in 'CreateRemoteThread(process, null(), 0, start, arg, 0, null_mut());' 'WriteProcessMemory(process, at, bytes, len, &mut done);' 'VirtualAllocEx(process, null(), size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);' 'let _hook = game.message_hook(&dll, c"close_hook");'; do
+  fresh; on_v043; printf 'fn inject() { unsafe { %s } }\n' "$call" >> "$L/crates/fx-launcher/src/main.rs"
+  expect "injecting into the running game: ${call%%(*}" error remote-injection
+done
+fresh; on_v043; printf '// WriteProcessMemory is never used here\n' >> "$L/crates/fx-launcher/src/main.rs"
+run "$L"; printf '%s\n' "$out" | grep -q 'remote-injection' && bad "a comment naming the call is not injection: $out" || ok "a comment naming the call is not injection"
+fresh; on_v043; run "$L"
+[ "$rc" -eq 0 ] && ok "the good fixture on v0.4.3 passes" || bad "good on v0.4.3: $out"
+
 # --- release notes, third-party pins ----------------------------------------------------------------
 fresh; printf '      notes: generate\n' >> "$L/.github/workflows/build.yml"
 expect "notes: generate (CMR4 v0.4.0 had only GitHub's commit list)" error release-notes
