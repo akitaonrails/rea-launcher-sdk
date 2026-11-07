@@ -17,11 +17,11 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 
 # Fake downloads: a Wine tree with dev tools, appimagetool that copies the
 # AppDir next to its output, and a runtime blob.
-W=$T/src/wine-11.20-amd64-wow64
+W=$T/src/wine-11.21-amd64-wow64
 mkdir -p "$W/bin" "$W/include" "$W/share/man/man1" "$W/lib/wine"
 for t in wine wineserver winegcc widl winebuild wrc; do printf '#!/bin/sh\n' > "$W/bin/$t"; chmod +x "$W/bin/$t"; done
 echo h > "$W/include/windows.h"; echo m > "$W/share/man/man1/wine.1"; echo d > "$W/lib/wine/kernel32.dll"
-(cd "$T/src" && tar -cJf "$T/src/wine-11.20-amd64-wow64.tar.xz" wine-11.20-amd64-wow64)
+(cd "$T/src" && tar -cJf "$T/src/wine-11.21-amd64-wow64.tar.xz" wine-11.21-amd64-wow64)
 cat > "$T/src/appimagetool" <<'EOF'
 #!/bin/sh
 # Fake appimagetool: records its arguments, keeps the AppDir for inspection.
@@ -32,19 +32,19 @@ cp -R "$prev2" "$prev.d" && echo appimage > "$prev"
 EOF
 echo runtime > "$T/src/runtime-x86_64"
 cat > "$T/tools.pins" <<EOF
-wine file://$T/src/wine-11.20-amd64-wow64.tar.xz $(sha "$T/src/wine-11.20-amd64-wow64.tar.xz")
+wine file://$T/src/wine-11.21-amd64-wow64.tar.xz $(sha "$T/src/wine-11.21-amd64-wow64.tar.xz")
 appimagetool file://$T/src/appimagetool $(sha "$T/src/appimagetool")
 appimage-runtime file://$T/src/runtime-x86_64 $(sha "$T/src/runtime-x86_64")
 EOF
-# Another Wine (its archive's folder says 11.21), and the 11.20 archive
-# under a name without a version (an offline file:// copy named by its
-# checksum): the archive decides.
-mkdir -p "$T/src/o" && cp -R "$W" "$T/src/o/wine-11.21-amd64-wow64"
-(cd "$T/src/o" && tar -cJf "$T/src/wine-11.21-amd64-wow64.tar.xz" wine-11.21-amd64-wow64)
-sed "s|^wine .*|wine file://$T/src/wine-11.21-amd64-wow64.tar.xz $(sha "$T/src/wine-11.21-amd64-wow64.tar.xz")|" \
+# Another Wine (its archive's folder says 11.22, which SOURCE.txt does not
+# describe), and the 11.21 archive under a name without a version (an
+# offline file:// copy named by its checksum): the archive decides.
+mkdir -p "$T/src/o" && cp -R "$W" "$T/src/o/wine-11.22-amd64-wow64"
+(cd "$T/src/o" && tar -cJf "$T/src/wine-11.22-amd64-wow64.tar.xz" wine-11.22-amd64-wow64)
+sed "s|^wine .*|wine file://$T/src/wine-11.22-amd64-wow64.tar.xz $(sha "$T/src/wine-11.22-amd64-wow64.tar.xz")|" \
   "$T/tools.pins" > "$T/other-wine.pins"
-WSHA=$(sha "$T/src/wine-11.20-amd64-wow64.tar.xz")
-cp "$T/src/wine-11.20-amd64-wow64.tar.xz" "$T/src/$WSHA"
+WSHA=$(sha "$T/src/wine-11.21-amd64-wow64.tar.xz")
+cp "$T/src/wine-11.21-amd64-wow64.tar.xz" "$T/src/$WSHA"
 sed "s|^wine .*|wine file://$T/src/$WSHA $WSHA|" "$T/tools.pins" > "$T/sha-named.pins"
 export T_LOG="$T/tool.log" REA_CACHE="$T/cache"
 
@@ -195,7 +195,7 @@ refuse "missing --play-lib fails" "no play library" $COMMON --play-lib "$T/nope.
 refuse "unknown option" "unknown option" $COMMON --frobnicate "$P" "$T/o"
 refuse "wrong argument count" "appimage-wine.sh" $COMMON "$P"
 refuse "payload listed twice" "listed twice" $COMMON --payload thirdparty --payload thirdparty "$P" "$T/o"
-refuse "SOURCE.txt must match the Wine pin" "does not describe Wine 11.21" --app game --exe GameLauncher.exe --pins "$T/other-wine.pins" --icon "$T/game-launcher.png" --title G "$P" "$T/o"
+refuse "SOURCE.txt must match the Wine pin" "does not describe Wine 11.22" --app game --exe GameLauncher.exe --pins "$T/other-wine.pins" --icon "$T/game-launcher.png" --title G "$P" "$T/o"
 }
 if run --app game --exe GameLauncher.exe --pins "$T/sha-named.pins" --icon "$T/game-launcher.png" --title G "$P" "$T/o-sha"; then
   ok "a Wine pin named by its checksum builds (the version comes from the archive)"
