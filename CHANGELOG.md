@@ -7,6 +7,33 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.4.4] - 2026-11-07
+
+The AppImage's portable Wine moves to 11.21: Wine 11.20 crashed at startup
+on machines that cannot reserve ~64 GiB of address space (16 GB handhelds
+such as the Legion Go S). Wine 11.21 fixes the address-space probe.
+
+### Migration
+
+- Launchers with a portable-Wine AppImage (CMR1, CMR3, CMR4, CMR2005, DiRT,
+  OutRun 2006, Sega Rally Revo): bump the SDK tag and re-run
+  `scripts/sdk-sync`; `packaging/appimage/tools.pins` now pins Wine 11.21
+  and `packaging/appimage/wine/SOURCE.txt` describes it. Verify the built
+  AppImage's `wine --version` says 11.21 and the launcher starts on a 16 GB
+  machine (or with an 8 GiB address-space cap); the SDK's
+  `packaging/tests/appimage-wine.sh` covers the pin/SOURCE match.
+
+### Fixed
+
+- The AppImage's portable Wine is 11.21. Wine 11.20's host address-space
+  probe called `mmap()` without `MAP_FIXED_NOREPLACE`, so the hint was not
+  honoured and `get_host_addr_space_limit()` sized its page-protection
+  table from 1<<63: ~64 GiB of address space per Wine process. Where that
+  reservation cannot be made, `calloc()` returns NULL, the wrong assert
+  passes, and the first `create_view()` dereferences it — SIGSEGV in
+  `ntdll.so+0x787c9`, before any Windows code runs. 11.21 reserves ~8 GiB
+  (Wine-Bug 60528, commit 3c49b97b).
+
 ## [0.4.3] - 2026-11-05
 
 Fewer antivirus false positives: a player's antivirus flagged CMRLauncher
@@ -844,7 +871,12 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
-[Unreleased]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.3.0...v0.3.1
