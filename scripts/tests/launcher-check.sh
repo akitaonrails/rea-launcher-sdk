@@ -254,6 +254,26 @@ expect "a pinned GitHub release nobody watches (CMR4's Xidi)" warn unwatched-pin
 fresh; rm "$L/.github/workflows/watch-upstream.yml"
 expect "pins without a watch workflow" warn unwatched-pins
 
+# --- innoextract: pinned and credited --------------------------------------------------------------
+inno_code() { # a launcher that runs the bundled innoextract
+  printf '\nconst INNOEXTRACT: &str = "innoextract.exe";\n' >> "$L/crates/fx-launcher/src/main.rs"
+}
+inno_pins() {
+  sh -c '. "$1/packaging/pins.sh"; . "$1/packaging/innoextract.sh"; innoextract_pins' sh "$ROOT" >> "$L/packaging/third-party.txt"
+  printf 'innoextract dscharrer/innoextract innoextract-\n' >> "$L/packaging/upstream-watch.txt"
+}
+fresh; inno_code
+expect "runs innoextract.exe with no pins and no credit" error innoextract
+printf '%s\n' "$out" | grep -q 'no pin file pins innoextract-exe' && printf '%s\n' "$out" | grep -q "THIRD_PARTY.md doesn't list it" \
+  && ok "each missing piece is named" || bad "each missing piece is named: $out"
+fresh; inno_code; inno_pins
+expect "pinned but not in THIRD_PARTY.md" error innoextract
+fresh; inno_code; inno_pins; printf '| innoextract | 1.9 | zlib |\n' >> "$L/THIRD_PARTY.md"
+run "$L"; [ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'innoextract\]' \
+  && ok "pinned and credited: clean" || bad "pinned and credited: $out"
+fresh; printf '// innoextract.exe is not used yet\n' >> "$L/crates/fx-launcher/src/main.rs"
+run "$L"; printf '%s\n' "$out" | grep -q 'innoextract\]' && bad "a comment is code here too? $out" || ok "no innoextract in the code: no rule"
+
 # --- secrets: process listings ---------------------------------------------------------------------
 for line in 'ps -eo pid,stat,args | grep wineserver' 'ps aux | grep -i rally' 'ps -ef' 'ps -o pid=,cmd= -p "$pid"' \
   'pgrep -af wineserver' 'env | sort' 'x=$(printenv)' 'cat "/proc/$pid/cmdline"' 'tr "\0" "\n" < /proc/$p/environ'; do

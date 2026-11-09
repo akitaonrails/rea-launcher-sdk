@@ -62,7 +62,7 @@ own-fix-draft readme-sections readme-order readme-contributing readme-links
 readme-versions agents-pointer agents-duplicate sdk-workflows sdk-tag lld
 wine-tests look-flag look-sizes option-tests quit-paths issue-unknown-edition
 issue-bug-report sdk-update windows-subsystem bad-command-line action-flags exe-resources
-remote-injection release-notes watch-pins unwatched-pins process-listing
+remote-injection release-notes watch-pins unwatched-pins innoextract process-listing
 real-game-gated drm-exception waivers'
 
 # rule ID: sets SEV (error|warn), SINCE (SDK tag or empty), FIX and WHY.
@@ -186,6 +186,9 @@ rule() {
     unwatched-pins) SEV=warn
       WHY='A pinned component nobody watches falls behind silently: CMR4 still bundles Xidi 4.3.1 while Xidi 5 changed its files and settings, and only CMR3, which runs the watch, heard of it.'
       FIX='add the component to packaging/upstream-watch.txt (name owner/repo asset-prefix) and call the SDK upstream-watch.yml from .github/workflows/watch-upstream.yml (templates/launcher has both)' ;;
+    innoextract) SEV=error
+      WHY='A launcher that unpacks a game'"'"'s installer runs the bundled innoextract.exe (docs/playbooks/installers.md). Without its pins the package ships without it (or with an unverified copy), and without a THIRD_PARTY.md entry its zlib licence and the Boost, liblzma and libstdc++ texts go uncredited.'
+      FIX='add the two pin lines (innoextract and innoextract-exe; sdk/packaging/innoextract.sh innoextract_pins prints them) to packaging/third-party.txt, bundle it with innoextract_bundle, and list innoextract 1.9 with its licences in THIRD_PARTY.md' ;;
     process-listing) SEV=error
       WHY='Other processes'"'"' command lines and environments hold other people'"'"'s secrets: a test harness ran ps -eo pid,stat,args and printed another session'"'"'s docker exec -e line, with the owner'"'"'s API and AWS keys, into a log (2026-11-02).'
       FIX='find processes with pgrep -x NAME (pids only) or ps -o pid,stat,comm; match /proc/PID/cmdline or environ without printing it (grep -q, cmp, or a value read into a variable); never print env, printenv, ps args/aux/-ef or pgrep -a (STANDARDS "Secrets stay out of output")' ;;
@@ -731,6 +734,20 @@ while IFS= read -r f; do
 done < "$T/pin-files" > "$T/unwatched"
 if [ -s "$T/unwatched" ]; then
   emit unwatched-pins "$(head -n 1 "$T/unwatched" | cut -d' ' -f1)" "no weekly watch for: $(cut -d' ' -f2- "$T/unwatched" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+fi
+
+# --- innoextract: pinned and credited when the code runs it ----------------------------------------
+INNO_AT=$(grep -iE 'innoextract(\.exe|::EXE)' "$T/code.txt" | grep -vE '^[^:]*:[0-9]+:[ \t]*(//|\*)' | head -n 1 | cut -d: -f1,2)
+if [ -n "$INNO_AT" ]; then
+  for pin in innoextract innoextract-exe; do
+    pinned=''
+    while IFS= read -r f; do
+      awk -v n="$pin" '{ sub(/\r$/, "") } $1 == n { found = 1 } END { exit !found }' "$f" && pinned=1
+    done < "$T/pin-files"
+    [ -n "$pinned" ] || emit innoextract "$INNO_AT" "runs innoextract.exe, but no pin file pins $pin (packaging/third-party.txt)"
+  done
+  grep -qi 'innoextract' THIRD_PARTY.md 2>/dev/null \
+    || emit innoextract THIRD_PARTY.md "runs innoextract.exe, but THIRD_PARTY.md doesn't list it"
 fi
 
 # --- secrets: other processes' command lines and environments ---------------------------------------
