@@ -51,7 +51,12 @@ MinGW, lld, Wine and gamescope may live on the host or in a container
 github.com/akitaonrails/distrobox-gaming). If a tool is missing on the
 host, check `distrobox list` for `gaming` and run the command there:
 `distrobox enter gaming -- sh -c 'cd /absolute/path && …'` — always an
-absolute path, since the box's `$HOME` can differ. If neither has it, tell
+absolute path, since the box's `$HOME` can differ. When the box's view of
+`/home` is read-only (seen after a box restart: cargo can't update its git
+cache, or finds only the system toolchain), point the toolchain at the
+box's own home: `H=<box home>; HOME=$H CARGO_HOME=$H/.cargo
+RUSTUP_HOME=$H/.rustup PATH=$H/.cargo/bin:$PATH` (`distrobox enter gaming --
+sh -c 'echo $HOME'` shows it). If neither has it, tell
 the user what to install (README, "Development machine") rather than
 skipping the check silently.
 

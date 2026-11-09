@@ -7,6 +7,48 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [Unreleased]
+
+From the launchers' 2026-11-09 issues (CMR1 #5, OutRun #1-#3, SRR #3,
+Screamer #1).
+
+### Migration
+
+- Nothing required. A launcher whose game reads a folder path into a
+  fixed-size buffer (registry `…Path` values) can hand it a path that fits
+  with `rea_launcher::paths::fit_path` and
+  `rea_launcher_win32::short_path::{short_path, short_path_ahead}`
+  (CMR1 0.10.4 has its own copy; move to these at its next bump).
+- After `sdk-bump`, the unknown-edition issue form is refreshed only if
+  you copy it from `templates/launcher/dot-github/ISSUE_TEMPLATE/` again:
+  it now asks for the file size and says what a SHA-256 looks like.
+
+### Added
+
+- `rea_launcher::paths::fit_path` and `rea_launcher_win32::short_path`:
+  Windows' short (8.3) name for a folder, for old games with small path
+  buffers. CMR1 crashed at `0x49893a` when its runtime folder's path passed
+  99 characters (rea-colin-mcrae#5).
+- `play.log` and `settings.log` start with a line naming the helper's SDK
+  version, the launcher and, when Wine runs directly (the AppImage), its
+  version. An OutRun report claimed v0.3.4 while running an older
+  AppImage's Wine 11.20 (rea-outrun-2006#2).
+- `scripts/tests/version.sh`: the SDK's version strings must agree.
+
+### Fixed
+
+- `rea-play.sh` reported SDK 0.4.3 in v0.4.4 (`REA_SDK_VERSION` wasn't
+  bumped with Cargo.toml); the new test catches that.
+- The launcher template's unknown-edition form no longer promises that a
+  SHA-256 is enough to add a build (Screamer #1: builds that need a byte
+  fix need the file read), says a SHA-256 is 64 characters of 0-9 and a-f
+  (OutRun #3 posted 20 digits) and asks for the file's size.
+
+### Docs
+
+- AGENTS.md: how to run the toolchain in the `gaming` box when its view of
+  `/home` is read-only.
+
 ## [0.4.4] - 2026-11-07
 
 The AppImage's portable Wine moves to 11.21: Wine 11.20 crashed at startup
