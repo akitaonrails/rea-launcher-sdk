@@ -7,12 +7,17 @@ body:
     attributes:
       value: |
         The launcher only changes builds it has identified by SHA-256, so it refused yours and
-        left it untouched. Tell us about your copy and we will add it. Never attach game files.
+        left it untouched. Tell us about your copy: a build we can verify is added. Some builds
+        need a fix written for that exact file, so we may ask more about your copy first.
+        Never attach or link game files.
   - type: input
     id: sha256
     attributes:
       label: SHA-256
-      description: The 64-character SHA-256 the launcher showed (also in launcher.log).
+      description: >-
+        The SHA-256 the launcher showed (also in launcher.log): 64 characters, digits 0-9 and
+        letters a-f. Or run `sha256sum @GAME_EXE@` (Linux) or
+        `certutil -hashfile @GAME_EXE@ SHA256` (Windows).
     validations:
       required: true
   - type: dropdown
@@ -28,6 +33,11 @@ body:
         - Not sure
     validations:
       required: true
+  - type: input
+    id: size
+    attributes:
+      label: File size of @GAME_EXE@ in bytes
+      description: Properties on Windows, or `stat -c %s @GAME_EXE@` on Linux.
   - type: input
     id: details
     attributes:
