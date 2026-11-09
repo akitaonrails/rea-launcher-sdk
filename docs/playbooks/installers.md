@@ -113,12 +113,15 @@ pub static INSTALLERS: &[Known<InstallerBuild>] = &[Known::new(
    `Unpacked::Ready(done)`: the game is in `dest`; `Unpacked::Cancelled`:
    the player stopped it, exit quietly. With `--no-window`, pass a `watch`
    that returns `Err(..)`: the unpack is waited for without a window.
-4. **Point the game setting at the unpacked folder** for this run, and
-   tell the player where it is (`launcher.log`, and the Play tab's status).
-   Keep `game` in `launcher.cfg` as the installer folder the player chose,
-   so the next start finds the same installer and reuses the unpacked copy
-   (`installer::begin` returns `Begin::Done` when the folder's
-   `.rea-unpacked` marker names this installer's SHA-256).
+4. **Point the game setting at the unpacked folder.** Play from it, save
+   it as `game` in the launcher's settings file (the one the settings
+   window writes), and tell the player in `launcher.log` and the window:
+   "The game was unpacked into <dir>. The game folder setting now points
+   there; the installer files are no longer needed." When the folder came
+   from the command line (`--game`), don't save; only say where the game
+   is. A player who points at the installer folder again still gets the
+   unpacked copy reused (`installer::begin` returns `Begin::Done` when the
+   folder's `.rea-unpacked` marker names this installer's SHA-256).
 5. Everything after that (runtime copy, fixes, saves) runs on the unpacked
    folder as on an installed game.
 
