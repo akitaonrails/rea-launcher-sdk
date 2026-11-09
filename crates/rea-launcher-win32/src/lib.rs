@@ -24,6 +24,8 @@ pub mod disk;
 pub mod display;
 #[cfg(windows)]
 pub mod gpu;
+#[cfg(windows)]
+pub mod innoextract;
 pub mod instance;
 #[cfg(windows)]
 pub mod process;

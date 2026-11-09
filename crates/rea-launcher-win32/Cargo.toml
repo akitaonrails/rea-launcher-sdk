@@ -39,3 +39,7 @@ crate-type = ["cdylib"]
 
 [[example]]
 name = "dll_probe"
+
+# The innoextract stand-in for the unpack tests (`innoextract::tests`).
+[[example]]
+name = "inno_child"

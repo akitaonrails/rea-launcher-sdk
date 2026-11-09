@@ -21,6 +21,7 @@ state parsing and button bits (`rea_launcher::pad`) — live in the portable
 | `report` | `audience(Run { command, no_window, settings_only, linux })` → `Audience { command, interactive }` and `.mode()` (who is watching; pure `Audience::of(run, wine)`, `Run::from_args(args, extra_commands)`, `COMMAND_FLAGS`); `fatal`/`note(title, text, Mode::{Command, Play})`: print and/or dialog by the rule below; `route`, `route_here`, `Terminal` | CMR3/CMR4/DiRT regression, CMR1 `audience.rs` |
 | `console` | `attach_parent()` (attach to the starting terminal's console and point stdout/stderr at it, keeping redirections), `stdout_usable()`, `output(attached, usable, interactive)` → Terminal / Dialog / Nowhere | new |
 | `disk` | `free_space` | OR |
+| `innoextract` | The bundled innoextract unpacking an installer: `Job` (hidden process, throttled progress, `cancel` stops only that process and removes its work folder, `wait` without a window) and `unpack(exe, installer, dest, check, log, watch)` → `Unpacked::{Ready, Cancelled}` (free-space check, window or plain wait, `installer::finish`) | CMR2005 |
 | `http` | `WinHttp::new(agent)`: `impl rea_launcher::download::Fetch` (HTTPS through WinHTTP, ranged resume, redirects, streamed) — pass it to `download::install`; pure `split_https`, `range_header`, `body_starts_at_from` | OR |
 
 The Windows-only code has tests too; run them under Wine with
