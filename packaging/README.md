@@ -7,6 +7,7 @@ busybox) and is vendored into each launcher by `scripts/sdk-sync`.
 | File | What it does |
 |---|---|
 | `pins.sh` | Library: pin files, checksum-verified downloads with mirror fallback and a cache |
+| `innoextract.sh` | Library: `innoextract_pins` (the verified pin lines), `innoextract_bundle PKG WORK` (innoextract.exe into `components/`, its licences into `licenses/innoextract/`); docs/playbooks/installers.md |
 | `appimage-wine.sh` | Builds the AppImage: portable Wine (or `--native`), AppRun from `appimage/AppRun.in`, docs and licences inside |
 | `appimage/tools.pins` | Pins for Wine, appimagetool and the dated type2 runtime |
 | `appimage/wine/` | Wine's licence and source notes, shipped in every Wine AppImage |
