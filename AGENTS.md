@@ -13,6 +13,7 @@ every launcher built on it.
 | Change the SDK, or bump a launcher to a new SDK version | `docs/playbooks/sdk-change.md` |
 | Set up GitHub Actions to build and publish release binaries | `docs/playbooks/ci-and-releases.md` |
 | Pin, bundle, download and configure community fixes and packs | `docs/playbooks/community-components.md` |
+| Unpack a game's installer (GOG, repacks) instead of asking the player to install it | `docs/playbooks/installers.md` |
 | Reverse engineer, test and apply a binary patch | `docs/playbooks/binary-patching.md` |
 | Share a fix we found with PCGamingWiki / upstream | `docs/playbooks/contribute-back.md` |
 | Understand what lives here and why | `docs/DESIGN.md`, `docs/AUDIT.md`, each crate's README |

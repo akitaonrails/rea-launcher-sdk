@@ -7,6 +7,47 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [Unreleased]
+
+A player who points a launcher at the game's installer gets the game
+unpacked, once, without running the installer (CMR2005's code, moved into
+the SDK for CMR3, CMR4 and CMR2005).
+
+### Migration
+
+- Nothing required: the installer support is opt-in. To adopt it, follow
+  `docs/playbooks/installers.md`: an `InstallerBuild` table,
+  `installer::detect` after the installed-game lookup,
+  `innoextract::unpack` with the `unpack::show` window, and
+  `innoextract_bundle` in `package.sh`. CMR2005 moves its `source.rs`,
+  `InnoJob` and unpack window to these at its next bump; its marker file
+  becomes `.rea-unpacked` (a folder with the old `.cmr2005-unpacked`
+  marker is not the SDK's to replace: rename the marker, or unpack again
+  into a new folder).
+
+### Added
+
+- `rea_launcher::installer`: identify an Inno Setup installer by its setup
+  program's SHA-256 and its data parts' sizes (an unknown one, or any other
+  Inno Setup `.exe`, is left alone and reported with its digest), unpack
+  it into a folder of the launcher's own (`begin`/`finish`/`abandon`, the
+  `.rea-unpacked` marker: only such a folder is ever replaced or removed),
+  resolve innoextract's file collisions with a per-installer list of
+  preferred components (CMR4's repack writes `p206.big` twice), and remove
+  the files a repack adds that the launcher bundles itself (`drop`:
+  CMR3's `dinput8.dll` and `SilentPatchCMR3.asi`, CMR4's dgVoodoo files).
+  `check_space`, `unpacked_so_far`, `UnpackJob`.
+- `rea_launcher_win32::innoextract`: innoextract.exe started hidden, with
+  progress, Cancel (stops only that process and removes its work folder),
+  a plain wait when no window can open, and `unpack`, the whole flow.
+- `rea_launcher_ui::unpack`: the progress window (the game's title, which
+  installer, sizes and time left, "Stop unpacking"; keyboard and pad).
+- `packaging/innoextract.sh`: the verified innoextract 1.9 pin lines and
+  `innoextract_bundle` for the Windows zip and the AppImage.
+- `launcher-check` rule `innoextract`: a launcher that runs
+  innoextract.exe pins it and lists it in `THIRD_PARTY.md`.
+- `docs/playbooks/installers.md`.
+
 ## [0.4.5] - 2026-11-09
 
 From the launchers' 2026-11-09 issues (CMR1 #5, OutRun #1-#3, SRR #3,
