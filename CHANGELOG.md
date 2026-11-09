@@ -7,7 +7,7 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
-## [Unreleased]
+## [0.5.0] - 2026-11-09
 
 A player who points a launcher at the game's installer gets the game
 unpacked, once, without running the installer (CMR2005's code, moved into
@@ -954,7 +954,8 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
-[Unreleased]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.4...HEAD
+[0.5.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.5...v0.5.0
+[0.4.5]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.1...v0.4.2
