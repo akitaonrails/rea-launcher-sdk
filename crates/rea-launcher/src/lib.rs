@@ -15,6 +15,7 @@ pub mod env;
 pub mod fsx;
 pub mod identify;
 pub mod ini;
+pub mod installer;
 pub mod instance;
 pub mod ledger;
 pub mod log;

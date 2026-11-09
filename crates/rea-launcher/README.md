@@ -22,6 +22,7 @@ made that copy the reference.
 | `download` | Pinned, resumable, verified downloads; unpacking with the `zip` feature |
 | `env` | Child environments and the `CreateProcessW` environment block |
 | `identify` | SHA-256 tables, hex, PE32 check |
+| `installer` | A game's Inno Setup installer instead of an installed game: `detect` by SHA-256 and part sizes, `begin`/`finish`/`abandon` into a folder of the launcher's own, collisions (`prefer`), repack files the launcher bundles (`drop`), the `.rea-unpacked` marker; `UnpackJob` for the progress window (docs/playbooks/installers.md) |
 | `patch` | Declarative patch sets (`PatchSet`, `apply_sets`, `describe`), byte sites, signatures, caves, result hashes |
 | `pe` | PE32/PE32+ headers and sections, VA ↔ file offset |
 | `display` | Monitor choice, landscape sizes, Steam Deck, the largest 16:9 size |
