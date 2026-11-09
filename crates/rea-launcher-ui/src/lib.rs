@@ -11,6 +11,8 @@
 //! - [`report`]: a native launcher's message window and who sees a
 //!   message (terminal, window or log only).
 //! - [`download`]: a download row (progress, Download/Cancel/Remove).
+//! - [`unpack`]: the progress window while a game's installer is unpacked
+//!   (`rea_launcher::installer`).
 //! - [`spec`]: window rows from the core option table, with a parity check.
 //! - `testing` (feature `testing`): headless GUI tests through AccessKit.
 //!
@@ -30,5 +32,6 @@ pub mod spec;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod theme;
+pub mod unpack;
 pub mod widgets;
 pub mod window;
