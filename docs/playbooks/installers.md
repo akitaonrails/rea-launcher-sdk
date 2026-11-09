@@ -111,8 +111,11 @@ pub static INSTALLERS: &[Known<InstallerBuild>] = &[Known::new(
    ```
 
    `Unpacked::Ready(done)`: the game is in `dest`; `Unpacked::Cancelled`:
-   the player stopped it, exit quietly. With `--no-window`, pass a `watch`
-   that returns `Err(..)`: the unpack is waited for without a window.
+   the player stopped it, exit quietly. Show the window whenever a player
+   may be watching: the Linux helper (`rea-play.sh`) starts game runs with
+   `--no-window`, so that flag alone doesn't mean nobody is there. Only a
+   run with no player (a script, a test) passes a `watch` that returns
+   `Err(..)`: the unpack is then waited for without a window.
 4. **Point the game setting at the unpacked folder.** Play from it, save
    it as `game` in the launcher's settings file (the one the settings
    window writes), and tell the player in `launcher.log` and the window:
