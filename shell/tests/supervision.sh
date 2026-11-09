@@ -106,6 +106,7 @@ rea_read_lock; SESSION=$REA_LOCK_PID
 rea_stop
 wait "$SESSION" 2>/dev/null
 if kill -0 "$SESSION" 2>/dev/null; then fail "stop left the background session"; else ok "stop ends the background session"; fi
+contains "play.log starts with the helper's version" "$(head -n 1 "$REA_STATE/play.log")" "rea-play $REA_SDK_VERSION, TestLauncher.exe"
 REA_RUN=$T/fake-run REA_WAIT=1
 rea_start > /dev/null
 [ -f "$REA_LOCK" ] && fail "REA_WAIT launch left the lock" || ok "REA_WAIT makes a background-mode launch wait"
@@ -268,7 +269,11 @@ rea_settings 2 > /dev/null
 contains "settings arguments go to the window" "$(cat "$T/settings")" "--settings --linux 2"
 printf '#!/bin/sh\necho oops >&2\nexit 1\n' > "$T/err-run"; chmod +x "$T/err-run"
 REA_RUN=$T/err-run rea_settings > /dev/null
-check "the window's stderr goes to settings.log" "$(cat "$REA_STATE/settings.log")" oops
+check "the window's stderr goes to settings.log" "$(tail -n 1 "$REA_STATE/settings.log")" oops
+# The first line says which helper and launcher wrote it (OutRun #2: a
+# report claimed v0.3.4 while running an older AppImage's Wine).
+contains "settings.log starts with the helper's version" "$(head -n 1 "$REA_STATE/settings.log")" "rea-play $REA_SDK_VERSION, TestLauncher.exe"
+contains "...and Wine's, unknown through a wrapper" "$(head -n 1 "$REA_STATE/settings.log")" "wine unknown" 
 
 echo "# native mode (SCR)"
 REA_MODE=native

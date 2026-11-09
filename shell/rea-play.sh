@@ -23,7 +23,7 @@
 #   REA_GAMESCOPE_HEADLESS  1: gamescope --backend headless (no window on
 #                        the desktop; real-game tests)
 
-REA_SDK_VERSION=0.4.3
+REA_SDK_VERSION=0.4.4
 
 # --- configuration -------------------------------------------------------------
 # Every configuration variable the library reads. Sourcing unsets them, so
@@ -122,6 +122,20 @@ rea_run() {
   set -- $REA_RUN "$@"
   rea_glob
   "$@"
+}
+
+# rea_version_line: the first line of play.log and settings.log, saying
+# which helper, launcher and Wine wrote them (a report of an old AppImage's
+# Wine crash named a newer version, OutRun #2). Wine's version only when it
+# runs directly (the AppImage, a host Wine): through a wrapper (REA_RUN,
+# a distrobox) asking would start the wrapper.
+rea_version_line() {
+  _rea_wv=
+  if [ "$REA_MODE" = wine ] && [ -z "${REA_RUN:-}" ] && command -v wine > /dev/null 2>&1; then
+    _rea_wv=$(wine --version 2> /dev/null | head -n 1)
+  fi
+  printf 'rea-play %s, %s, wine %s, %s\n' "$REA_SDK_VERSION" "${REA_EXE##*/}" \
+    "${_rea_wv:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
 REA_WINEBUS_KEY='HKLM\System\CurrentControlSet\Services\winebus'
@@ -798,7 +812,8 @@ rea_launch() {
     set -- $REA_RUN env ${REA_GPU:-} "$@"
   fi
   rea_glob
-  setsid "$@" > "$REA_STATE/play.log" 2>&1 < /dev/null &
+  rea_version_line > "$REA_STATE/play.log"
+  setsid "$@" >> "$REA_STATE/play.log" 2>&1 < /dev/null &
   REA_PID=$!
   # No record possible (it already ended, or no /proc): still a started
   # game, not a failure.
@@ -905,7 +920,8 @@ rea_settings() {
   set -- $_rea_sdl "$@"
   IFS=$_rea_ifs
   rea_glob
-  rea_run env "$@" 2>"$REA_STATE/settings.log"
+  rea_version_line > "$REA_STATE/settings.log"
+  rea_run env "$@" 2>>"$REA_STATE/settings.log"
   _rea_rc=$?
   # Exit 5 (REA_EXIT_RUNNING; older launchers used 3, which also means a
   # plain close) is "another launcher holds this prefix": the prefix's
