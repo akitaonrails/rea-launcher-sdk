@@ -7,7 +7,7 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
-## [Unreleased]
+## [0.4.5] - 2026-11-09
 
 From the launchers' 2026-11-09 issues (CMR1 #5, OutRun #1-#3, SRR #3,
 Screamer #1).
