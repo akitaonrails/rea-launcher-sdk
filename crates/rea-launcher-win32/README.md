@@ -161,6 +161,20 @@ fn play(runtime: &std::path::Path) -> Result<u32, String> {
 Game knowledge (which registry values, which DLLs to override, winebus
 values) stays in the launcher; this crate provides the mechanisms.
 
+## Short names for old games' path buffers
+
+Some old games read a folder path into a small fixed-size buffer (CMR1:
+`HDPath` into 100 bytes). Hand them a path that fits:
+
+```rust
+# #[cfg(windows)] fn demo(runtime: &std::path::Path) -> Option<String> {
+use rea_launcher_win32::short_path::{short_path, short_path_ahead};
+let long = runtime.display().to_string();
+// `short_path_ahead` for a folder that may not exist yet (`--check`).
+rea_launcher::paths::fit_path(&long, short_path(runtime).as_deref(), 99)
+# }
+```
+
 ## Migration
 
 What changes for a launcher moving to this version of the crate.

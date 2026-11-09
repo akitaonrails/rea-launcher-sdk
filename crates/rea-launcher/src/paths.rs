@@ -214,6 +214,27 @@ fn strip_prefix_os(value: &OsStr, prefix: &str) -> Option<OsString> {
 /// Turns Win32 extended-length paths (`\\?\C:\…`, `\\?\UNC\server\…`, what
 /// `canonicalize` returns on Windows) back into drive and UNC paths, so
 /// they compare with paths that were only normalised and old games accept
+/// The path to hand an old game that reads it into a fixed-size buffer of
+/// `max_chars` characters (its terminating NUL not counted): `long` when it
+/// fits, else `short` (Windows' 8.3 name for the same folder, which is also
+/// ASCII-only) when that fits; `None` when neither does. A `long` path with
+/// non-ASCII characters prefers the short name when there is one, since such
+/// games read paths through the ANSI code page. Trailing backslashes are
+/// dropped. CMR1 reads `HDPath` into 100 bytes and crashed at `0x49893a`
+/// with a longer runtime folder (rea-colin-mcrae#5).
+pub fn fit_path(long: &str, short: Option<&str>, max_chars: usize) -> Option<String> {
+    let long = long.trim_end_matches('\\');
+    let short = short
+        .map(|s| s.trim_end_matches('\\'))
+        .filter(|s| s.is_ascii() && s.chars().count() <= max_chars);
+    let fits = long.chars().count() <= max_chars;
+    match (fits, short) {
+        (true, Some(short)) if !long.is_ascii() => Some(short.to_owned()),
+        (true, _) => Some(long.to_owned()),
+        (false, short) => short.map(str::to_owned),
+    }
+}
+
 /// them. Other paths are returned unchanged.
 pub fn simplify_extended_length(path: &Path) -> PathBuf {
     if let Some(rest) = strip_prefix_os(path.as_os_str(), r"\\?\") {
@@ -230,6 +251,31 @@ pub fn simplify_extended_length(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_is_fitted_to_a_games_buffer() {
+        let long = r"C:\Users\player\AppData\Local\CMRLauncher\Rally";
+        assert_eq!(fit_path(long, None, 99).as_deref(), Some(long));
+        assert_eq!(
+            fit_path(&format!("{long}\\"), Some(r"C:\X~1"), 99).as_deref(),
+            Some(long)
+        );
+        let at = format!(r"C:\{}", "a".repeat(96));
+        assert_eq!(fit_path(&at, None, 99).as_deref(), Some(at.as_str()));
+        let too_long = format!(r"C:\{}", "a".repeat(97));
+        assert_eq!(
+            fit_path(&too_long, Some(r"C:\AAAAAA~1"), 99).as_deref(),
+            Some(r"C:\AAAAAA~1")
+        );
+        assert_eq!(fit_path(&too_long, None, 99), None);
+        assert_eq!(fit_path(&too_long, Some(&too_long), 99), None);
+        let accented = r"C:\Users\José\Rally";
+        assert_eq!(
+            fit_path(accented, Some(r"C:\Users\JOS~1\Rally"), 99).as_deref(),
+            Some(r"C:\Users\JOS~1\Rally")
+        );
+        assert_eq!(fit_path(accented, None, 99).as_deref(), Some(accented));
+    }
     use crate::test_dir;
 
     #[test]

@@ -28,6 +28,8 @@ pub mod instance;
 #[cfg(windows)]
 pub mod process;
 #[cfg(windows)]
+pub mod short_path;
+#[cfg(windows)]
 pub mod wide;
 pub mod wine;
 #[cfg(windows)]
