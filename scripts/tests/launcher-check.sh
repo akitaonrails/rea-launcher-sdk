@@ -242,6 +242,13 @@ run "$L"; printf '%s\n' "$out" | grep -q 'remote-injection' && bad "a comment na
 fresh; on_v043; run "$L"
 [ "$rc" -eq 0 ] && ok "the good fixture on v0.4.3 passes" || bad "good on v0.4.3: $out"
 
+# --- registry: never the VirtualStore ----------------------------------------------------------------
+fresh; printf 'fn registry() { let (key, place) = reg::Key::machine_or_virtual_store(r"SOFTWARE\\Sega\\SEGA Rally").unwrap(); }\n' >> "$L/crates/fx-launcher/src/main.rs"
+expect "the game's values through the VirtualStore (CMR1, rea-colin-mcrae#6)" warn virtual-store
+printf '%s\n' "$out" | grep -q 'REA_REGISTRY' && ok "the warning names the redirect" || bad "virtual-store names the redirect: $out"
+fresh; printf '// machine_or_virtual_store() was here before v0.6.0\n' >> "$L/crates/fx-launcher/src/main.rs"
+run "$L"; printf '%s\n' "$out" | grep -q 'virtual-store' && bad "a comment is not a call: $out" || ok "a comment naming machine_or_virtual_store is not a call"
+
 # --- release notes, third-party pins ----------------------------------------------------------------
 fresh; printf '      notes: generate\n' >> "$L/.github/workflows/build.yml"
 expect "notes: generate (CMR4 v0.4.0 had only GitHub's commit list)" error release-notes

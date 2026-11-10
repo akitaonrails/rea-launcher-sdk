@@ -54,6 +54,8 @@ USAGE_API_SINCE='v0.4.2'
 RESOURCES_API='rea_launcher_build::Resources'
 IMPORT_API='rea_launcher::pe::edit::add_import rea_close_hook::import_into'
 AV_API_SINCE='v0.4.3'
+# The game's HKLM key answered from HKCU, instead of the VirtualStore.
+REGISTRY_API='rea_close_hook::registry'
 WAIVERS_FILE='.rea-check-waivers'
 
 RULES='snapshots snapshot-version snapshot-helper audience instance instance-unix
@@ -63,7 +65,7 @@ readme-versions agents-pointer agents-duplicate sdk-workflows sdk-tag lld
 wine-tests look-flag look-sizes option-tests quit-paths issue-unknown-edition
 issue-bug-report sdk-update windows-subsystem bad-command-line action-flags exe-resources
 remote-injection release-notes watch-pins unwatched-pins innoextract process-listing
-real-game-gated drm-exception waivers'
+real-game-gated drm-exception virtual-store waivers'
 
 # rule ID: sets SEV (error|warn), SINCE (SDK tag or empty), FIX and WHY.
 rule() {
@@ -198,6 +200,9 @@ rule() {
     drm-exception) SEV=error
       WHY='We never write a crack and never ship, apply or patch DRM files. Supporting a pre-activated, no-CD or cracked build is an owner decision, and it must be recorded where the check can see it.'
       FIX="record the owner's decision (date, why) in AGENTS.md and docs/RESEARCH.md, then add '$WAIVERS_FILE' line 'drm-exception: <owner decision, date, where recorded>' (STANDARDS \"DRM\")" ;;
+    virtual-store) SEV=warn
+      WHY='Key::machine_or_virtual_store writes the game'"'"'s values into the HKCU VirtualStore when HKLM is access-denied, and the game reads that copy only while UAC registry virtualization is on for its process. Windows doesn'"'"'t promise that: it is off by policy, per key, and always for an exe with a requestedExecutionLevel manifest. CMR1 read nothing on a player'"'"'s Windows 11 and crashed while --check said ready (rea-colin-mcrae#6).'
+      FIX="write the game's values to HKCU with rea_launcher_win32::reg::write_verified, give the game that key with the close hook DLL's REA_REGISTRY redirect ($REGISTRY_API), fail --check and Play when the read-back differs, and carry the game's own old values over with Key::read_machine (sdk/docs/playbooks/new-launcher.md, \"Registry\")" ;;
     waivers) SEV=error
       WHY='A waiver is an owner decision; it needs a reason and must name a real rule.'
       FIX="write each line of $WAIVERS_FILE as 'rule: reason' with a rule from --list" ;;
@@ -682,6 +687,13 @@ if [ -s "$T/win-targets" ]; then
   if [ -s "$T/injection" ]; then
     emit remote-injection "$(cat "$T/injection")" "writes into or hooks the running game from outside (the injector pattern antivirus heuristics flag)"
   fi
+fi
+
+# --- registry: never the VirtualStore ---------------------------------------------------------------
+grep -E 'machine_or_virtual_store[ \t]*\(' "$T/code.txt" \
+  | grep -vE '^[^:]*:[0-9]+:[ \t]*(//|\*)' | head -n 1 | cut -d: -f1,2 > "$T/vstore"
+if [ -s "$T/vstore" ]; then
+  emit virtual-store "$(cat "$T/vstore")" "gives the game its registry values through the VirtualStore, which the game may never see; use the close hook's REA_REGISTRY redirect"
 fi
 
 # --- release notes from the CHANGELOG --------------------------------------------------------------
