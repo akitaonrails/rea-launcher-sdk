@@ -219,6 +219,39 @@ folder from the registry, point the value at the launcher's saves folder
 (no mirror), and import old saves once, with a marker, so a save the
 player deleted never comes back.
 
+**Registry** (a game that reads its folders or settings from `HKLM`:
+CMR1, CMR4, CMR2005, Sega Rally Revo). An unelevated launcher can't write
+`HKLM`, and the VirtualStore copy Windows makes instead reaches the game
+only while UAC registry virtualization is on for the game process: off by
+policy, per key, and always for an exe with a `requestedExecutionLevel`
+manifest (SRR's `asInvoker`). CMR1 read nothing on a player's Windows 11
+and crashed while `--check` said ready (rea-colin-mcrae#6). So:
+- Find how the game opens its key (REA: the `RegOpenKey*`/`RegCreateKey*`
+  calls and their arguments): the full path at once (CMR4, CMR2005, SRR),
+  or `SOFTWARE` from `HKLM` and one level at a time (CMR1).
+- Write the values to `HKCU` with `rea_launcher_win32::reg::write_verified`
+  (`When::Always` for the launcher's paths, `When::IfMissing` for the
+  game's own settings), on Windows and Wine alike: one code path.
+- Give the game that key: put `rea_close_hook.dll` in the runtime copy's
+  import table (`rea_close_hook::import_into`; it does nothing else
+  without `REA_CLOSE_HOOK_ATTACH`) and set
+  `rea_close_hook::registry::ENV` to the rule, built and checked with
+  `registry::Config` (`FROM -> TO`; `walk FROM -> TO` for a game that walks
+  down from `SOFTWARE`).
+- Read back: `write_verified` returns every value that differs. Play stops
+  with that list and the issue link; `--check` fails loudly when the DLL is
+  missing, the runtime exe doesn't import it, the rules don't parse or the
+  read-back differs. Never report "ready" from the write alone.
+- Carry over the game's own values (language, first-run state, the
+  player's choices) from where the game read them before: read the old key
+  with `Key::read_machine` (VirtualStore first, then `HKLM`) and use those
+  values as the `IfMissing` data on the first `HKCU` write. Never write
+  `HKLM` or the VirtualStore again; `Key::machine` (no fallback) only when
+  a key truly must be machine-wide.
+- Test it end to end under `scripts/wine-test` with no key anywhere but
+  `HKCU`, and record the real-game check (no admin, Windows) in
+  `RUNTIME_NOTES.md`.
+
 **Headless screenshots** for the README: `docs/playbooks/readme.md`,
 "Screenshots, headless".
 

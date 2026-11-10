@@ -202,8 +202,16 @@ that: if a step could be done by the launcher, the launcher does it.
   (whichever exist for the game).
   An unknown build is refused with its SHA-256 and a link to the issue
   template so players can report it.
-- **No admin rights.** Prefer HKCU or the VirtualStore; no system-wide
-  installs.
+- **No admin rights.** No system-wide installs, and the launcher writes
+  only HKCU. Never count on the HKCU VirtualStore: the game sees it only
+  while UAC registry virtualization is on for its process, which Windows
+  doesn't promise (CMR1 crashed on a player's Windows 11,
+  rea-colin-mcrae#6). A game that reads HKLM gets its key from HKCU
+  through the close hook DLL's `REA_REGISTRY` redirect; the launcher
+  reads every value back (`reg::write_verified`) and Play and `--check`
+  stop with the reason when the game wouldn't see them
+  (`docs/playbooks/new-launcher.md`, "Registry"; `launcher-check` rule
+  `virtual-store`).
 - **Native launchers** (the game runs natively or in an emulator we ship,
   like Screamer in DOSBox) skip the Wine-only rules: Proton, DLL overrides,
   winebus, `wine-test` for i686. They ship native Windows and Linux builds,

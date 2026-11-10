@@ -7,6 +7,84 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [Unreleased]
+
+A game that reads its key from `HKLM` gets it from `HKCU` through the
+close hook DLL, so a launcher never depends on the VirtualStore, which the
+game may never see (rea-colin-mcrae#6: CMR1 crashed on a player's
+Windows 11 while `--check` said ready).
+
+### Migration
+
+- **CMR4, CMR2005, Sega Rally Revo: stop relying on the VirtualStore.**
+  `launcher-check` warns (rule `virtual-store`) on
+  `reg::Key::machine_or_virtual_store`, now deprecated: the game reads
+  the VirtualStore copy only while UAC registry virtualization is on for
+  it, which Windows doesn't promise, and never for an exe with a
+  `requestedExecutionLevel` manifest. Steps
+  (`docs/playbooks/new-launcher.md`, "Registry"):
+  1. Write the values with `reg::write_verified(Hive::CurrentUser,
+     "Software\…", &values)` instead; game-owned values `When::IfMissing`,
+     carried over once from `Key::read_machine(<old HKLM path>)`.
+  2. Set `rea_close_hook::registry::ENV` on the game to the rule (one
+     path per game, from the audit):
+     - CMR4: `HKLM\SOFTWARE\Codemasters\Colin McRae Rally 04 ->
+       HKCU\Software\Codemasters\Colin McRae Rally 04` (it reads
+       INSTALL_PATH, WIDTH/HEIGHT, LANGUAGE, ADAPTER_VID/PID through
+       `RegCreateKeyExA` of the full path). Its runtime exe already imports
+       `rea_close_hook.dll`; replace the local `win32.rs` copy of the
+       fallback.
+     - CMR2005: `HKLM\SOFTWARE\CODEMASTERS\Colin McRae Rally 2005 ->
+       HKCU\Software\Codemasters\Colin McRae Rally 2005` (INSTALL_PATH,
+       SAVEGAME_PATH, WIDTH/HEIGHT, SELECTION, which the game writes back:
+       it now lands in HKCU). The DLL is already imported.
+     - SRR: `HKLM\SOFTWARE\Sega\SEGA Rally -> HKCU\Software\Sega\SEGA
+       Rally` (`language`, `sku`). SRR has no hook DLL yet: ship
+       `rea_close_hook.dll`, import it into the runtime copies of
+       `SEGA Rally.exe` and `SEGA Rally_SSE1.exe` with
+       `rea_close_hook::import_into`; without `REA_CLOSE_HOOK_ATTACH` it
+       only redirects the registry. Its exes' `asInvoker` manifest means
+       the VirtualStore never reached it on Windows.
+  3. Play and `--check` fail with the `write_verified` mismatches; `--check`
+     also fails when the DLL or its import is missing, or the rules don't
+     parse (`registry::Config::parse`).
+  4. Verify: `sdk/scripts/wine-test` with no key in HKLM; a golden
+     snapshot of the env (`REA_REGISTRY`) and the HKCU values; in the real
+     game under Wine with the HKLM key removed, the game starts and reads
+     its folders; record the Windows check (unelevated) in
+     `RUNTIME_NOTES.md`.
+- CMR1 needs nothing: its `cmrhooks.dll` already redirects (v0.10.5). It
+  may move to `walk HKLM\SOFTWARE\Codemasters\Rally\1.00 ->
+  HKCU\Software\Codemasters\Rally\1.00` later.
+
+### Added
+
+- `rea-launcher-close-hook`: a registry redirect configured by
+  `REA_REGISTRY` (`registry::{ENV, Root, Key, Rule, Target, Config::parse,
+  Config::env_value, Config::map}`). Loaded through the game's import
+  table, the DLL wraps the main exe's `RegOpenKey[Ex]A/W`,
+  `RegCreateKey[Ex]A/W` and `RegCloseKey` imports when it loads: `FROM ->
+  TO` rules send opens of a key and its subkeys elsewhere; `walk` rules
+  follow games that open `SOFTWARE` and go down a level at a time, and send
+  a step off the rule's path back to `HKLM`. Unmatched opens call the
+  original import. Off without the variable. Tested under Wine with a
+  stand-in game (reads, writes through a redirected handle, the walk, the
+  control).
+- `rea_launcher_win32::reg::write_verified(hive, path, &[Value])`: write,
+  reopen read-only, compare; `Err(Vec<Mismatch>)` names each wrong value.
+  Pure `reg::verify`, `Data`, `When`, `Value`, `Mismatch`, `Problem`.
+- `rea_launcher_win32::reg::Key::machine(path)`: `HKLM` with no fallback.
+- `launcher-check` rule `virtual-store` (warn).
+
+### Deprecated
+
+- `rea_launcher_win32::reg::Key::machine_or_virtual_store`: see Migration.
+
+### Changed
+
+- STANDARDS, "No admin rights": write HKCU only, never count on the
+  VirtualStore; the playbook's new "Registry" pattern.
+
 ## [0.5.0] - 2026-11-09
 
 A player who points a launcher at the game's installer gets the game
@@ -954,6 +1032,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[Unreleased]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.5...v0.5.0
 [0.4.5]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.3...v0.4.4
