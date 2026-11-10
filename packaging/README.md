@@ -392,8 +392,11 @@ total; `--yes` removes exactly those.
 
 - **The manifest:** whenever an agent creates scratch under `.work/` for the
   task, it appends the path (repo-relative, e.g. `.work/probe-2026-11-02`) to
-  `.work/.task-created`. Everything else in `.work/` is kept (earlier
-  sessions' evidence); `--work-all` includes all of it, with a warning.
+  `.work/.task-created`, one per line. A line starting with `#` is a
+  comment, and so is the rest of a line from a blank followed by `#`
+  (`.work/probe-1  # the Wine probe`); a `#` with no blank before it is part
+  of the name. Everything else in `.work/` is kept (earlier sessions'
+  evidence); `--work-all` includes all of it, with a warning.
 - **Safety:** each path must resolve inside the repository, be ignored by
   Git and hold nothing tracked; a symlink out of the repository is refused.
   Any refusal removes nothing and exits 1. `--keep PATH` protects a path

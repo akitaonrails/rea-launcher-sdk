@@ -51,6 +51,18 @@ gone "emptied manifest removed" "$T/r/.work/.task-created"
 exists "tracked source kept" "$T/r/lib.rs"
 if run; then grep -q 'nothing to clean' "$T/out" && ok "second run: nothing to clean" || bad "second run: $(cat "$T/out")"; else bad "second run fails"; fi
 
+# A trailing comment after the path (`path  # why`) is not part of it; a
+# `#` inside a name is.
+setup
+mkdir -p '.work/probe#2' .work/probe-3
+printf '.work/probe-1  # the wine probe\n.work/probe#2\n.work/probe-3\t# tab, then a comment\n' > .work/.task-created
+if run --yes; then ok "commented entries: --yes exits 0"; else bad "commented entries: $(cat "$T/err")"; fi
+gone "an entry with a trailing comment is removed" "$T/r/.work/probe-1"
+gone "a # inside a name is part of it" "$T/r/.work/probe#2"
+gone "a tab before the comment" "$T/r/.work/probe-3"
+grep -q 'already gone' "$T/err" && bad "comment read as part of the path: $(cat "$T/err")" || ok "no comment read as a path"
+gone "the manifest drops the commented entries" "$T/r/.work/.task-created"
+
 # Tracked files inside a candidate: refused, nothing removed.
 setup
 git add -f dist/pkg.zip && git commit -qm tracked

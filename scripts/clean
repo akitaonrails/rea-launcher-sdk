@@ -10,9 +10,11 @@
 #   .work/ entries listed in .work/.task-created
 #       The manifest convention: whenever an agent creates scratch under
 #       .work/ for the current task, it appends that path (repo-relative,
-#       e.g. `.work/probe-2026-11-02`) to .work/.task-created, one per line
-#       (# comments allowed). Anything else in .work/ is kept: it may be
-#       investigation evidence from earlier sessions.
+#       e.g. `.work/probe-2026-11-02`) to .work/.task-created, one per line.
+#       A line starting with # is a comment, and so is the rest of a line
+#       from a space or tab followed by # (`.work/probe-1  # why`); a # with
+#       no blank before it is part of the name. Anything else in .work/ is
+#       kept: it may be investigation evidence from earlier sessions.
 #   --work-all  all of .work/ (warns: it may hold evidence the user wants)
 #   --keep PATH never touch PATH (repeatable; a candidate holding it is skipped)
 #
@@ -69,7 +71,7 @@ if [ -n "$WORK_ALL" ]; then
     echo ".work" >> "$T/cand"
   fi
 elif [ -f "$MANIFEST" ]; then
-  awk '!/^[ \t]*(#|$)/ { sub(/^\.\//, ""); sub(/\/+$/, ""); if (!seen[$0]++) print }' "$MANIFEST" > "$T/manifest"
+  awk '{ sub(/[ \t]+#.*$/, ""); sub(/[ \t]+$/, "") } !/^[ \t]*(#|$)/ { sub(/^\.\//, ""); sub(/\/+$/, ""); if (!seen[$0]++) print }' "$MANIFEST" > "$T/manifest"
   while IFS= read -r p; do
     case $p in
       */../* | */.. | .work/.task-created) refuse "$p" "a .work/.task-created entry must name a path inside .work/" ;;
@@ -139,7 +141,7 @@ while IFS= read -r rel; do
 done < "$T/ok"
 # Drop removed entries from the manifest; delete it once empty.
 if [ -f "$MANIFEST" ]; then
-  awk 'NR == FNR { gone[$0] = 1; next } { p = $0; sub(/^\.\//, "", p); sub(/\/+$/, "", p) } !(p in gone)' \
+  awk 'NR == FNR { gone[$0] = 1; next } { p = $0; sub(/[ \t]+#.*$/, "", p); sub(/[ \t]+$/, "", p); sub(/^\.\//, "", p); sub(/\/+$/, "", p) } !(p in gone)' \
     "$T/ok" "$MANIFEST" > "$T/manifest.new"
   if grep -q '^[^#]' "$T/manifest.new" 2>/dev/null; then cat "$T/manifest.new" > "$MANIFEST"; else rm -f "$MANIFEST"; fi
 fi

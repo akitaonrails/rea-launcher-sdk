@@ -40,6 +40,10 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   changed; they are now unstaged and restored on any failure. A missing
   git identity (`user.name`/`user.email`, as in a fresh distrobox) is
   refused before anything changes.
+- `scripts/clean`: a `.work/.task-created` line with a comment after the
+  path (`.work/probe-1  # why`) was read as part of the path, so the entry
+  was never removed. The rest of a line from a blank followed by `#` is now
+  a comment (documented in the script and `packaging/README.md`).
 
 ## [0.6.0] - 2026-11-10
 
