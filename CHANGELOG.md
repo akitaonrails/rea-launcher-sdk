@@ -7,6 +7,27 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [Unreleased]
+
+### Migration
+
+- **Sega Rally Revo: drop `clear_stale_binding`** at the next SDK bump
+  (`crates/srr-launcher/src/registry.rs`): `pe::edit::add_import` (and so
+  `rea_close_hook::import_into`) now clears the stale binding itself.
+  Verify: `import_into` on the bytes as read still gives both exes the
+  import; the `a_stale_binding_like_the_games_takes_the_import` test keeps
+  passing without the local function.
+
+### Fixed
+
+- `pe::edit::add_import` / `rea_close_hook::import_into` accept an image
+  whose import descriptors are marked bound (time stamp `0xFFFFFFFF`) with
+  no name table, when the binding is stale: no bound import directory and
+  the address table still holds names or ordinals (both SEGA Rally Revo
+  exes; Windows ignores such a binding). The stamp and forwarder chain are
+  cleared; a genuinely bound image (bound import directory, or addresses
+  in the table) is still refused with `BoundWithoutNames`.
+
 ## [0.6.0] - 2026-11-10
 
 A game that reads its key from `HKLM` gets it from `HKCU` through the

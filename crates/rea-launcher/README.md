@@ -250,7 +250,12 @@ copy. It replaces starting the game suspended and injecting
 (`VirtualAllocEx`/`WriteProcessMemory`/`CreateRemoteThread`), which
 antivirus heuristics flag. `pe::edit::fix_base` clears `DYNAMIC_BASE` so a
 fix section's absolute addresses hold; `pe::edit::imports` reads the table
-back.
+back. Bound imports are unbound; a stale binding (descriptors stamped
+bound with no bound import directory, the address table still holding
+names, as in SEGA Rally Revo's exes) is cleared too, and only a genuinely
+bound descriptor without a name table is refused (`BoundWithoutNames`).
+`REA_SRR_GAME_DIR=<folder>` runs the test on the owner's SEGA Rally Revo
+exes, read only.
 
 ```rust
 use rea_launcher::pe::edit;

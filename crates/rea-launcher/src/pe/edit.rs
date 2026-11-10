@@ -37,8 +37,9 @@ pub enum EditError {
     BadSectionName(String),
     /// A DLL or function name that is empty or not ASCII.
     BadName(String),
-    /// An import descriptor is bound and has no name table, so it can't be
-    /// unbound to make room for the new import.
+    /// An import descriptor is bound (a bound import directory, or an
+    /// address table holding addresses) and has no name table, so it can't
+    /// be unbound to make room for the new import.
     BoundWithoutNames { dll_rva: u32 },
     /// The import table's address `rva` is not inside a writable section.
     IatOutsideWritableSection { rva: u32 },
@@ -331,19 +332,7 @@ pub fn imports(bytes: &[u8]) -> Result<Vec<Import>, EditError> {
         let mut functions = Vec::new();
         let thunks = offset_of(&pe, table, "import name table")?;
         for k in 0.. {
-            let t = thunks + k * layout.thunk();
-            let (value, ordinal) = match layout.format {
-                Format::Pe32 => {
-                    let v = u32_at(bytes, t, "import thunk")?;
-                    (u64::from(v), v & 0x8000_0000 != 0)
-                }
-                Format::Pe32Plus => {
-                    let lo = u32_at(bytes, t, "import thunk")?;
-                    let hi = u32_at(bytes, t + 4, "import thunk")?;
-                    let v = u64::from(lo) | (u64::from(hi) << 32);
-                    (v, hi & 0x8000_0000 != 0)
-                }
-            };
+            let (value, ordinal) = thunk_at(bytes, &layout, thunks + k * layout.thunk())?;
             if value == 0 {
                 break;
             }
@@ -362,12 +351,52 @@ pub fn imports(bytes: &[u8]) -> Result<Vec<Import>, EditError> {
     Ok(out)
 }
 
+/// The import thunk at file offset `at`: its value, and whether it is an
+/// ordinal.
+fn thunk_at(bytes: &[u8], layout: &Layout, at: usize) -> Result<(u64, bool), EditError> {
+    let lo = u32_at(bytes, at, "import thunk")?;
+    Ok(match layout.format {
+        Format::Pe32 => (u64::from(lo), lo & 0x8000_0000 != 0),
+        Format::Pe32Plus => {
+            let hi = u32_at(bytes, at + 4, "import thunk")?;
+            (u64::from(lo) | (u64::from(hi) << 32), hi & 0x8000_0000 != 0)
+        }
+    })
+}
+
+/// Whether the address table at `iat_rva` holds what an unbound one does:
+/// ordinals, or the RVAs of hint/name entries in the file. A bound table
+/// holds function addresses instead.
+fn holds_names(bytes: &[u8], pe: &Pe, layout: &Layout, iat_rva: u32) -> bool {
+    let Ok(start) = offset_of(pe, iat_rva, "import addresses") else {
+        return false;
+    };
+    for at in (start..).step_by(layout.thunk()) {
+        let name = match thunk_at(bytes, layout, at) {
+            Ok((0, _)) => return true,
+            Ok((_, true)) => continue,
+            Ok((value, false)) => u32::try_from(value).ok(),
+            Err(_) => None,
+        };
+        let readable = name
+            .is_some_and(|rva| string_at(bytes, pe, rva.wrapping_add(2), "import name").is_ok());
+        if !readable {
+            return false;
+        }
+    }
+    false
+}
+
 /// Adds `dll` to the import table with `functions` by name, in a new data
 /// section `section`. The loader writes the functions' addresses at
 /// `iat_rva` (consecutive slots, in order) when given — inside a writable
 /// section the caller laid out, such as a fix's table — else in the new
 /// section. Bound imports are unbound (the loader then resolves every DLL
-/// by name, as for any unbound image). Windows refuses to start the image
+/// by name, as for any unbound image). A descriptor marked bound with no
+/// name table is unbound too when the binding is stale (no bound import
+/// directory, and its address table still holds names or ordinals, as in
+/// SEGA Rally Revo's exes); otherwise it is refused
+/// ([`EditError::BoundWithoutNames`]). Windows refuses to start the image
 /// when `dll` or a function is missing, so the caller makes sure the DLL
 /// sits next to the executable.
 pub fn add_import(
@@ -401,6 +430,7 @@ pub fn add_import(
     let mut image = bytes.to_vec();
     // The existing descriptors, unbound.
     let (old_rva, _) = layout.dir(bytes, DIR_IMPORT)?;
+    let bound_dir = layout.dir(bytes, DIR_BOUND_IMPORT)?.0 != 0;
     let mut descriptors: Vec<[u8; 20]> = Vec::new();
     if old_rva != 0 {
         let start = offset_of(&pe, old_rva, "import directory")?;
@@ -414,12 +444,14 @@ pub fn add_import(
             if entry.iter().all(|&b| b == 0) {
                 break;
             }
-            let stamp = u32::from_le_bytes(entry[4..8].try_into().unwrap());
-            if stamp != 0 {
-                if entry[0..4] == [0; 4] {
-                    return Err(EditError::BoundWithoutNames {
-                        dll_rva: u32::from_le_bytes(entry[12..16].try_into().unwrap()),
-                    });
+            let field = |i: usize| u32::from_le_bytes(entry[i..i + 4].try_into().unwrap());
+            if field(4) != 0 {
+                // Without a name table the loader reads the names from the
+                // address table, which is fine as long as it still holds
+                // them: a stale binding, ignored when there is no bound
+                // import directory.
+                if field(0) == 0 && (bound_dir || !holds_names(bytes, &pe, &layout, field(16))) {
+                    return Err(EditError::BoundWithoutNames { dll_rva: field(12) });
                 }
                 entry[4..12].fill(0);
             }
@@ -681,6 +713,80 @@ mod tests {
             add_import(&bytes, ".reaimp", "hooks.dll", &["f"], None),
             Err(EditError::BoundWithoutNames { .. })
         ));
+    }
+
+    /// SEGA Rally Revo's exes: every descriptor stamped bound (`0xFFFFFFFF`,
+    /// forwarder chain too), no bound import directory, some descriptors
+    /// without a name table. With `iat` written into the address table.
+    fn stale_binding(format: Format, iat: u32) -> Vec<u8> {
+        let mut bytes = with_imports(format);
+        let pe = Pe::parse(&bytes).unwrap();
+        let desc = pe.va_to_offset(0x40_2000).unwrap();
+        put_u32(&mut bytes, desc, 0);
+        put_u32(&mut bytes, desc + 4, u32::MAX);
+        put_u32(&mut bytes, desc + 8, u32::MAX);
+        let slot = pe.va_to_offset(0x40_3000).unwrap();
+        put_u32(&mut bytes, slot, iat);
+        bytes
+    }
+
+    #[test]
+    fn a_stale_binding_without_a_bound_directory_is_cleared() {
+        for format in [Format::Pe32, Format::Pe32Plus] {
+            // The address table still holds a name: the loader ignores the stamp.
+            let bytes = stale_binding(format, 0x2060);
+            let out = add_import(&bytes, ".reaimp", "hooks.dll", &["f"], None).unwrap();
+            let found = imports(&out).unwrap();
+            assert_eq!(found[0].dll, "KERNEL32.dll", "{format:?}");
+            assert_eq!(found[0].functions, ["ExitProcess"]);
+            assert_eq!(found[0].iat_rva, 0x3000);
+            assert_eq!(found[1].dll, "hooks.dll");
+            let layout = Layout::read(&out).unwrap();
+            let pe = Pe::parse(&out).unwrap();
+            let dir = layout.dir(&out, DIR_IMPORT).unwrap().0;
+            let at = pe.va_to_offset(pe.image_base + u64::from(dir)).unwrap();
+            assert_eq!(&out[at..at + 12], &[0; 12], "names, stamp and chain are 0");
+            // An ordinal is no address either.
+            let ordinal = stale_binding(Format::Pe32, 0x8000_0010);
+            assert!(add_import(&ordinal, ".reaimp", "hooks.dll", &["f"], None).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_genuinely_bound_image_is_refused() {
+        // The address table holds a bound address, not a name.
+        let bytes = stale_binding(Format::Pe32, 0x7700_1234);
+        assert!(matches!(
+            add_import(&bytes, ".reaimp", "hooks.dll", &["f"], None),
+            Err(EditError::BoundWithoutNames { dll_rva: 0x2070 })
+        ));
+        // A bound import directory: the stamps are real, whatever the table holds.
+        let mut bytes = stale_binding(Format::Pe32, 0x2060);
+        Layout::read(&bytes)
+            .unwrap()
+            .set_dir(&mut bytes, DIR_BOUND_IMPORT, 0x200, 0x20);
+        assert!(matches!(
+            add_import(&bytes, ".reaimp", "hooks.dll", &["f"], None),
+            Err(EditError::BoundWithoutNames { .. })
+        ));
+    }
+
+    /// The owner's own SEGA Rally Revo exes (`SEGA Rally.exe`,
+    /// `SEGA Rally_SSE1.exe`), read only, when `REA_SRR_GAME_DIR` names the
+    /// game folder: their stale binding takes the import.
+    #[test]
+    fn the_real_sega_rally_exes_take_an_import() {
+        let Some(dir) = std::env::var_os("REA_SRR_GAME_DIR") else {
+            return;
+        };
+        for name in ["SEGA Rally.exe", "SEGA Rally_SSE1.exe"] {
+            let bytes = std::fs::read(std::path::Path::new(&dir).join(name)).unwrap();
+            let before = imports(&bytes).unwrap();
+            let out = add_import(&bytes, ".reaimp", "hooks.dll", &["f"], None).unwrap();
+            let after = imports(&out).unwrap();
+            assert_eq!(after.len(), before.len() + 1, "{name}");
+            assert_eq!(after[..before.len()], before[..], "{name}: old imports");
+        }
     }
 
     #[test]
