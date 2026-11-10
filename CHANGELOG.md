@@ -35,6 +35,11 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   exes; Windows ignores such a binding). The stamp and forwarder chain are
   cleared; a genuinely bound image (bound import directory, or addresses
   in the table) is still refused with `BoundWithoutNames`.
+- `scripts/release`: a failure after the files were staged (`git commit`
+  refused) left `CHANGELOG.md`, `Cargo.toml` and `Cargo.lock` staged and
+  changed; they are now unstaged and restored on any failure. A missing
+  git identity (`user.name`/`user.email`, as in a fresh distrobox) is
+  refused before anything changes.
 
 ## [0.6.0] - 2026-11-10
 

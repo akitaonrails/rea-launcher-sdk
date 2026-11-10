@@ -22,8 +22,9 @@
 #      builds), unless --no-test;
 #   5. checks that release-notes.sh prints the version's notes;
 #   6. commits "chore: release vX" and creates the annotated tag vX.
-# Any failure puts the files back. Pushing is the owner's call: it prints
-# the commands.
+# Any failure puts the files back (unstaged and restored). A missing git
+# identity (user.name, user.email) is refused before anything changes.
+# Pushing is the owner's call: it prints the commands.
 set -eu
 die() { echo "release: $*" >&2; exit 1; }
 usage() { echo "usage: $0 [--date YYYY-MM-DD] [--no-test] VERSION [launcher-repo]" >&2; exit 2; }
@@ -55,18 +56,30 @@ git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$REPO is 
 REPO=$(git -C "$REPO" rev-parse --show-toplevel)
 [ -z "$(git -C "$REPO" status --porcelain)" ] || die "$REPO has uncommitted changes"
 if git -C "$REPO" rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then die "tag $TAG already exists"; fi
+# The commit and the tag need an identity: check before any file changes (a
+# fresh distrobox has none).
+for k in name email; do
+  [ -n "$(git -C "$REPO" config "user.$k" || true)" ] && continue
+  case $k in
+    name) [ -n "${GIT_AUTHOR_NAME:-}" ] && [ -n "${GIT_COMMITTER_NAME:-}" ] && continue ;;
+    email) [ -n "${GIT_AUTHOR_EMAIL:-}" ] && [ -n "${GIT_COMMITTER_EMAIL:-}" ] && continue ;;
+  esac
+  die "no git identity: set git config user.name and user.email (or run the release where git has them, e.g. on the host, not in a distrobox)"
+done
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/rea-release.XXXXXX")
 CHANGED=''
 restore() {
-  # Puts back what this run changed (the tree was clean before).
-  for f in $CHANGED; do git -C "$REPO" checkout -q -- "$f" 2>/dev/null || true; done
+  # Puts back what this run changed, index and work tree (the tree was clean
+  # before; step 6 stages the files before it commits).
+  for f in $CHANGED; do git -C "$REPO" checkout -q HEAD -- "$f" 2>/dev/null || true; done
 }
-trap 'rm -rf "$T"' EXIT
+# Any non-zero exit, set -e's included, restores (harmless before step 2,
+# and after the commit, when HEAD holds the same files).
+trap 'rc=$?; [ "$rc" = 0 ] || restore; rm -rf "$T"' EXIT
 trap 'restore; exit 129' HUP
 trap 'restore; exit 130' INT
 trap 'restore; exit 143' TERM
-fail() { restore; die "$*"; }
 
 # Prints -1, 0 or 1 comparing two X.Y.Z.
 vercmp() {
@@ -141,17 +154,17 @@ echo "release: $PACKAGE $CURRENT -> $VERSION ($VFILE [$VTABLE])"
 version_in "$REPO/$VFILE" "$VTABLE" "$VERSION" > "$T/toml"
 cat "$T/toml" > "$REPO/$VFILE"
 CHANGED="$CHANGED $VFILE"
-[ "$(version_in "$REPO/$VFILE" "$VTABLE")" = "$VERSION" ] || fail "could not set the version in $VFILE"
+[ "$(version_in "$REPO/$VFILE" "$VTABLE")" = "$VERSION" ] || die "could not set the version in $VFILE"
 if [ -f "$REPO/Cargo.lock" ]; then
   CHANGED="$CHANGED Cargo.lock"
-  command -v cargo >/dev/null 2>&1 || fail "cargo is not on PATH"
+  command -v cargo >/dev/null 2>&1 || die "cargo is not on PATH"
   (cd "$REPO" && { cargo update --workspace --offline 2>/dev/null || cargo update --workspace; }) \
-    || fail "cargo update --workspace failed"
+    || die "cargo update --workspace failed"
 fi
 
 # --- 3. the CHANGELOG -----------------------------------------------------------
 CL=CHANGELOG.md
-[ -f "$REPO/$CL" ] || fail "no $CL"
+[ -f "$REPO/$CL" ] || die "no $CL"
 CHANGED="$CHANGED $CL"
 URL=$(sed -n 's#^\[[Uu]nreleased\]:[ \t]*\(.*\)/compare/v[0-9][^ ]*\.\.\.HEAD[ \t]*$#\1#p' "$REPO/$CL" | head -n 1)
 awk -v ver="$VERSION" -v date="$DATE" -v cur="$CURRENT" -v url="$URL" '
@@ -200,9 +213,9 @@ awk -v ver="$VERSION" -v date="$DATE" -v cur="$CURRENT" -v url="$URL" '
 ' "$REPO/$CL" > "$T/cl" || {
   rc=$?
   case $rc in
-    3) fail "the Unreleased section of $CL is empty: write the release's entries first" ;;
-    4) fail "$CL has no Unreleased section and no '## $VERSION' heading" ;;
-    *) fail "could not date $CL" ;;
+    3) die "the Unreleased section of $CL is empty: write the release's entries first" ;;
+    4) die "$CL has no Unreleased section and no '## $VERSION' heading" ;;
+    *) die "could not date $CL" ;;
   esac
 }
 cat "$T/cl" > "$REPO/$CL"
@@ -212,22 +225,22 @@ if [ -n "$TEST" ]; then
   echo "release: cargo test --locked --workspace (what the tag's CI runs)"
   (cd "$REPO" && cargo test --locked --workspace) > "$T/test.log" 2>&1 || {
     tail -n 30 "$T/test.log" >&2
-    fail "cargo test failed after the bump (a snapshot with the version? use rea_launcher::snapshot!)"
+    die "cargo test failed after the bump (a snapshot with the version? use rea_launcher::snapshot!)"
   }
 fi
 
 # --- 5. the release notes -------------------------------------------------------
 NOTES=$REPO/sdk/packaging/release-notes.sh
 [ -f "$NOTES" ] || NOTES=$HERE/packaging/release-notes.sh
-[ -f "$NOTES" ] || fail "no release-notes.sh (re-run scripts/sdk-sync)"
-sh "$NOTES" "$TAG" "$REPO/$CL" > "$T/notes" 2>"$T/notes.err" || fail "release notes: $(cat "$T/notes.err")"
+[ -f "$NOTES" ] || die "no release-notes.sh (re-run scripts/sdk-sync)"
+sh "$NOTES" "$TAG" "$REPO/$CL" > "$T/notes" 2>"$T/notes.err" || die "release notes: $(cat "$T/notes.err")"
 echo "release: notes for $TAG ($(wc -l < "$T/notes" | tr -d ' ') lines):"
 sed 's/^/  | /' "$T/notes" | head -n 15
 
 # --- 6. commit and tag ----------------------------------------------------------
 # shellcheck disable=SC2086 # the changed paths, one word each
 git -C "$REPO" add -- $CHANGED
-git -C "$REPO" commit -q -m "chore: release $TAG" || fail "git commit failed"
+git -C "$REPO" commit -q -m "chore: release $TAG" || die "git commit failed"
 git -C "$REPO" tag -a "$TAG" -m "$TAG" || die "git tag failed (the release commit stays; tag it by hand)"
 echo "release: committed and tagged $TAG ($(git -C "$REPO" rev-parse --short HEAD)). Nothing was pushed."
 echo "release: after the owner's go-ahead: git push origin HEAD && git push origin $TAG"

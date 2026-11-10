@@ -171,6 +171,27 @@ check "failing test: no commit" "init" "$(git -C "$L" log -1 --format=%s)"
 release --no-test 0.4.0 && ok "--no-test skips cargo test" || bad "--no-test: $(cat "$T/out")"
 grep -q '^test' "$T/cargo.log" && bad "--no-test ran the tests" || ok "--no-test ran no tests"
 
+# A failure after the files were staged (git commit refused by a hook):
+# everything put back, index included.
+launcher hookfail kac
+printf '#!/bin/sh\nexit 1\n' > "$L/.git/hooks/pre-commit" && chmod +x "$L/.git/hooks/pre-commit"
+if release 0.4.0; then bad "a failing git commit stops the release"; else grep -q 'git commit failed' "$T/out" && ok "a failing git commit stops the release" || bad "hookfail: $(cat "$T/out")"; fi
+clean_tree "failing commit: files unstaged and put back"
+check "failing commit: CHANGELOG as it was" "## [Unreleased]" "$(sed -n 3p "$L/CHANGELOG.md")"
+check "failing commit: no tag" "" "$(git -C "$L" tag -l v0.4.0)"
+rm "$L/.git/hooks/pre-commit"
+
+# No git identity (a fresh distrobox): refused before any file changes.
+launcher noident kac
+if (unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL EMAIL
+    mkdir -p "$T/home"; HOME=$T/home XDG_CONFIG_HOME=$T/home/.config release 0.4.0); then
+  bad "no git identity is refused"
+else
+  grep -q 'git config user.name' "$T/out" && ok "no git identity is refused up front" || bad "noident: $(cat "$T/out")"
+fi
+clean_tree "no identity: nothing changed"
+check "no identity: cargo never ran" "" "$(cat "$T/cargo.log")"
+
 launcher nopkg kac
 sed -i.bak '/package: game-launcher/d' "$L/.github/workflows/build.yml" && rm "$L/.github/workflows/build.yml.bak"
 (cd "$L" && git commit -qam nopkg)
