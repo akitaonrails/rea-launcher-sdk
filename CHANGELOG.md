@@ -7,7 +7,7 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
-## [Unreleased]
+## [0.7.0] - 2026-11-10
 
 ### Migration
 
@@ -1095,6 +1095,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.7.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.5...v0.5.0
 [0.4.5]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.4...v0.4.5
