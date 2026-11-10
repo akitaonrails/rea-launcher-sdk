@@ -28,8 +28,10 @@ jobs:
           persist-credentials: false
       - name: Install the 32-bit MinGW toolchain and LLD
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 lld
+          # man-db's trigger can stall apt on GitHub's runners for many minutes.
+          sudo rm -f /var/lib/man-db/auto-update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends gcc-mingw-w64-i686 lld
       - name: Install Rust (with the 32-bit Windows target)
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
@@ -56,8 +58,10 @@ jobs:
           persist-credentials: false
       - name: Install dash, mawk and the packaging tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends dash mawk busybox curl xz-utils zip unzip
+          # man-db's trigger can stall apt on GitHub's runners for many minutes.
+          sudo rm -f /var/lib/man-db/auto-update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends dash mawk busybox curl xz-utils zip unzip
       - name: Shell syntax
         run: |
           for f in packaging/*.sh packaging/tests/*.sh scripts/sdk-sync scripts/sdk-bump scripts/clean scripts/wine-test scripts/dev-check scripts/prepush-scan scripts/release scripts/tests/*.sh shell/*.sh shell/example-play shell/tests/*.sh; do
@@ -93,8 +97,10 @@ jobs:
       - name: Install MinGW, LLD and Wine (32-bit)
         run: |
           sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64
+          # man-db's trigger can stall apt on GitHub's runners for many minutes.
+          sudo rm -f /var/lib/man-db/auto-update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64
       - name: Install Rust (with the 32-bit Windows target)
         run: |
           rustup toolchain install stable --profile minimal
@@ -119,8 +125,10 @@ jobs:
       - name: Install MinGW, LLD and Wine (32-bit)
         run: |
           sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64 dash mawk zip unzip
+          # man-db's trigger can stall apt on GitHub's runners for many minutes.
+          sudo rm -f /var/lib/man-db/auto-update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64 dash mawk zip unzip
       - name: Install Rust (with the 32-bit Windows target)
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt

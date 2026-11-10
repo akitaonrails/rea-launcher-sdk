@@ -96,9 +96,11 @@ jobs:
             *) echo "::error::unexpected target $TARGET"; exit 1 ;;
           esac
           sudo dpkg --add-architecture i386
-          sudo apt-get update
+          # man-db's trigger can stall apt on GitHub's runners for many minutes.
+          sudo rm -f /var/lib/man-db/auto-update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           # shellcheck disable=SC2086 # the extra list is split on purpose
-          sudo apt-get install -y --no-install-recommends "$mingw" lld wine wine32:i386 wine64 dash mawk $APT_EXTRA
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends "$mingw" lld wine wine32:i386 wine64 dash mawk $APT_EXTRA
 
       - name: Install Rust
         shell: sh

@@ -305,9 +305,11 @@ jobs:
           if [ "$APT_I386" = true ]; then sudo dpkg --add-architecture i386; fi
           # A Windows target always links with lld, whatever the list says.
           case $RUST_TARGET in *-windows-gnu*) APT_PACKAGES="$APT_PACKAGES lld" ;; esac
-          sudo apt-get update
+          # man-db's trigger can stall apt on GitHub's runners for many minutes.
+          sudo rm -f /var/lib/man-db/auto-update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           # shellcheck disable=SC2086
-          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends $APT_PACKAGES
 
       - name: Install Rust
         shell: sh
@@ -434,8 +436,10 @@ jobs:
             *) echo "::error::wine-tests needs rust-target i686-pc-windows-gnu or x86_64-pc-windows-gnu"; exit 1 ;;
           esac
           sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends "$mingw" lld wine wine32:i386 wine64
+          # man-db's trigger can stall apt on GitHub's runners for many minutes.
+          sudo rm -f /var/lib/man-db/auto-update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends "$mingw" lld wine wine32:i386 wine64
 
       - name: Windows-target tests under Wine (headless)
         if: inputs.wine-tests

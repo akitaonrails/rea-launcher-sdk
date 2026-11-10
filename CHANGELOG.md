@@ -7,6 +7,17 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.7.1] - 2026-11-10
+
+### Fixed
+
+- CI: apt steps in `launcher-ci.yml`, `ci.yml` and `compat.yml` no longer
+  hang a run for half an hour. On 2026-11-10 three launcher runs sat 20-30
+  minutes in "Install build tools" or "Install Wine". apt now has network
+  timeouts and retries, each apt command is capped at 10 minutes, and
+  man-db's auto-update trigger (a known stall on GitHub's Ubuntu runners)
+  is switched off first. Launchers get this with their next SDK bump.
+
 ## [0.7.0] - 2026-11-10
 
 ### Migration
@@ -1095,6 +1106,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.7.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.4.5...v0.5.0
