@@ -302,6 +302,19 @@ pub fn begin(installer: &Installer, dest: &Path) -> Result<Begin, String> {
     if is_unpacked(dest, installer) {
         return Ok(Begin::Done);
     }
+    let args = begin_again(installer, dest)?;
+    Ok(Begin::Run {
+        args,
+        work: work_dir(dest),
+    })
+}
+
+/// [`begin`] without the [`Begin::Done`] shortcut: a fresh work folder
+/// ([`work_dir`]) and innoextract's arguments. For a `dest` that is the
+/// launcher's own (it holds the [`MARKER`]) but fails the game check, as
+/// after the player deleted files: it is unpacked again and replaced by
+/// [`finish`]. A `dest` without the marker is still refused.
+pub fn begin_again(installer: &Installer, dest: &Path) -> Result<Vec<OsString>, String> {
     ours(dest)?;
     let work = work_dir(dest);
     ours(&work)?;
@@ -309,10 +322,7 @@ pub fn begin(installer: &Installer, dest: &Path) -> Result<Begin, String> {
     fs::create_dir_all(&work).map_err(|error| cannot(&work, error))?;
     fs::write(work.join(MARKER), identify::hex(&installer.sha256))
         .map_err(|error| cannot(&work, error))?;
-    Ok(Begin::Run {
-        args: innoextract_args(installer, &work),
-        work,
-    })
+    Ok(innoextract_args(installer, &work))
 }
 
 /// `Ok` when `dir` is missing, an empty folder, or holds the [`MARKER`].
@@ -501,7 +511,8 @@ fn resolve_collisions(root: &Path, prefer: &[&str]) -> io::Result<(Vec<String>, 
 /// Unpacks `installer` into `dest` in one call: [`begin`], `run` (which
 /// runs innoextract with [`innoextract_args`]; its error is returned as
 /// is), [`finish`]. When `dest` already holds the game, only `check(dest)`
-/// runs. For a launcher without a window; `rea_launcher_win32` drives the
+/// runs; when that check fails, the launcher's folder is unpacked again
+/// ([`begin_again`]). For a launcher without a window; `rea_launcher_win32` drives the
 /// same steps with progress.
 pub fn unpack<T>(
     installer: &Installer,
@@ -509,16 +520,18 @@ pub fn unpack<T>(
     run: impl FnOnce(&[OsString]) -> Result<(), String>,
     check: impl Fn(&Path) -> Result<T, String>,
 ) -> Result<Finished<T>, String> {
-    match begin(installer, dest)? {
-        Begin::Done => check(dest).map(Finished::only),
-        Begin::Run { args, .. } => {
-            if let Err(error) = run(&args) {
-                let _ = abandon(dest);
-                return Err(error);
-            }
-            finish(installer, dest, check)
-        }
+    let args = match begin(installer, dest)? {
+        Begin::Done => match check(dest) {
+            Ok(game) => return Ok(Finished::only(game)),
+            Err(_) => begin_again(installer, dest)?,
+        },
+        Begin::Run { args, .. } => args,
+    };
+    if let Err(error) = run(&args) {
+        let _ = abandon(dest);
+        return Err(error);
     }
+    finish(installer, dest, check)
 }
 
 /// A stopped or failed unpack: its work folder goes (only when it is the
@@ -822,6 +835,15 @@ mod tests {
         assert_eq!(runs.get(), 1, "the second start reuses the unpacked game");
         assert!(again.preferred.is_empty() && again.dropped.is_empty());
 
+        // The player deleted game files: the folder is still the
+        // launcher's (marked), so it is unpacked again, not refused.
+        fs::remove_file(dest.join("game.exe")).unwrap();
+        assert!(is_unpacked(&dest, &installer), "the marker stays");
+        let repaired = unpack(&installer, &dest, run, check).unwrap();
+        assert_eq!(runs.get(), 2, "unpacked again");
+        assert_eq!(repaired.game, dest.join("game.exe"));
+        assert!(!work_dir(&dest).exists());
+
         // Another installer build: the launcher's own folder is replaced.
         let newer = Installer {
             sha256: identify::sha256(b"newer"),
@@ -829,7 +851,7 @@ mod tests {
         };
         assert!(!is_unpacked(&dest, &newer));
         unpack(&newer, &dest, run, check).unwrap();
-        assert_eq!(runs.get(), 2);
+        assert_eq!(runs.get(), 3);
         assert!(is_unpacked(&dest, &newer));
         fs::remove_dir_all(&root).unwrap();
     }

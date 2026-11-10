@@ -25,6 +25,9 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   `Ok(false)` when absent; refuses a hive root or a top-level key
   (`reg::deletable_path`). For registry tests and cleanup (CMR4's Wine
   test called `RegDeleteTreeW` directly).
+- `installer::begin_again(installer, dest)`: a fresh work folder and
+  innoextract's arguments even when `dest` is marked as this installer's
+  unpack (see Fixed).
 
 ### Fixed
 
@@ -40,6 +43,10 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   changed; they are now unstaged and restored on any failure. A missing
   git identity (`user.name`/`user.email`, as in a fresh distrobox) is
   refused before anything changes.
+- Installer unpack: a folder with a valid `.rea-unpacked` marker whose game
+  check fails (the player deleted files) is the launcher's own, so it is
+  unpacked again instead of failing the check (`installer::unpack`,
+  `rea_launcher_win32::innoextract::unpack`, which logs the reason).
 - `scripts/clean`: a `.work/.task-created` line with a comment after the
   path (`.work/probe-1  # why`) was read as part of the path, so the entry
   was never removed. The rest of a line from a blank followed by `#` is now

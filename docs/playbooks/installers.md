@@ -124,7 +124,9 @@ pub static INSTALLERS: &[Known<InstallerBuild>] = &[Known::new(
    from the command line (`--game`), don't save; only say where the game
    is. A player who points at the installer folder again still gets the
    unpacked copy reused (`installer::begin` returns `Begin::Done` when the
-   folder's `.rea-unpacked` marker names this installer's SHA-256).
+   folder's `.rea-unpacked` marker names this installer's SHA-256). When
+   that folder then fails the game check (files deleted), `unpack` unpacks
+   it again (`installer::begin_again`): it is the launcher's own.
 5. Everything after that (runtime copy, fixes, saves) runs on the unpacked
    folder as on an installed game.
 

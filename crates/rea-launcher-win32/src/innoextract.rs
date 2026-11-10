@@ -136,7 +136,8 @@ pub enum Unpacked<T> {
 }
 
 /// Unpacks `installer` into `dest` with `innoextract`, once: when `dest`
-/// already holds this installer's game only `check(dest)` runs. Otherwise
+/// already holds this installer's game only `check(dest)` runs (when it
+/// fails, the launcher's folder is unpacked again). Otherwise
 /// checks the free space, starts innoextract, hands the job to `watch`
 /// (the progress window; when it returns an error, as when no window can
 /// open, the unpack is waited for all the same), then
@@ -165,13 +166,25 @@ pub fn unpack_with<T>(
     let parent = dest.parent().unwrap_or(dest);
     std::fs::create_dir_all(parent)
         .map_err(|error| format!("Cannot create {}: {error}", parent.display()))?;
-    let Begin::Run { args, .. } = installer::begin(installer, dest)? else {
-        return Ok(Unpacked::Ready(installer::unpack(
-            installer,
-            dest,
-            |_| Ok(()),
-            check,
-        )?));
+    let args = match installer::begin(installer, dest)? {
+        Begin::Done => match check(dest) {
+            Ok(game) => {
+                return Ok(Unpacked::Ready(Finished {
+                    game,
+                    preferred: Vec::new(),
+                    removed: Vec::new(),
+                    dropped: Vec::new(),
+                }));
+            }
+            Err(error) => {
+                log(&format!(
+                    "{} fails the game check ({error}); unpacking again",
+                    dest.display()
+                ));
+                installer::begin_again(installer, dest)?
+            }
+        },
+        Begin::Run { args, .. } => args,
     };
     if let Err(error) = installer::check_space(installer.build, disk::free_space(parent), parent) {
         let _ = installer::abandon(dest);
@@ -308,6 +321,27 @@ mod tests {
         })
         .unwrap();
         assert!(matches!(again, Unpacked::Ready(_)));
+
+        // Game files deleted: the launcher's own folder is unpacked again.
+        fs::remove_file(dest.join("game.exe")).unwrap();
+        let mut lines = Vec::new();
+        let repaired = unpack_with(
+            child("ok"),
+            &found,
+            &dest,
+            check,
+            &mut |line| lines.push(line.to_owned()),
+            |job| wait_for(job),
+        )
+        .unwrap();
+        let Unpacked::Ready(repaired) = repaired else {
+            panic!("{repaired:?}")
+        };
+        assert_eq!(repaired.game, b"good");
+        assert!(
+            lines[0].contains("unpacking again"),
+            "the reason is logged: {lines:?}"
+        );
 
         // No window: the unpack is waited for all the same.
         let other = root.join("other");
