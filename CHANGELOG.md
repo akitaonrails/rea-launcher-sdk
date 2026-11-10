@@ -14,9 +14,12 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 - **Sega Rally Revo: drop `clear_stale_binding`** at the next SDK bump
   (`crates/srr-launcher/src/registry.rs`): `pe::edit::add_import` (and so
   `rea_close_hook::import_into`) now clears the stale binding itself.
-  Verify: `import_into` on the bytes as read still gives both exes the
-  import; the `a_stale_binding_like_the_games_takes_the_import` test keeps
-  passing without the local function.
+  Call `rea_close_hook::import_into(bytes)` directly; in the
+  `a_stale_binding_like_the_games_takes_the_import` test drop the two
+  lines that assume the SDK refuses the image (`import_into(&image)
+  .is_err()`, `clear_stale_binding(&bound)`). Verify: that test passes
+  (both the stale image taking the import and the bound one refused),
+  and `--check` reports no import problem for either exe.
 
 ### Added
 
@@ -32,18 +35,6 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 - `installer::begin_again(installer, dest)`: a fresh work folder and
   innoextract's arguments even when `dest` is marked as this installer's
   unpack (see Fixed).
-
-### Docs
-
-- `scripts/sdk-bump` ends with the next steps of the upgrade playbook and
-  says that Windows builds (i686 build and clippy, `wine-test`) need MinGW
-  with `windres`, lld and Wine, naming any this host lacks, and how to run
-  them in the `gaming` distrobox. Also in `docs/playbooks/sdk-change.md`.
-
-- `rea_launcher_ui::testing`: how wrapped text is found. A wrapped label is
-  one `Label` node with the whole text (`get_by_label_contains` finds a
-  phrase across the wrap); its `TextRun` rows are split, so value queries
-  see one row. A test pins it.
 
 ### Fixed
 
@@ -67,6 +58,17 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   path (`.work/probe-1  # why`) was read as part of the path, so the entry
   was never removed. The rest of a line from a blank followed by `#` is now
   a comment (documented in the script and `packaging/README.md`).
+
+### Docs
+
+- `scripts/sdk-bump` ends with the next steps of the upgrade playbook and
+  says that Windows builds (i686 build and clippy, `wine-test`) need MinGW
+  with `windres`, lld and Wine, naming any this host lacks, and how to run
+  them in the `gaming` distrobox. Also in `docs/playbooks/sdk-change.md`.
+- `rea_launcher_ui::testing`: how wrapped text is found. A wrapped label is
+  one `Label` node with the whole text (`get_by_label_contains` finds a
+  phrase across the wrap); its `TextRun` rows are split, so value queries
+  see one row. A test pins it.
 
 ## [0.6.0] - 2026-11-10
 
