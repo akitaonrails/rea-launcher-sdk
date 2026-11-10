@@ -116,6 +116,9 @@ check "cargo update for the SDK crates in Cargo.lock" "$L: update -p rea-launche
 grep -qx 'tag=v0.3.0' "$L/sdk/VERSION" && grep -qx "commit=$V3" "$L/sdk/VERSION" && ok "sdk/ re-vendored at v0.3.0" || bad "sdk/VERSION: $(cat "$L/sdk/VERSION")"
 check "vendored files from v0.3.0" "# play v3" "$(cat "$L/sdk/rea-play.sh")"
 [ -x "$L/sdk/scripts/sdk-bump" ] && ok "sdk-bump vendored" || bad "sdk-bump vendored"
+grep -q 'Next steps' "$T/out" && ok "prints the next steps" || bad "next steps: $(cat "$T/out")"
+grep -q 'distrobox enter gaming' "$T/out" && ok "says where Windows builds run (the gaming box)" || bad "gaming box hint: $(cat "$T/out")"
+grep -q 'windres' "$T/out" && ok "names what the host lacks for Windows builds" || bad "windres: $(cat "$T/out")"
 check "workflow refs moved" "2" "$(grep -c 'rea-launcher-sdk/.github/workflows/[a-z-]*\.yml@v0.3.0$' "$L/.github/workflows/build.yml")"
 grep -q 'actions/checkout@3d3c42e5' "$L/.github/workflows/build.yml" && ok "other actions untouched" || bad "other actions untouched"
 check "Migration section (0.3.0) and a note inside a bullet (0.2.0), newest first" "### v0.3.0

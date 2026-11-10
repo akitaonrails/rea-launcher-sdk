@@ -12,7 +12,9 @@
 #   4. moves every `akitaonrails/rea-launcher-sdk/.github/workflows/*.yml@…`
 #      to @vX.Y.Z,
 #   5. prints the CHANGELOG **Migration** items between the launcher's old
-#      SDK version and the new one (also to FILE with --notes).
+#      SDK version and the new one (also to FILE with --notes),
+#   6. prints the next steps, and where Windows builds run when this host
+#      lacks MinGW/windres or Wine (the gaming distrobox).
 #
 # The SDK checkout: this SDK itself when it is a clean git checkout at the
 # tag; otherwise a clone fetched from $REA_SDK_URL, else from this SDK
@@ -240,3 +242,21 @@ if [ -n "$NOTES" ]; then cp "$T/notes" "$NOTES"; fi
 echo
 echo "Changed files:"
 git -C "$REPO" status --short
+
+# The checks of docs/playbooks/sdk-change.md, "Upgrading a launcher", 7.
+# Windows builds need MinGW (gcc and windres, for the exe's resources),
+# lld and Wine, which a host often lacks: say where to run them.
+missing=''
+for tool in i686-w64-mingw32-gcc i686-w64-mingw32-windres wine; do
+  command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+done
+echo
+echo "Next steps (docs/playbooks/sdk-change.md, \"Upgrading a launcher\"):"
+echo "  - apply each Migration item above in its own commit; remove workarounds"
+echo "  - all checks: fmt, tests, clippy (i686 Windows target), cargo deny,"
+echo "    sdk/scripts/sdk-sync --check, sdk/scripts/wine-test, the release build,"
+echo "    sdk/scripts/launcher-check; compare the golden snapshots"
+echo "  - Windows builds (the i686 release, clippy for Windows, wine-test) need"
+echo "    MinGW with windres, lld and Wine.${missing:+ Not found here:$missing.} Without"
+echo "    them, run those in the gaming distrobox, with an absolute path:"
+echo "    distrobox enter gaming -- sh -c 'cd $REPO && sdk/scripts/wine-test --locked --workspace'"

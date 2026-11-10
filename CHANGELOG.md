@@ -35,6 +35,11 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ### Docs
 
+- `scripts/sdk-bump` ends with the next steps of the upgrade playbook and
+  says that Windows builds (i686 build and clippy, `wine-test`) need MinGW
+  with `windres`, lld and Wine, naming any this host lacks, and how to run
+  them in the `gaming` distrobox. Also in `docs/playbooks/sdk-change.md`.
+
 - `rea_launcher_ui::testing`: how wrapped text is found. A wrapped label is
   one `Label` node with the whole text (`get_by_label_contains` finds a
   phrase across the wrap); its `TextRun` rows are split, so value queries

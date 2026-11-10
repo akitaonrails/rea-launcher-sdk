@@ -60,6 +60,10 @@ request.
    `sdk/scripts/launcher-check` (the new version's: rules that waited for
    this SDK version are errors now). Fix every error; a rule the owner
    decided to waive gets a `rule: reason` line in `.rea-check-waivers`.
+   The Windows steps (i686 clippy and release build, `wine-test`) need
+   MinGW with `windres`, lld and Wine; a host without them runs those in
+   the `gaming` distrobox (`AGENTS.md`, "Where the tools are"), as
+   `sdk-bump`'s next steps print.
 8. **Runtime notes.** Behaviour changes that need the real game go into
    `docs/RUNTIME_NOTES.md` as pending checks; run them headless when the game
    is available.
