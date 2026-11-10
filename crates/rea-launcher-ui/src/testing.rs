@@ -23,6 +23,15 @@
 //! assert_eq!(*ui.state(), 120);
 //! assert!(testing::checked(&ui.get_by_label("120")));
 //! ```
+//!
+//! **Wrapped text.** A label egui wraps over several rows is one `Label`
+//! node holding the whole text, with one `TextRun` child per row. Find it,
+//! or a phrase in it, by label: `get_by_label(text)` or
+//! `get_by_label_contains("a phrase that may cross a wrap")` match the
+//! whole text. Anything that looks at the rows (`get_by_value` of a
+//! phrase, a predicate over `TextRun` nodes) sees only one row, and a
+//! phrase cut by the wrap is in none of them. Text a widget paints itself
+//! (the photo caption) is found by the label that widget gives it.
 
 use eframe::egui::{self, Ui, accesskit::Toggled};
 pub use egui_kittest::{
@@ -470,5 +479,38 @@ mod tests {
             description(&play).as_deref(),
             Some("Play needs the game folder first.")
         );
+    }
+}
+
+#[cfg(test)]
+mod wrapped_text {
+    use super::*;
+    use egui::accesskit::Role;
+
+    const TEXT: &str = "The launcher copies the game out of your installer files into a \
+                        folder of its own; the installer itself is never run.";
+
+    /// A label wrapped over several rows is one `Label` node with the whole
+    /// text (found by label, a phrase across a wrap included); its
+    /// `TextRun` children hold one row each, so a value query sees a row.
+    #[test]
+    fn a_phrase_across_a_wrap_is_found_on_the_label_not_its_rows() {
+        let ui = harness(&Palette::default(), &Metrics::DEFAULT, (), |ui, _| {
+            ui.allocate_ui(egui::vec2(200.0, 400.0), |ui| ui.label(TEXT));
+        });
+        let label = ui.get_by_label_contains("installer files into a folder of its own");
+        assert_eq!(label.accesskit_node().role(), Role::Label);
+        let rows: Vec<String> = label
+            .children()
+            .filter_map(|row| row.accesskit_node().value())
+            .collect();
+        assert!(rows.len() > 2, "wrapped: {rows:?}");
+        assert_eq!(rows.concat(), TEXT, "the rows are the text, split");
+        // A value query matches the whole text on the label, and a row only
+        // on that row's node: a phrase across the wrap is in no row.
+        assert_eq!(ui.query_all_by_value(TEXT).count(), 1);
+        let row = ui.get_by_value(&rows[0]);
+        assert_eq!(row.accesskit_node().role(), Role::TextRun);
+        assert!(!rows.iter().any(|r| r.contains("into a folder of its own")));
     }
 }

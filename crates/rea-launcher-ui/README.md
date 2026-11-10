@@ -171,7 +171,10 @@ assert_eq!(testing::description(&ui.get_by_label("Glide")).as_deref(), Some("Nee
 ```
 
 They are headless (no window, no GPU) and run on the host and under
-`scripts/wine-test`. Keep the contrast test too:
+`scripts/wine-test`. Wrapped text: a label egui wraps is one `Label` node
+with the whole text and one `TextRun` child per row, so find a phrase with
+`get_by_label_contains` (it matches across the wrap); `get_by_value` or a
+predicate over the rows sees one row only. Keep the contrast test too:
 `assert!(theme::contrast_problems(&PALETTE, &METRICS).is_empty())`.
 
 The bundled Barlow fonts are under the SIL Open Font License

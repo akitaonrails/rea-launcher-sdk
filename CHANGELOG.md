@@ -33,6 +33,13 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   innoextract's arguments even when `dest` is marked as this installer's
   unpack (see Fixed).
 
+### Docs
+
+- `rea_launcher_ui::testing`: how wrapped text is found. A wrapped label is
+  one `Label` node with the whole text (`get_by_label_contains` finds a
+  phrase across the wrap); its `TextRun` rows are split, so value queries
+  see one row. A test pins it.
+
 ### Fixed
 
 - `pe::edit::add_import` / `rea_close_hook::import_into` accept an image
