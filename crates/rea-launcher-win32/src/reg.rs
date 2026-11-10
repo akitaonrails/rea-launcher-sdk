@@ -1,9 +1,16 @@
 //! The registry: an RAII `Key` with DWORD/string reads and writes.
 //!
 //! From CMR4 `win32.rs`, the only copy that closes keys on every path
-//! (RAII), opens HKLM in its 32-bit view, falls back to the HKCU
-//! VirtualStore *only* on access denied (SRR fell back on any error), and
-//! reports read errors instead of treating them as "missing".
+//! (RAII), opens HKLM in its 32-bit view, and reports read errors instead
+//! of treating them as "missing".
+//!
+//! Never count on the HKCU VirtualStore to give a game its values: the
+//! game sees it only while UAC registry virtualization is on for the game
+//! process, which Windows doesn't promise (rea-colin-mcrae#6). Write the
+//! game's values to HKCU with [`write_verified`] and give the game that key
+//! with `rea_close_hook`'s registry redirect (`REA_REGISTRY`), or write HKLM
+//! with [`Key::machine`] and stop when it fails. [`Key::read_machine`] and
+//! [`virtual_store_path`] stay for carrying the game's own old values over.
 //!
 //! The rule from `DESIGN.md` holds here: a value the player set is never
 //! rewritten by the `*_if_missing` / [`seed_missing`] helpers.
@@ -53,6 +60,111 @@ pub fn seed_missing<V: Copy, E>(
         }
     }
     Ok(wrote)
+}
+
+/// A value's data, for [`write_verified`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Data {
+    Dword(u32),
+    /// `REG_SZ`.
+    String(String),
+}
+
+impl fmt::Display for Data {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Data::Dword(value) => write!(f, "{value}"),
+            Data::String(text) => write!(f, "\"{text}\""),
+        }
+    }
+}
+
+/// When [`write_verified`] writes a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum When {
+    /// The launcher's value (a folder path), written on every launch and
+    /// read back exactly.
+    Always,
+    /// The game's own setting: seeded when absent, then the game's; read
+    /// back as present with the right type.
+    IfMissing,
+}
+
+/// One value for [`write_verified`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Value {
+    pub name: String,
+    pub data: Data,
+    pub when: When,
+}
+
+impl Value {
+    pub fn new(name: impl Into<String>, data: Data, when: When) -> Value {
+        Value {
+            name: name.into(),
+            data,
+            when,
+        }
+    }
+}
+
+/// What [`write_verified`] found wrong with one value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mismatch {
+    pub name: String,
+    pub problem: Problem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Problem {
+    /// The key or the value couldn't be written.
+    NotWritten(Error),
+    /// Read back, it isn't there.
+    Missing,
+    /// Read back, it holds something else.
+    Differs { wanted: Data, found: Data },
+    /// Reading it back failed (a wrong type included).
+    Unreadable(Error),
+}
+
+impl fmt::Display for Mismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = &self.name;
+        match &self.problem {
+            Problem::NotWritten(error) => write!(f, "{name} can't be written: {error}"),
+            Problem::Missing => write!(f, "{name} is missing"),
+            Problem::Differs { wanted, found } => write!(f, "{name} is {found}, not {wanted}"),
+            Problem::Unreadable(error) => write!(f, "{name} can't be read: {error}"),
+        }
+    }
+}
+
+/// Compares `values` with what `read` gives back for each (by name, of the
+/// value's type): [`When::Always`] values exactly, [`When::IfMissing`] ones
+/// present. Empty when everything matches.
+pub fn verify(
+    values: &[Value],
+    mut read: impl FnMut(&Value) -> Result<Option<Data>, Error>,
+) -> Vec<Mismatch> {
+    values
+        .iter()
+        .filter_map(|value| {
+            let problem = match read(value) {
+                Ok(None) => Problem::Missing,
+                Ok(Some(_)) if value.when == When::IfMissing => return None,
+                Ok(Some(found)) if found == value.data => return None,
+                Ok(Some(found)) => Problem::Differs {
+                    wanted: value.data.clone(),
+                    found,
+                },
+                Err(error) => Problem::Unreadable(error),
+            };
+            Some(Mismatch {
+                name: value.name.clone(),
+                problem,
+            })
+        })
+        .collect()
 }
 
 /// Where a 32-bit game reads `HKLM\<machine_path>` from when its HKLM
@@ -105,7 +217,7 @@ mod windows {
         RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
     };
 
-    use super::Error;
+    use super::{Data, Error, Mismatch, Problem, Value, When};
     use crate::wide::{from_wide, wide};
 
     /// A registry root.
@@ -120,7 +232,8 @@ mod windows {
         CurrentConfig,
     }
 
-    /// Where [`Key::machine_or_virtual_store`] opened the key.
+    /// Where the deprecated [`Key::machine_or_virtual_store`] opened the
+    /// key.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Place {
         /// `HKLM`, in its 32-bit view for `SOFTWARE` paths (the game keys
@@ -190,6 +303,18 @@ mod windows {
         /// `HKLM\<path>`, or its HKCU VirtualStore twin when HKLM is
         /// access-denied (native Windows without elevation). Any other
         /// error is returned as it is.
+        ///
+        /// Unsafe for a game's values: the game reads the VirtualStore copy
+        /// only while UAC registry virtualization is on for its process,
+        /// which Windows doesn't promise (off by policy, per key, and always
+        /// off for an exe with a `requestedExecutionLevel` manifest;
+        /// rea-colin-mcrae#6).
+        #[deprecated(
+            since = "0.6.0",
+            note = "the game may never see the VirtualStore: write HKCU with reg::write_verified \
+                    and give the game that key with rea_close_hook's REA_REGISTRY redirect, \
+                    or use Key::machine (no fallback)"
+        )]
         pub fn machine_or_virtual_store(path: &str) -> Result<(Key, Place), Error> {
             match Key::create(Hive::LocalMachine, path) {
                 Ok(key) => Ok((key, Place::Machine)),
@@ -199,6 +324,14 @@ mod windows {
                 }
                 Err(error) => Err(error),
             }
+        }
+
+        /// `HKLM\<path>` for reading and writing (32-bit view under
+        /// `SOFTWARE`), created when absent. Fails without administrator
+        /// rights on Windows ([`Error::is_access_denied`]); never falls
+        /// back to the VirtualStore. Under Wine it always works.
+        pub fn machine(path: &str) -> Result<Key, Error> {
+            Key::create(Hive::LocalMachine, path)
         }
 
         /// Opens an existing key read-only (`KEY_READ`); `None` when it does
@@ -397,6 +530,59 @@ mod windows {
         }
     }
 
+    /// Writes `values` to `hive\<path>` (creating the key; [`When::IfMissing`]
+    /// values only when absent), then reopens the key read-only and reads
+    /// each one back ([`super::verify`]). `Err` lists every value that is
+    /// wrong, so `--check` and Play can stop with the reason instead of
+    /// starting a game that won't find its folders.
+    pub fn write_verified(hive: Hive, path: &str, values: &[Value]) -> Result<(), Vec<Mismatch>> {
+        // The same problem for every value (the key itself failed).
+        let every = |problem: Problem| {
+            values
+                .iter()
+                .map(|value| Mismatch {
+                    name: value.name.clone(),
+                    problem: problem.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+        {
+            let key = Key::create(hive, path).map_err(|error| every(Problem::NotWritten(error)))?;
+            let mut failed = Vec::new();
+            for value in values {
+                let written = match (&value.data, value.when) {
+                    (Data::Dword(data), When::Always) => key.set_dword(&value.name, *data),
+                    (Data::String(data), When::Always) => key.set_string(&value.name, data),
+                    (Data::Dword(data), When::IfMissing) => {
+                        key.set_dword_if_missing(&value.name, *data).map(drop)
+                    }
+                    (Data::String(data), When::IfMissing) => {
+                        key.set_string_if_missing(&value.name, data).map(drop)
+                    }
+                };
+                if let Err(error) = written {
+                    failed.push(Mismatch {
+                        name: value.name.clone(),
+                        problem: Problem::NotWritten(error),
+                    });
+                }
+            }
+            if !failed.is_empty() {
+                return Err(failed);
+            }
+        }
+        let key = match Key::open_read(hive, path) {
+            Ok(Some(key)) => key,
+            Ok(None) => return Err(every(Problem::Missing)),
+            Err(error) => return Err(every(Problem::Unreadable(error))),
+        };
+        let wrong = super::verify(values, |value| match value.data {
+            Data::Dword(_) => key.dword(&value.name).map(|v| v.map(Data::Dword)),
+            Data::String(_) => key.string(&value.name).map(|v| v.map(Data::String)),
+        });
+        if wrong.is_empty() { Ok(()) } else { Err(wrong) }
+    }
+
     /// The values a 32-bit game reads under one HKLM key; from
     /// [`Key::read_machine`].
     #[derive(Debug)]
@@ -476,6 +662,78 @@ mod windows_tests {
     fn places_are_labelled_as_the_launchers_log_them() {
         assert_eq!(Place::Machine.describe(), "HKLM 32-bit view");
         assert_eq!(Place::VirtualStore.describe(), "HKCU VirtualStore");
+    }
+
+    fn fresh(name: &str) -> String {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!(
+            r"Software\rea-launcher-sdk-test\{name}-{}-{stamp}",
+            std::process::id()
+        )
+    }
+
+    #[test]
+    fn write_verified_writes_reads_back_and_keeps_the_games_values() {
+        let path = fresh("verified");
+        // The game already chose its language.
+        Key::create(Hive::CurrentUser, &path)
+            .unwrap()
+            .set_string("Language", "GERMAN")
+            .unwrap();
+        let values = [
+            Value::new(
+                "HDPath",
+                Data::String(r"C:\Jogos d'Ação\CMR".into()),
+                When::Always,
+            ),
+            Value::new("Width", Data::Dword(1920), When::Always),
+            Value::new("Language", Data::String("ENGLISH".into()), When::IfMissing),
+            Value::new("Hardware", Data::String("5".into()), When::IfMissing),
+        ];
+        assert_eq!(write_verified(Hive::CurrentUser, &path, &values), Ok(()));
+        let key = Key::open_read(Hive::CurrentUser, &path).unwrap().unwrap();
+        assert_eq!(key.string("Language").unwrap().as_deref(), Some("GERMAN"));
+        assert_eq!(key.string("Hardware").unwrap().as_deref(), Some("5"));
+        assert_eq!(
+            key.string("HDPath").unwrap().as_deref(),
+            Some(r"C:\Jogos d'Ação\CMR")
+        );
+        // A second launch: the same, nothing to report.
+        assert_eq!(write_verified(Hive::CurrentUser, &path, &values), Ok(()));
+    }
+
+    #[test]
+    fn write_verified_reports_a_value_it_cant_read_back() {
+        let path = fresh("wrong-type");
+        // The game left a string where the launcher writes only if missing
+        // a DWORD: present, but the read-back fails on the type.
+        Key::create(Hive::CurrentUser, &path)
+            .unwrap()
+            .set_string("Width", "wide")
+            .unwrap();
+        let values = [Value::new("Width", Data::Dword(1920), When::IfMissing)];
+        let wrong = write_verified(Hive::CurrentUser, &path, &values).unwrap_err();
+        assert_eq!(wrong.len(), 1);
+        assert!(
+            matches!(wrong[0].problem, Problem::Unreadable(_)),
+            "{:?}",
+            wrong
+        );
+    }
+
+    #[test]
+    fn machine_opens_hklm_without_a_fallback() {
+        // Wine runs as an administrator: HKLM is writable, and the value
+        // lands in HKLM (32-bit view), not in a VirtualStore.
+        let path = fresh("machine").replacen("Software", "SOFTWARE", 1);
+        Key::machine(&path).unwrap().set_dword("X", 7).unwrap();
+        let machine = Key::open_read(Hive::LocalMachine, &path).unwrap().unwrap();
+        assert_eq!(machine.dword("X").unwrap(), Some(7));
+        let store = virtual_store_path(&path, windows_is_64_bit());
+        assert!(Key::open_read(Hive::CurrentUser, &store).unwrap().is_none());
     }
 
     #[test]
@@ -583,6 +841,49 @@ mod tests {
         ));
         assert!(!uses_32_bit_view(true, r"SOFTWAREX\a"));
         assert!(!uses_32_bit_view(false, r"Software\Wine\X11 Driver"));
+    }
+
+    #[test]
+    fn verify_compares_ours_exactly_and_the_games_by_presence() {
+        let values = [
+            Value::new("Path", Data::String(r"C:\Games\X".into()), When::Always),
+            Value::new("Width", Data::Dword(1920), When::Always),
+            Value::new("Language", Data::String("ENGLISH".into()), When::IfMissing),
+            Value::new("Hardware", Data::Dword(5), When::IfMissing),
+            Value::new("Broken", Data::Dword(1), When::Always),
+        ];
+        let read = |value: &Value| match value.name.as_str() {
+            "Path" => Ok(Some(Data::String(r"C:\Old".into()))),
+            "Width" => Ok(Some(Data::Dword(1920))),
+            "Language" => Ok(Some(Data::String("GERMAN".into()))),
+            "Hardware" => Ok(None),
+            _ => Err(Error {
+                what: "cannot read registry value Broken".into(),
+                code: 13,
+            }),
+        };
+        let wrong = verify(&values, read);
+        let text: Vec<String> = wrong.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            text,
+            [
+                r#"Path is "C:\Old", not "C:\Games\X""#,
+                "Hardware is missing",
+                "Broken can't be read: cannot read registry value Broken (error 13)",
+            ]
+        );
+        assert!(verify(&values[1..2], read).is_empty());
+        let denied = Mismatch {
+            name: "Path".into(),
+            problem: Problem::NotWritten(Error {
+                what: "cannot open LocalMachine\\SOFTWARE\\X".into(),
+                code: 5,
+            }),
+        };
+        assert_eq!(
+            denied.to_string(),
+            "Path can't be written: cannot open LocalMachine\\SOFTWARE\\X (error 5)"
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ state parsing and button bits (`rea_launcher::pad`) — live in the portable
 | Module | What | From |
 |---|---|---|
 | `wine` | `is_wine` (export + env fallback), `seed_winebus`, `app_dll_overrides`/`remove_app_dll_overrides(exe, &[(dll, DllMode)])` → `Applied { written, ours, matching, player }`, ownership recorded under `owned_key(exe)`; pure `DllMode`, `app_defaults_key`, `owned_key`, `step` → `Step`, `removable` (`plan` kept for old callers) | CMR4 / OR / SRR / DiRT |
-| `reg` | pure: `Error`, `seed_missing`, `virtual_store_path`, `uses_32_bit_view`; RAII `Key`: `open_read` and `Key::read_machine` (read-only, never create; VirtualStore value first, as the game sees it); `dword`/`string`/`has`/`set_*`/`*_if_missing`/`seed_dwords`; `Key::machine_or_virtual_store` (HKLM — 32-bit view under `SOFTWARE` only — or HKCU VirtualStore on access denied; `Place::describe` gives the launchers' log labels "HKLM 32-bit view" / "HKCU VirtualStore") | CMR4 |
+| `reg` | pure: `Error`, `seed_missing`, `virtual_store_path`, `uses_32_bit_view`; RAII `Key`: `open_read` and `Key::read_machine` (read-only, never create; VirtualStore value first, as the game sees it); `dword`/`string`/`has`/`set_*`/`*_if_missing`/`seed_dwords`; `write_verified(hive, path, &[Value])` (write, reopen read-only, compare: `Err(Vec<Mismatch>)` names each wrong value; pure `verify`); `Key::machine` (HKLM — 32-bit view under `SOFTWARE` only — and no fallback); deprecated `Key::machine_or_virtual_store` (the game may never see the VirtualStore: see Migration v0.6.0) | CMR4 |
 | `process` | `Launch` builder (args, cwd, env, hidden) → `Running` (`wait`, `is_alive`, `exit_code`, `close_gracefully(timeout)` → `Closed::{AlreadyExited, Closed, Terminated}`, `message_hook` for a close-hook DLL such as `rea-launcher-close-hook`; `#[must_use]` hook); `top_level_windows(pid)`; `image_path(pid)`; `find_running(image)` (Toolhelp32 + `QueryFullProcessImageNameW`: the pids running that exact exe) | CMR4 + CMR3 + OR |
 | `instance` | `single(name) -> Result<Guard, AlreadyRunning>` (named mutex in `Local\`), `AlreadyRunning::second_start(action, window)` → `SecondStart::{Focused, Busy, WindowOpen}` (`exit_code`: 0 or `ALREADY_RUNNING` = 5, `message(game)`, `log_line`; pure `SecondStart::decide`), `bring_to_front`/`is_window_found(Window::Own/Title/Class/ClassTitle)`; pure `is_own_window`, `same_image`, `mutex_name` | SRR + DiRT + CMR4 + Screamer |
 | `xinput` | cached lookup; `pads` (as `rea_launcher::pad::Pad`), `buttons`, `connected`, `set_rumble`/`test_rumble`/`stop_rumble` (latest call wins), `ids` (USB vid/pid) | CMR4 + SRR/OR |
@@ -151,10 +151,22 @@ fn play(runtime: &std::path::Path) -> Result<u32, String> {
     } else {
         gpu::prefer_fast_gpu(&exe)?;
     }
-    let (key, place) = reg::Key::machine_or_virtual_store(r"SOFTWARE\Studio\Game")?;
-    key.set_string("INSTALL_PATH", &runtime.display().to_string())?;
-    key.set_dword_if_missing("Width", 1920)?;
-    let _ = place; // log where it went: place.describe()
+    // The game reads HKLM\SOFTWARE\Studio\Game; the launcher writes HKCU
+    // and the hook DLL in the game's import table sends the game there
+    // (rea_close_hook::registry, REA_REGISTRY). Never the VirtualStore.
+    use reg::{Data, Hive, Value, When};
+    let values = [
+        Value::new("INSTALL_PATH", Data::String(runtime.display().to_string()), When::Always),
+        Value::new("Width", Data::Dword(1920), When::IfMissing),
+    ];
+    if let Err(wrong) = reg::write_verified(Hive::CurrentUser, r"Software\Studio\Game", &values) {
+        let lines: Vec<String> = wrong.iter().map(ToString::to_string).collect();
+        return Err(format!("The game would not find its settings:\n{}", lines.join("\n")));
+    }
+    launch = launch.env(
+        rea_close_hook::registry::ENV,
+        r"HKLM\SOFTWARE\Studio\Game -> HKCU\Software\Studio\Game",
+    );
     launch.run()
 }
 ```
@@ -179,6 +191,22 @@ rea_launcher::paths::fit_path(&long, short_path(runtime).as_deref(), 99)
 ## Migration
 
 What changes for a launcher moving to this version of the crate.
+
+### v0.6.0
+
+- **`reg::Key::machine_or_virtual_store` is deprecated.** Its fallback
+  wrote the game's values into the HKCU VirtualStore, which the game reads
+  only while UAC registry virtualization is on for its process; Windows
+  doesn't promise that, and it is never on for an exe with a
+  `requestedExecutionLevel` manifest (rea-colin-mcrae#6). Instead: write
+  the values to HKCU with `reg::write_verified`, give the game that key
+  with `rea_close_hook`'s `REA_REGISTRY` redirect, and fail `--check` and
+  Play when the read-back differs. Values the game wrote earlier (in HKLM
+  or the VirtualStore) are carried over by reading them with
+  `Key::read_machine` before the first HKCU write. Where a launcher really
+  needs HKLM, `Key::machine` fails instead of falling back. `launcher-check`
+  warns on the old call (rule `virtual-store`). Steps per launcher:
+  `docs/playbooks/new-launcher.md`, "Registry", and the SDK CHANGELOG.
 
 ### v0.4.2
 
