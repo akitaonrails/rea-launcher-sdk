@@ -45,6 +45,22 @@ impl From<Error> for String {
     }
 }
 
+/// `path` without leading or trailing `\`, when it names a key below a
+/// top-level one (`Software\Vendor`, not `Software` or the hive root):
+/// what [`delete_tree`] agrees to delete. `ERROR_INVALID_PARAMETER` (87)
+/// otherwise.
+pub fn deletable_path(path: &str) -> Result<&str, Error> {
+    let trimmed = path.trim_matches('\\');
+    if trimmed.contains('\\') {
+        Ok(trimmed)
+    } else {
+        Err(Error {
+            what: format!("refusing to delete {path:?}: a hive root or a top-level key"),
+            code: 87,
+        })
+    }
+}
+
 /// Writes each default whose value is absent and leaves present ones
 /// alone; true when anything was written.
 pub fn seed_missing<V: Copy, E>(
@@ -211,10 +227,10 @@ mod windows {
 
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_CONFIG, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE,
-        KEY_READ, KEY_SET_VALUE, KEY_WOW64_32KEY, REG_DWORD, REG_EXPAND_SZ,
-        REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteValueW,
-        RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+        HKEY, HKEY_CURRENT_CONFIG, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS,
+        KEY_QUERY_VALUE, KEY_READ, KEY_SET_VALUE, KEY_WOW64_32KEY, REG_DWORD, REG_EXPAND_SZ,
+        REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyExW,
+        RegDeleteTreeW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
     };
 
     use super::{Data, Error, Mismatch, Problem, Value, When};
@@ -583,6 +599,42 @@ mod windows {
         if wrong.is_empty() { Ok(()) } else { Err(wrong) }
     }
 
+    /// Deletes `hive\path` with its values and subkeys (in the 32-bit view
+    /// for `HKLM\SOFTWARE\…`, where [`Key::machine`] writes); false when it
+    /// was not there. For tests and cleanup of the launcher's own keys:
+    /// a hive root or a top-level key such as `Software` is refused
+    /// ([`deletable_path`](super::deletable_path)).
+    pub fn delete_tree(hive: Hive, path: &str) -> Result<bool, Error> {
+        let path = super::deletable_path(path)?;
+        let (root, view) = root(hive, path);
+        let path_wide = wide(path);
+        let failed = |code| Error {
+            what: format!("cannot delete {hive:?}\\{path}"),
+            code,
+        };
+        let mut key: HKEY = null_mut();
+        // SAFETY: the output points to local storage and the path is
+        // NUL-terminated.
+        match unsafe { RegOpenKeyExW(root, path_wide.as_ptr(), 0, KEY_ALL_ACCESS | view, &mut key) }
+        {
+            ERROR_SUCCESS => {}
+            ERROR_FILE_NOT_FOUND => return Ok(false),
+            code => return Err(failed(code)),
+        }
+        let key = Key(key);
+        // SAFETY: an open key; a null subkey empties the key itself.
+        let code = unsafe { RegDeleteTreeW(key.0, null()) };
+        drop(key);
+        if code != ERROR_SUCCESS {
+            return Err(failed(code));
+        }
+        // SAFETY: a NUL-terminated path; the view matches the one opened.
+        match unsafe { RegDeleteKeyExW(root, path_wide.as_ptr(), view, 0) } {
+            ERROR_SUCCESS => Ok(true),
+            code => Err(failed(code)),
+        }
+    }
+
     /// The values a 32-bit game reads under one HKLM key; from
     /// [`Key::read_machine`].
     #[derive(Debug)]
@@ -737,6 +789,40 @@ mod windows_tests {
     }
 
     #[test]
+    fn delete_tree_removes_a_key_with_its_subkeys() {
+        let path = fresh("tree");
+        let key = Key::create(Hive::CurrentUser, &path).unwrap();
+        key.set_dword("Width", 1920).unwrap();
+        Key::create(Hive::CurrentUser, &format!(r"{path}\Sub\Deeper"))
+            .unwrap()
+            .set_string("Lang", "E")
+            .unwrap();
+        drop(key);
+        assert_eq!(delete_tree(Hive::CurrentUser, &path), Ok(true));
+        assert!(Key::open_read(Hive::CurrentUser, &path).unwrap().is_none());
+        assert_eq!(delete_tree(Hive::CurrentUser, &path), Ok(false), "gone");
+        // HKLM SOFTWARE: the 32-bit view the key was written in.
+        let machine = fresh("tree-machine").replacen("Software", "SOFTWARE", 1);
+        Key::machine(&machine).unwrap().set_dword("X", 1).unwrap();
+        assert_eq!(delete_tree(Hive::LocalMachine, &machine), Ok(true));
+        assert!(
+            Key::open_read(Hive::LocalMachine, &machine)
+                .unwrap()
+                .is_none()
+        );
+        // A hive root or a top-level key is refused, and stays.
+        for broad in ["", r"\", "Software", r"\Software\"] {
+            let error = delete_tree(Hive::CurrentUser, broad).unwrap_err();
+            assert_eq!(error.code, 87, "{broad:?}");
+        }
+        assert!(
+            Key::open_read(Hive::CurrentUser, "Software")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
     fn reading_never_creates_keys() {
         let path = r"Software\rea-launcher-sdk-test\never-created";
         assert!(Key::open_read(Hive::CurrentUser, path).unwrap().is_none());
@@ -884,6 +970,20 @@ mod tests {
             denied.to_string(),
             "Path can't be written: cannot open LocalMachine\\SOFTWARE\\X (error 5)"
         );
+    }
+
+    #[test]
+    fn only_a_key_below_the_top_level_can_be_deleted() {
+        assert_eq!(
+            deletable_path(r"\Software\rea\test\"),
+            Ok(r"Software\rea\test")
+        );
+        assert_eq!(deletable_path(r"Software\X"), Ok(r"Software\X"));
+        for broad in ["", r"\", r"\\", "Software", r"\SOFTWARE\", r"Software\\"] {
+            let error = deletable_path(broad).unwrap_err();
+            assert_eq!(error.code, 87, "{broad:?}");
+            assert!(error.what.contains("refusing"), "{}", error.what);
+        }
     }
 
     #[test]

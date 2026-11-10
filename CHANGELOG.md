@@ -18,6 +18,14 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   import; the `a_stale_binding_like_the_games_takes_the_import` test keeps
   passing without the local function.
 
+### Added
+
+- `reg::delete_tree(hive, path)` (Windows): deletes a key with its values
+  and subkeys (`RegDeleteTreeW`, in the 32-bit view for `HKLM\SOFTWARE`),
+  `Ok(false)` when absent; refuses a hive root or a top-level key
+  (`reg::deletable_path`). For registry tests and cleanup (CMR4's Wine
+  test called `RegDeleteTreeW` directly).
+
 ### Fixed
 
 - `pe::edit::add_import` / `rea_close_hook::import_into` accept an image
