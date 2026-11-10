@@ -1307,9 +1307,21 @@ pub fn photo_caption(ui: &mut Ui, strip: Rect, alt: &str, lines: &[(&str, Captio
 /// the photo, where the fade into `base` is not backing enough (no small
 /// text over a photo without a solid backing). Same accessibility.
 pub fn photo_caption_plated(ui: &mut Ui, strip: Rect, alt: &str, lines: &[(&str, CaptionStyle)]) {
-    let p = palette(ui);
     let image = ui.interact(strip, ui.scope_id().with("rea-photo"), Sense::hover());
     accessible(&image, WidgetInfo::labeled(Role::Image, true, alt), None);
+    caption_plate(ui, strip, lines);
+}
+
+/// A photo credit alone (`Photo: name, CC BY 2.0`), small on a solid plate
+/// in the strip's lower left, wrapped to its width: the
+/// [`photo_caption_plated`] look with one [`CaptionStyle::Credit`] line.
+/// Accessibility: a label with the credit's text.
+pub fn photo_credit(ui: &mut Ui, strip: Rect, credit: &str) {
+    caption_plate(ui, strip, &[(credit, CaptionStyle::Credit)]);
+}
+
+fn caption_plate(ui: &mut Ui, strip: Rect, lines: &[(&str, CaptionStyle)]) {
+    let p = palette(ui);
     if lines.is_empty() {
         return;
     }

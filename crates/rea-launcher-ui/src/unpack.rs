@@ -3,7 +3,8 @@
 //! player never faces a silent screen for minutes. CMR2005's window, with
 //! the game's title, the installer's name and the photo as parameters.
 //!
-//! The page: the launcher's photo strip on the left; the game's title, one
+//! The page: the launcher's photo strip on the left (with its credit, when
+//! given: [`Unpacking::with_credit`]); the game's title, one
 //! line saying what is happening and from which installer, the progress
 //! bar with sizes and time left, and a note that the installer is only
 //! read; "Stop unpacking" in the footer. Closing the window, Escape and
@@ -55,6 +56,9 @@ pub struct Unpacking {
     pub hero: Option<TextureHandle>,
     /// The photo strip's width (the launcher's own `PHOTO_W`).
     pub photo_width: f32,
+    /// The photo's credit (`Photo: name, CC BY 2.0`), shown small under
+    /// it when the licence asks for one ([`Unpacking::with_credit`]).
+    pub credit: Option<String>,
     /// Stop was pressed (the caller stops the unpack).
     pub cancel: bool,
 }
@@ -69,8 +73,16 @@ impl Unpacking {
             elapsed: 0.0,
             hero: None,
             photo_width: 280.0,
+            credit: None,
             cancel: false,
         }
+    }
+
+    /// Shows `credit` (`Photo: name, CC BY 2.0`) in the photo strip's
+    /// lower left, for a photo whose licence asks for one.
+    pub fn with_credit(mut self, credit: &str) -> Unpacking {
+        self.credit = Some(credit.to_owned());
+        self
     }
 
     /// The bar's fraction, never past full.
@@ -113,8 +125,8 @@ pub const STOP_DESCRIPTION: &str =
 
 /// Draws the unpack page filling `ui`. Accessibility: the title is a
 /// heading, the progress bar is named "Unpacking progress" with the sizes
-/// as its description, and the stop button says what it does. Escape
-/// stops the unpack.
+/// as its description, the stop button says what it does, and a photo
+/// credit is a label. Escape stops the unpack.
 pub fn draw_unpack(ui: &mut Ui, u: &mut Unpacking) {
     let p = theme::palette(ui.ctx());
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Escape)) {
@@ -130,6 +142,9 @@ pub fn draw_unpack(ui: &mut Ui, u: &mut Unpacking) {
         Crop::Start,
         p.base,
     );
+    if let Some(credit) = &u.credit {
+        widgets::photo_credit(ui, layout.photo, credit);
+    }
     ui.scope_builder(egui::UiBuilder::new().max_rect(layout.body), |ui| {
         let title = ui.add(
             egui::Label::new(RichText::new(&u.game).font(condensed(38.0)).color(p.ink)).wrap(),
@@ -315,6 +330,25 @@ mod tests {
         assert_eq!(
             testing::description(&stop).as_deref(),
             Some(STOP_DESCRIPTION)
+        );
+    }
+
+    #[test]
+    fn a_photo_credit_is_shown_under_the_photo_when_given() {
+        let credit = "Photo: Carolyn Williams, CC BY 2.0";
+        let u = Unpacking::new("Game", "the installer", 100).with_credit(credit);
+        assert_eq!(u.credit.as_deref(), Some(credit));
+        let ui = open(u);
+        let label = ui.get_by_role_and_label(Role::Label, credit);
+        let bounds = label.rect();
+        assert!(
+            bounds.max.x <= 280.0 + 1.0,
+            "inside the photo strip: {bounds:?}"
+        );
+        let ui = open(Unpacking::new("Game", "the installer", 100));
+        assert!(
+            ui.query_by_label_contains("Photo:").is_none(),
+            "none by default"
         );
     }
 

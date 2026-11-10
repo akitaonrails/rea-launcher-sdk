@@ -25,6 +25,10 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   `Ok(false)` when absent; refuses a hive root or a top-level key
   (`reg::deletable_path`). For registry tests and cleanup (CMR4's Wine
   test called `RegDeleteTreeW` directly).
+- Unpack window: `Unpacking::with_credit("Photo: name, CC BY 2.0")` shows a
+  photo credit small on a plate in the photo strip's lower left (a label
+  for screen readers), for a CC BY photo (CMR2005's old window had one).
+  New `widgets::photo_credit` draws it.
 - `installer::begin_again(installer, dest)`: a fresh work folder and
   innoextract's arguments even when `dest` is marked as this installer's
   unpack (see Fixed).
