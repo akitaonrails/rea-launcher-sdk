@@ -211,9 +211,6 @@ fn strip_prefix_os(value: &OsStr, prefix: &str) -> Option<OsString> {
     value.to_str()?.strip_prefix(prefix).map(OsString::from)
 }
 
-/// Turns Win32 extended-length paths (`\\?\C:\…`, `\\?\UNC\server\…`, what
-/// `canonicalize` returns on Windows) back into drive and UNC paths, so
-/// they compare with paths that were only normalised and old games accept
 /// The path to hand an old game that reads it into a fixed-size buffer of
 /// `max_chars` characters (its terminating NUL not counted): `long` when it
 /// fits, else `short` (Windows' 8.3 name for the same folder, which is also
@@ -235,6 +232,9 @@ pub fn fit_path(long: &str, short: Option<&str>, max_chars: usize) -> Option<Str
     }
 }
 
+/// Turns Win32 extended-length paths (`\\?\C:\…`, `\\?\UNC\server\…`, what
+/// `canonicalize` returns on Windows) back into drive and UNC paths, so
+/// they compare with paths that were only normalised and old games accept
 /// them. Other paths are returned unchanged.
 pub fn simplify_extended_length(path: &Path) -> PathBuf {
     if let Some(rest) = strip_prefix_os(path.as_os_str(), r"\\?\") {
