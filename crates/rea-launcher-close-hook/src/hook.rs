@@ -231,9 +231,11 @@ pub extern "system" fn rea_close_hook_attach() -> u32 {
 /// `DLL_PROCESS_ATTACH`.
 const PROCESS_ATTACH: u32 = 1;
 
-/// With `REA_CLOSE_HOOK_ATTACH=1` (the game started by a launcher that put
-/// this DLL in the game's import table), a thread waits for the game's
-/// window and installs the hook on its thread. Never blocks the loader.
+/// With `REA_REGISTRY` set, wraps the game's registry imports
+/// (`crate::registry_hook`). With `REA_CLOSE_HOOK_ATTACH=1` (the game
+/// started by a launcher that put this DLL in the game's import table), a
+/// thread waits for the game's window and installs the hook on its thread.
+/// Never blocks the loader.
 ///
 /// # Safety
 /// Called by the loader with this DLL's module handle.
@@ -243,8 +245,13 @@ pub unsafe extern "system" fn DllMain(
     reason: u32,
     _reserved: *mut std::ffi::c_void,
 ) -> i32 {
-    if reason == PROCESS_ATTACH && std::env::var(crate::ATTACH_ENV).is_ok_and(|value| value == "1")
-    {
+    if reason != PROCESS_ATTACH {
+        return 1;
+    }
+    // Before the game's code runs: its registry imports are wrapped while
+    // the loader holds them still (`REA_REGISTRY`).
+    crate::registry_hook::install();
+    if std::env::var(crate::ATTACH_ENV).is_ok_and(|value| value == "1") {
         let module = module as usize;
         // A thread created here starts once the loader is done.
         std::thread::spawn(move || attach(module as HMODULE));

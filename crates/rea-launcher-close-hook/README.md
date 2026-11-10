@@ -74,6 +74,67 @@ call `Running::close_gracefully`.
 CMR4 can move to this DLL with `class=PC_CMR4;strategy=terminate` (its own
 behaviour), dropping its `close-hook` crate.
 
+## Registry redirect (`REA_REGISTRY`)
+
+A game that reads its folders from `HKLM` can't be given them reliably by
+an unelevated launcher: its `HKLM` writes land in the HKCU VirtualStore,
+and the game sees that copy only while UAC registry virtualization is on
+for the game process. Windows doesn't promise that (off by policy, per
+key, and always off for an executable with a `requestedExecutionLevel`
+manifest, such as Sega Rally Revo's). CMR1 crashed on a player's Windows
+11 that way (rea-colin-mcrae#6). So the launcher writes the game's values
+to `HKCU`, and this DLL, loaded through the game's import table, sends
+the game's opens of its `HKLM` key there.
+
+Set the rules in `REA_REGISTRY` on the game process: `;`- or
+newline-separated `FROM -> TO` (roots `HKLM`, `HKCU` or `HKEY_…`):
+
+```text
+HKLM\SOFTWARE\Codemasters\Colin McRae Rally 04 -> HKCU\Software\Codemasters\Colin McRae Rally 04
+walk HKLM\SOFTWARE\Codemasters\Rally\1.00 -> HKCU\Software\Codemasters\Rally\1.00
+```
+
+- A plain rule matches an open of `FROM` or a key below it (whole
+  components, any case) and opens the same place under `TO`. That covers
+  games that open the full path at once: CMR4 and CMR2005
+  (`RegCreateKeyExA` with full access, then reads and writes), SRR
+  (`RegOpenKeyExA`).
+- `walk` is for games that open `SOFTWARE` from `HKLM` and go down one
+  level at a time (CMR1): ancestors of `FROM` on its path open the matching
+  ancestors of `TO`, and the hook remembers those handles; a step from one
+  of them off `FROM`'s path (`SOFTWARE` → `Microsoft`) opens the original
+  `HKLM` key. Values read directly on a walked ancestor (`HKLM\SOFTWARE`
+  itself) come from `TO`'s. Both sides of a `walk` rule have the same depth.
+
+The DLL wraps the main executable's imports of `RegOpenKey[Ex]A/W`,
+`RegCreateKey[Ex]A/W` and `RegCloseKey`, found by name, when it loads
+(before the game's code runs). Unmatched opens go to the function the
+import held, untouched; values are read and written through the handle
+the game got, so `RegSetValueEx` through a redirected handle lands in
+`HKCU`. Other DLLs in the game keep their own registry calls. Rules that
+don't parse leave the game alone: check them in the launcher.
+
+```rust
+use rea_close_hook::registry::{self, Config};
+
+let rules = Config::parse(
+    r"HKLM\SOFTWARE\Codemasters\Colin McRae Rally 04 -> HKCU\Software\Codemasters\Colin McRae Rally 04",
+)?;
+// The runtime copy imports the DLL (`import_into`, as for the close hook).
+Launch::new(&exe)
+    .env(registry::ENV, rules.env_value())
+    .env(rea_close_hook::ENV, "class=PC_CMR4;strategy=terminate")
+    .env(rea_close_hook::ATTACH_ENV, "1")
+    .run()?;
+```
+
+The launcher's side (write `HKCU`, read it back, `--check`, carry the
+game's old values over) is in `docs/playbooks/new-launcher.md`, "Registry".
+`tests/registry.rs` runs `examples/registry_game.rs` under Wine with the
+DLL in its import table: matched reads come from `HKCU`, other keys stay
+`HKLM`'s, writes land in `HKCU`, a CMR1-style walk works, and without the
+variable (or with rules that don't parse) nothing changes.
+
 ## Tests
 
 The pure parts (request matching, configuration, key names) are tested on
@@ -85,6 +146,13 @@ CMR04; headless Wine needs its null graphics driver
 the test prefix.
 
 ## Migration
+
+### v0.6.0
+
+- `REA_REGISTRY` is new and off by default: without the variable the DLL
+  does what it did. Launchers that relied on
+  `rea_launcher_win32::reg::Key::machine_or_virtual_store` (CMR2005, CMR4,
+  SRR) move to it; see the SDK CHANGELOG's v0.6.0 Migration.
 
 ### v0.4.0
 

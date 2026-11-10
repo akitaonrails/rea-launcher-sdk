@@ -24,6 +24,10 @@
 //!
 //! The launcher can check its configuration with the same parser:
 //! `rea_close_hook::Config::parse(text)` (this crate is also an rlib).
+//!
+//! The same DLL, loaded through the game's import table, can also answer
+//! the game's `HKLM` key from `HKCU` ([`registry`], `REA_REGISTRY`), so a
+//! launcher never depends on the VirtualStore.
 
 use std::fmt;
 
@@ -327,8 +331,12 @@ fn parse_strategy(value: &str) -> Result<Strategy, ConfigError> {
     }
 }
 
+pub mod registry;
+
 #[cfg(windows)]
 mod hook;
+#[cfg(windows)]
+mod registry_hook;
 
 #[cfg(test)]
 mod tests {
