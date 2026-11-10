@@ -28,10 +28,21 @@ jobs:
           persist-credentials: false
       - name: Install the 32-bit MinGW toolchain and LLD
         run: |
+          # GitHub's Azure Ubuntu mirror can crawl or stall: each apt-get gets 15
+          # minutes, and after a failure the step retries on archive.ubuntu.com.
+          apt_get() {
+            for try in 1 2 3; do
+              timeout 900 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 "$@" && return 0
+              echo "::warning::apt-get $1 failed or timed out (try $try); retrying on archive.ubuntu.com"
+              sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+              timeout 600 sudo apt-get -o Acquire::Retries=3 update || true
+            done
+            return 1
+          }
           # man-db's trigger can stall apt on GitHub's runners for many minutes.
           sudo rm -f /var/lib/man-db/auto-update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends gcc-mingw-w64-i686 lld
+          apt_get update
+          apt_get install -y --no-install-recommends gcc-mingw-w64-i686 lld
       - name: Install Rust (with the 32-bit Windows target)
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
@@ -58,10 +69,21 @@ jobs:
           persist-credentials: false
       - name: Install dash, mawk and the packaging tools
         run: |
+          # GitHub's Azure Ubuntu mirror can crawl or stall: each apt-get gets 15
+          # minutes, and after a failure the step retries on archive.ubuntu.com.
+          apt_get() {
+            for try in 1 2 3; do
+              timeout 900 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 "$@" && return 0
+              echo "::warning::apt-get $1 failed or timed out (try $try); retrying on archive.ubuntu.com"
+              sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+              timeout 600 sudo apt-get -o Acquire::Retries=3 update || true
+            done
+            return 1
+          }
           # man-db's trigger can stall apt on GitHub's runners for many minutes.
           sudo rm -f /var/lib/man-db/auto-update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends dash mawk busybox curl xz-utils zip unzip
+          apt_get update
+          apt_get install -y --no-install-recommends dash mawk busybox curl xz-utils zip unzip
       - name: Shell syntax
         run: |
           for f in packaging/*.sh packaging/tests/*.sh scripts/sdk-sync scripts/sdk-bump scripts/clean scripts/wine-test scripts/dev-check scripts/prepush-scan scripts/release scripts/tests/*.sh shell/*.sh shell/example-play shell/tests/*.sh; do
@@ -97,10 +119,21 @@ jobs:
       - name: Install MinGW, LLD and Wine (32-bit)
         run: |
           sudo dpkg --add-architecture i386
+          # GitHub's Azure Ubuntu mirror can crawl or stall: each apt-get gets 15
+          # minutes, and after a failure the step retries on archive.ubuntu.com.
+          apt_get() {
+            for try in 1 2 3; do
+              timeout 900 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 "$@" && return 0
+              echo "::warning::apt-get $1 failed or timed out (try $try); retrying on archive.ubuntu.com"
+              sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+              timeout 600 sudo apt-get -o Acquire::Retries=3 update || true
+            done
+            return 1
+          }
           # man-db's trigger can stall apt on GitHub's runners for many minutes.
           sudo rm -f /var/lib/man-db/auto-update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64
+          apt_get update
+          apt_get install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64
       - name: Install Rust (with the 32-bit Windows target)
         run: |
           rustup toolchain install stable --profile minimal
@@ -125,10 +158,21 @@ jobs:
       - name: Install MinGW, LLD and Wine (32-bit)
         run: |
           sudo dpkg --add-architecture i386
+          # GitHub's Azure Ubuntu mirror can crawl or stall: each apt-get gets 15
+          # minutes, and after a failure the step retries on archive.ubuntu.com.
+          apt_get() {
+            for try in 1 2 3; do
+              timeout 900 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 "$@" && return 0
+              echo "::warning::apt-get $1 failed or timed out (try $try); retrying on archive.ubuntu.com"
+              sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+              timeout 600 sudo apt-get -o Acquire::Retries=3 update || true
+            done
+            return 1
+          }
           # man-db's trigger can stall apt on GitHub's runners for many minutes.
           sudo rm -f /var/lib/man-db/auto-update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64 dash mawk zip unzip
+          apt_get update
+          apt_get install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64 dash mawk zip unzip
       - name: Install Rust (with the 32-bit Windows target)
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt

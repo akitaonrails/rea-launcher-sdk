@@ -7,6 +7,15 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.7.2] - 2026-11-10
+
+### Fixed
+
+- CI: 0.7.1's 10-minute cap turned the stalls into failures, because the
+  cause is GitHub's Azure Ubuntu mirror crawling and dropping downloads.
+  Each apt step now gives apt-get 15 minutes and, after a failure or
+  timeout, retries up to three times on archive.ubuntu.com.
+
 ## [0.7.1] - 2026-11-10
 
 ### Fixed
@@ -1106,6 +1115,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.7.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.5.0...v0.6.0

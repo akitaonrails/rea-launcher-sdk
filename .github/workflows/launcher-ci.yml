@@ -305,11 +305,22 @@ jobs:
           if [ "$APT_I386" = true ]; then sudo dpkg --add-architecture i386; fi
           # A Windows target always links with lld, whatever the list says.
           case $RUST_TARGET in *-windows-gnu*) APT_PACKAGES="$APT_PACKAGES lld" ;; esac
+          # GitHub's Azure Ubuntu mirror can crawl or stall: each apt-get gets 15
+          # minutes, and after a failure the step retries on archive.ubuntu.com.
+          apt_get() {
+            for try in 1 2 3; do
+              timeout 900 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 "$@" && return 0
+              echo "::warning::apt-get $1 failed or timed out (try $try); retrying on archive.ubuntu.com"
+              sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+              timeout 600 sudo apt-get -o Acquire::Retries=3 update || true
+            done
+            return 1
+          }
           # man-db's trigger can stall apt on GitHub's runners for many minutes.
           sudo rm -f /var/lib/man-db/auto-update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          apt_get update
           # shellcheck disable=SC2086
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends $APT_PACKAGES
+          apt_get install -y --no-install-recommends $APT_PACKAGES
 
       - name: Install Rust
         shell: sh
@@ -436,10 +447,21 @@ jobs:
             *) echo "::error::wine-tests needs rust-target i686-pc-windows-gnu or x86_64-pc-windows-gnu"; exit 1 ;;
           esac
           sudo dpkg --add-architecture i386
+          # GitHub's Azure Ubuntu mirror can crawl or stall: each apt-get gets 15
+          # minutes, and after a failure the step retries on archive.ubuntu.com.
+          apt_get() {
+            for try in 1 2 3; do
+              timeout 900 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 "$@" && return 0
+              echo "::warning::apt-get $1 failed or timed out (try $try); retrying on archive.ubuntu.com"
+              sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+              timeout 600 sudo apt-get -o Acquire::Retries=3 update || true
+            done
+            return 1
+          }
           # man-db's trigger can stall apt on GitHub's runners for many minutes.
           sudo rm -f /var/lib/man-db/auto-update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-          timeout 600 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends "$mingw" lld wine wine32:i386 wine64
+          apt_get update
+          apt_get install -y --no-install-recommends "$mingw" lld wine wine32:i386 wine64
 
       - name: Windows-target tests under Wine (headless)
         if: inputs.wine-tests
