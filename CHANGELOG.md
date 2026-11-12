@@ -7,7 +7,7 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
-## [0.8.0] - Unreleased
+## [0.8.0] - 2026-11-12
 
 Wheels, force feedback and native launchers, from rea-rad-mobile (a MAME
 wrapper in the style of Wanszai's arcade wrappers). Everything is new and
@@ -1169,6 +1169,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.8.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.6.0...v0.7.0
