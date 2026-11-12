@@ -5,6 +5,7 @@ members = [
     "crates/rea-launcher-ui",
     "crates/rea-launcher-close-hook",
     "crates/rea-launcher-build",
+    "crates/rea-launcher-native",
 ]
 resolver = "3"
 

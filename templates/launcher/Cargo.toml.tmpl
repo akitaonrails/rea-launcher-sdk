@@ -10,13 +10,17 @@ repository = "https://github.com/@REPO@"
 
 [workspace.dependencies]
 # The shared launcher SDK, pinned to a release tag. To move to a new release,
-# change the tag on all three lines, re-run `scripts/sdk-sync` from that SDK
+# change the tag on every line, re-run `scripts/sdk-sync` from that SDK
 # checkout and move the `@vX.Y.Z` of the workflows in .github/workflows/build.yml
 # (rea-launcher-sdk docs/playbooks/sdk-change.md).
 rea-launcher = { git = "@SDK_GIT@", tag = "@SDK_TAG@" }
 rea-launcher-win32 = { git = "@SDK_GIT@", tag = "@SDK_TAG@" }
 rea-launcher-ui = { git = "@SDK_GIT@", tag = "@SDK_TAG@" }
 rea-launcher-build = { git = "@SDK_GIT@", tag = "@SDK_TAG@" }
+# A native launcher (an emulator it bundles, a native port) adds the FFI
+# crate: a child tied to the launcher, and with `features = ["sdl"]` wheels,
+# pads and force feedback (docs/playbooks/wheels-and-ffb.md).
+# rea-launcher-native = { git = "@SDK_GIT@", tag = "@SDK_TAG@" }
 
 [profile.release]
 panic = "abort"

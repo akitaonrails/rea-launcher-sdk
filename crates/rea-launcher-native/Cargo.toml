@@ -1,0 +1,33 @@
+[package]
+name = "rea-launcher-native"
+description = "Native-launcher FFI for the rea retro-game launchers: child processes tied to the launcher, SDL wheels, pads and force feedback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rea-launcher.workspace = true
+# SDL2 joysticks, game controllers and haptics (the `sdl` feature). Links the
+# system SDL2 (libsdl2-dev on Debian/Ubuntu; SDL2.dll beside a Windows exe).
+sdl2 = { version = "0.38", optional = true }
+
+[features]
+default = ["child"]
+# `child::spawn_tied`: an emulator or game that dies with the launcher.
+child = []
+# `sdl`: devices, wheels, pads, haptics and rumble through SDL2.
+sdl = ["dep:sdl2"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+]

@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install the 32-bit MinGW toolchain and LLD
+      - name: Install the 32-bit MinGW toolchain, LLD and SDL2
         run: |
           # GitHub's Azure Ubuntu mirror can crawl or stall: each apt-get gets 15
           # minutes, and after a failure the step retries on archive.ubuntu.com.
@@ -42,18 +42,25 @@ jobs:
           # man-db's trigger can stall apt on GitHub's runners for many minutes.
           sudo rm -f /var/lib/man-db/auto-update
           apt_get update
-          apt_get install -y --no-install-recommends gcc-mingw-w64-i686 lld
-      - name: Install Rust (with the 32-bit Windows target)
+          # libsdl2-dev: rea-launcher-native's `sdl` feature links SDL2.
+          apt_get install -y --no-install-recommends gcc-mingw-w64-i686 lld libsdl2-dev
+      - name: Install Rust (with the Windows targets)
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup default stable
-          rustup target add i686-pc-windows-gnu
+          rustup target add i686-pc-windows-gnu x86_64-pc-windows-gnu
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Unit tests (host)
         run: cargo test --workspace --locked
       - name: Lint (host)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Unit tests (rea-launcher-native with SDL, headless)
+        run: cargo test -p rea-launcher-native --features sdl --locked
+      - name: Lint (rea-launcher-native with SDL)
+        run: cargo clippy -p rea-launcher-native --features sdl --all-targets --locked -- -D warnings
+      - name: Lint (rea-launcher-native, x86_64 Windows)
+        run: cargo clippy -p rea-launcher-native --all-targets --locked --target x86_64-pc-windows-gnu -- -D warnings
       - name: Lint (i686 Windows)
         run: cargo clippy --workspace --all-targets --locked --target i686-pc-windows-gnu -- -D warnings
       - name: Build (i686 Windows)
@@ -109,14 +116,14 @@ jobs:
           echo "::endgroup::"
 
   wine:
-    name: Windows-target tests under Wine (i686, headless)
+    name: Windows-target tests under Wine (i686, and x86_64 for rea-launcher-native; headless)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install MinGW, LLD and Wine (32-bit)
+      - name: Install MinGW (32- and 64-bit), LLD and Wine
         run: |
           sudo dpkg --add-architecture i386
           # GitHub's Azure Ubuntu mirror can crawl or stall: each apt-get gets 15
@@ -133,15 +140,19 @@ jobs:
           # man-db's trigger can stall apt on GitHub's runners for many minutes.
           sudo rm -f /var/lib/man-db/auto-update
           apt_get update
-          apt_get install -y --no-install-recommends gcc-mingw-w64-i686 lld wine wine32:i386 wine64
-      - name: Install Rust (with the 32-bit Windows target)
+          apt_get install -y --no-install-recommends gcc-mingw-w64-i686 gcc-mingw-w64-x86-64 lld wine wine32:i386 wine64
+      - name: Install Rust (with the Windows targets)
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          rustup target add i686-pc-windows-gnu
+          rustup target add i686-pc-windows-gnu x86_64-pc-windows-gnu
       - name: cargo test under Wine
         # No display: wine-test clears DISPLAY/WAYLAND_DISPLAY; nothing opens a window.
         run: scripts/wine-test --locked --workspace
+      - name: cargo test under Wine (x86_64, rea-launcher-native's job object)
+        # Native launchers ship x86_64 Windows builds: the kill-on-close job
+        # is tested on that target too.
+        run: scripts/wine-test --target x86_64-pc-windows-gnu --locked -p rea-launcher-native
 
   scaffold:
     # A template change can never silently break new launchers: generate one

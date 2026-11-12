@@ -162,7 +162,7 @@ if [ -n "$NO_CARGO" ]; then
 elif [ -f "$REPO/Cargo.lock" ]; then
   command -v cargo >/dev/null 2>&1 || die "cargo is not on PATH (or pass --no-cargo)"
   set --
-  for c in rea-launcher rea-launcher-win32 rea-launcher-ui; do
+  for c in rea-launcher rea-launcher-win32 rea-launcher-ui rea-launcher-build rea-launcher-native; do
     if grep -qx "name = \"$c\"" "$REPO/Cargo.lock"; then set -- "$@" -p "$c"; fi
   done
   if [ $# -gt 0 ]; then

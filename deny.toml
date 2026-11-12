@@ -1,6 +1,9 @@
 [advisories]
 
 [licenses]
+# rea-launcher-native's `sdl` feature brings the sdl2 and sdl2-sys crates
+# (MIT). They link the SDL2 C library (zlib licence), which is not a crate:
+# a launcher that ships SDL2.dll or libSDL2 lists it in THIRD_PARTY.md.
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",

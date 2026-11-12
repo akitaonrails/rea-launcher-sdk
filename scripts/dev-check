@@ -57,10 +57,22 @@ if have cargo; then
   check "cargo fmt" cargo fmt --all --check
   check "cargo test (host)" cargo test --workspace --locked
   check "cargo clippy (host)" cargo clippy --workspace --all-targets --locked -- -D warnings
+  # rea-launcher-native's `sdl` feature links the system SDL2.
+  if have pkg-config && pkg-config --exists sdl2; then
+    check "cargo test (rea-launcher-native, sdl)" cargo test -p rea-launcher-native --features sdl --locked
+    check "cargo clippy (rea-launcher-native, sdl)" cargo clippy -p rea-launcher-native --features sdl --all-targets --locked -- -D warnings
+  else
+    skip "rea-launcher-native sdl feature" "SDL2 development files not found (libsdl2-dev, SDL2-devel or sdl2)"
+  fi
   if why=$(win_target i686-pc-windows-gnu i686-w64-mingw32-gcc); then
     check "cargo clippy (i686 Windows)" cargo clippy --workspace --all-targets --locked --target i686-pc-windows-gnu -- -D warnings
   else
     skip "cargo clippy (i686 Windows)" "$why"
+  fi
+  if why=$(win_target x86_64-pc-windows-gnu x86_64-w64-mingw32-gcc); then
+    check "cargo clippy (rea-launcher-native, x86_64 Windows)" cargo clippy -p rea-launcher-native --all-targets --locked --target x86_64-pc-windows-gnu -- -D warnings
+  else
+    skip "cargo clippy (rea-launcher-native, x86_64 Windows)" "$why"
   fi
   if have cargo-deny; then check "cargo deny" cargo deny check; else skip "cargo deny" "cargo-deny not installed"; fi
   if have cargo-audit; then check "cargo audit" cargo audit; else skip "cargo audit" "cargo-audit not installed"; fi
@@ -106,6 +118,12 @@ elif why=$(win_target i686-pc-windows-gnu i686-w64-mingw32-gcc); then
   check "wine-test (i686)" sh scripts/wine-test --locked --workspace
 else
   skip "wine-test" "$why"
+fi
+# Native launchers ship x86_64 Windows builds: rea-launcher-native's job object.
+if have cargo && have wine && why=$(win_target x86_64-pc-windows-gnu x86_64-w64-mingw32-gcc); then
+  check "wine-test (x86_64, rea-launcher-native)" sh scripts/wine-test --target x86_64-pc-windows-gnu --locked -p rea-launcher-native
+elif have cargo && have wine; then
+  skip "wine-test (x86_64, rea-launcher-native)" "$why"
 fi
 
 [ -n "$LIST" ] && exit 0

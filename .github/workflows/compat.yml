@@ -134,7 +134,7 @@ jobs:
             echo
             echo '# rea-launcher-sdk canary: the SDK under test instead of the pinned tag.'
             echo '[patch."https://github.com/akitaonrails/rea-launcher-sdk"]'
-            for c in rea-launcher rea-launcher-win32 rea-launcher-ui; do
+            for c in rea-launcher rea-launcher-win32 rea-launcher-ui rea-launcher-build rea-launcher-native; do
               if [ -f "$SDK/crates/$c/Cargo.toml" ]; then echo "$c = { path = \"$SDK/crates/$c\" }"; fi
             done
           } >> "$cfg"
