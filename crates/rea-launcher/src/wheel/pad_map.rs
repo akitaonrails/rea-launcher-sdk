@@ -10,7 +10,7 @@
 
 use std::marker::PhantomData;
 
-use super::{Action, Control, Controls, Keys, RAW_MAX, shape, with_header};
+use super::{Action, Control, Controls, Keys, RAW_MAX, shape};
 use crate::{cfg, pad};
 
 /// A gamepad as SDL's game-controller layer sees it.
@@ -282,7 +282,7 @@ impl<B: Control> PadMap<B> {
     /// (or `none`) for every action (rea-rad-mobile's keys); every other
     /// line stays.
     pub fn to_cfg(&self, existing: &str) -> String {
-        let mut text = with_header(existing, "");
+        let mut text = existing.to_owned();
         for action in Action::<B>::all() {
             let keys: Vec<_> = self.inputs(action).map(PadInput::key).collect();
             let value = if keys.is_empty() {

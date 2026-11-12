@@ -549,7 +549,7 @@ impl Keys {
 
 /// `existing` with `header` as `#` comments in front when it has no lines
 /// yet, so a new file says who wrote it.
-pub(crate) fn with_header(existing: &str, header: &str) -> String {
+fn with_header(existing: &str, header: &str) -> String {
     if !existing.trim().is_empty() || header.is_empty() {
         return existing.to_owned();
     }
