@@ -7,7 +7,11 @@
 //! read the raw structs. [`pressed`] is CMR4/SCR's `pad_actions` edge
 //! detection — one step per press, never per frame held — with SCR's set
 //! of steps plus B/Back (the audit's "visible focus, left/right stepping,
-//! B/back"). The egui key mapping stays in `rea-launcher-ui`.
+//! B/back"). [`PadNav::with_repeat`] adds rea-rad-mobile's key repeat on
+//! held directions (`NavTracker`, input/mod.rs), for list menus. The egui
+//! key mapping stays in `rea-launcher-ui`.
+
+use std::time::{Duration, Instant};
 
 pub const DPAD_UP: u16 = 0x0001;
 pub const DPAD_DOWN: u16 = 0x0002;
@@ -134,17 +138,72 @@ pub fn pressed(before: u16, now: u16) -> Vec<Nav> {
     navs
 }
 
+/// The d-pad directions, which [`PadNav::with_repeat`] repeats.
+const DIRECTIONS: [(u16, Nav); 4] = [
+    (DPAD_UP, Nav::Up),
+    (DPAD_DOWN, Nav::Down),
+    (DPAD_LEFT, Nav::Left),
+    (DPAD_RIGHT, Nav::Right),
+];
+
 /// Remembers the held buttons between frames.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PadNav {
     held: u16,
+    repeat: Option<Repeat>,
+}
+
+/// Key repeat on held directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Repeat {
+    delay: Duration,
+    every: Duration,
+    /// Per [`DIRECTIONS`]: when it went down, and when it last fired.
+    since: [Option<(Instant, Instant)>; 4],
 }
 
 impl PadNav {
-    /// The steps pressed since the last call.
+    /// A held direction fires again after `delay`, then every `every`
+    /// (rea-rad-mobile's list menu: 400 ms, then every 120 ms). Buttons
+    /// still act once per press. The default ([`PadNav::default`]) never
+    /// repeats.
+    pub fn with_repeat(delay: Duration, every: Duration) -> PadNav {
+        PadNav {
+            held: 0,
+            repeat: Some(Repeat {
+                delay,
+                every,
+                since: [None; 4],
+            }),
+        }
+    }
+
+    /// The steps pressed since the last call (and, with repeat, the held
+    /// directions due again now).
     pub fn update(&mut self, now: u16) -> Vec<Nav> {
-        let navs = pressed(self.held, now);
-        self.held = now;
+        self.update_at(now, Instant::now())
+    }
+
+    /// [`PadNav::update`] at a given time.
+    pub fn update_at(&mut self, now_bits: u16, now: Instant) -> Vec<Nav> {
+        let mut navs = pressed(self.held, now_bits);
+        if let Some(r) = &mut self.repeat {
+            for ((bit, nav), slot) in DIRECTIONS.iter().zip(&mut r.since) {
+                *slot = match *slot {
+                    _ if now_bits & bit == 0 => None,
+                    None => Some((now, now)),
+                    Some((since, last))
+                        if now.saturating_duration_since(since) >= r.delay
+                            && now.saturating_duration_since(last) >= r.every =>
+                    {
+                        navs.push(*nav);
+                        Some((since, now))
+                    }
+                    held => held,
+                };
+            }
+        }
+        self.held = now_bits;
         navs
     }
 }
@@ -226,5 +285,34 @@ mod tests {
         assert_eq!(pad.update(DPAD_DOWN | DPAD_RIGHT), [Nav::Right]);
         assert_eq!(pad.update(0), []);
         assert_eq!(pad.update(DPAD_DOWN), [Nav::Down]);
+    }
+
+    #[test]
+    fn without_repeat_a_held_direction_fires_once() {
+        let mut pad = PadNav::default();
+        let t0 = Instant::now();
+        assert_eq!(pad.update_at(DPAD_DOWN, t0), [Nav::Down]);
+        assert_eq!(pad.update_at(DPAD_DOWN, t0 + Duration::from_secs(5)), []);
+    }
+
+    #[test]
+    fn nav_fires_on_press_and_repeats_directions_only() {
+        let delay = Duration::from_millis(400);
+        let every = Duration::from_millis(120);
+        let ms = Duration::from_millis;
+        let mut t = PadNav::with_repeat(delay, every);
+        let t0 = Instant::now();
+        let down = DPAD_DOWN | A;
+        assert_eq!(t.update_at(down, t0), [Nav::Down, Nav::Press]);
+        assert_eq!(t.update_at(down, t0 + ms(100)), []);
+        assert_eq!(t.update_at(down, t0 + delay), [Nav::Down]);
+        assert_eq!(t.update_at(down, t0 + delay + ms(50)), []);
+        assert_eq!(t.update_at(down, t0 + delay + every), [Nav::Down]);
+        assert_eq!(t.update_at(0, t0 + ms(2000)), []);
+        assert_eq!(t.update_at(down, t0 + ms(3000)), [Nav::Down, Nav::Press]);
+        // a second direction joining a held one starts its own wait
+        assert_eq!(t.update_at(down | DPAD_LEFT, t0 + ms(3100)), [Nav::Left]);
+        assert_eq!(t.update_at(down | DPAD_LEFT, t0 + ms(3400)), [Nav::Down]);
+        assert_eq!(t.update_at(down | DPAD_LEFT, t0 + ms(3500)), [Nav::Left]);
     }
 }
