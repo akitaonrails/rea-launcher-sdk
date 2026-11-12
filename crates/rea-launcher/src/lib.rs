@@ -12,6 +12,7 @@ pub mod cfg;
 pub mod display;
 pub mod download;
 pub mod env;
+pub mod ffb;
 pub mod fsx;
 pub mod identify;
 pub mod ini;
