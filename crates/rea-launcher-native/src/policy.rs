@@ -2,7 +2,7 @@
 //! (built without SDL): when to rescan devices, when to retry force
 //! feedback, how often to rumble, and which SDL effect an output becomes.
 //!
-//! Each fixes something rea-rad-mobile 0.5.0 got wrong (study §5): a plug
+//! Each fixes something rea-rad-mobile 0.5.0 got wrong: a plug
 //! event inside the rescan throttle was lost ([`Rescan`]); a haptic device
 //! without a constant force was reopened, and logged, every 4 ms tick
 //! ([`Retry`]); pad rumble went out every tick, an output report each on

@@ -7,6 +7,60 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.8.0] - Unreleased
+
+Wheels, force feedback and native launchers, from rea-rad-mobile (a MAME
+wrapper in the style of Wanszai's arcade wrappers). Everything is new and
+opt-in: no launcher changes behaviour until it uses it.
+
+### Added
+
+- `rea_launcher::wheel`: wheels, pedals and gamepads as racing controls,
+  generic over the launcher's buttons (`Control` trait): the known-wheel
+  table (`known`, 18 models), `classify`, `is_spare_interface`,
+  `find_aux`, `pick_wheel` (the twin HID collection that takes force
+  feedback wins), `SteeringLock` and `apply_lock`, `curve`/`shape`/
+  `linearity_label`, `PedalAxis` and `guess_pedals`, `Action<B>`,
+  `Controls`, `WheelProfile<B>` (`to_cfg`/`from_cfg` with rea-rad-mobile's
+  `wheel.ini` keys, through `cfg::set_key`, so hand edits stay), the setup
+  `wizard::Wizard<B>` and `pad_map` (`PadMap<B>`, `PadSettings<B>`,
+  `read_pad` with an `Exit` rule, `PadCapture`, `PadState::nav_bits`).
+  Two fixes over rea-rad-mobile: a game controller from a wheel vendor
+  (Logitech F310) is a pad, not a wheel, and an armed wizard pedal that
+  never comes back times out.
+- `rea_launcher::ffb`: `SyntheticFfb` with `Tuning::ARCADE` (speed-stiffened
+  centring, damper, friction, slew, wall scrape, crash jolts) from a
+  normalised `CarState`, and the menu's `test_pattern`.
+- `pad::PadNav::with_repeat(delay, every)` and `PadNav::update_at`: held
+  directions repeat, for list menus. `PadNav::default()` is unchanged.
+- `paths::data_dir`: a portable-first data folder (`--data`, beside the
+  exe when writable, `%LOCALAPPDATA%` or the XDG data folder, then temp),
+  with the environment injected.
+- `log::Log::per_run()` (the previous run kept as `<name>.old`) and
+  `Log::timestamps(true)` (`[secs.millis]`). The default log is unchanged.
+- New crate `rea-launcher-native`, for native launchers only:
+  `child::spawn_tied` (default feature `child`: `PR_SET_PDEATHSIG` on Linux,
+  a kill-on-close job object on Windows), the `sdl` feature (sdl2 0.38:
+  `Sdl`, `Devices`, `Device`, `Haptic`; a rescan throttle that keeps plug
+  events, force feedback retried every 5 s after a refusal instead of every
+  tick, rumble refreshed every 50 ms) and the pure `policy` module
+  (`effect_params`: a positive force comes "from the west").
+- Playbooks `docs/playbooks/wheels-and-ffb.md` and
+  `docs/playbooks/arcade-mame.md`; STANDARDS: "Wheels and force feedback",
+  emulator wrappers under "Native launchers" (`spawn_tied`), `unsafe`
+  allowed in `rea-launcher-native`, the arcade list menu as a second
+  window look, fake uinput devices in tests.
+- CI: `libsdl2-dev` on the Rust job, which tests and lints the `sdl`
+  feature and lints `rea-launcher-native` for x86_64 Windows; the Wine job
+  also runs its tests on x86_64. `scripts/dev-check` does the same when the
+  tools are there. The launcher template shows the native crate as a
+  commented dependency.
+
+### Changed
+
+- `sdk-bump` updates `rea-launcher-build` and `rea-launcher-native` in a
+  launcher's lockfile too, and the compat canary patches both.
+
 ## [0.7.2] - 2026-11-10
 
 ### Fixed

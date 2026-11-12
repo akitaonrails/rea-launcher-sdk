@@ -213,12 +213,16 @@ that: if a step could be done by the launcher, the launcher does it.
   (`docs/playbooks/new-launcher.md`, "Registry"; `launcher-check` rule
   `virtual-store`).
 - **Native launchers** (the game runs natively or in an emulator we ship,
-  like Screamer in DOSBox) skip the Wine-only rules: Proton, DLL overrides,
-  winebus, `wine-test` for i686. They ship native Windows and Linux builds,
-  run their Windows-target tests with `scripts/wine-test --target
-  x86_64-pc-windows-gnu`, and build the emulator from a pinned commit with a
-  corresponding-source archive for GPL code. A game with a native Linux
-  port (DiRT Rally) follows the native-Linux recipe in
+  like Screamer in DOSBox and Rad Mobile in MAME) skip the Wine-only rules:
+  Proton, DLL overrides, winebus, `wine-test` for i686. They ship native
+  Windows and Linux builds, run their Windows-target tests with
+  `scripts/wine-test --target x86_64-pc-windows-gnu`, and build the
+  emulator from a pinned commit, patched by one regenerated patch file,
+  with a corresponding-source archive for GPL code. The emulator dies with
+  the launcher: start it with `rea_launcher_native::child::spawn_tied`
+  (Screamer doesn't yet; a killed launcher orphans DOSBox). An arcade
+  game on MAME follows `docs/playbooks/arcade-mame.md`. A game with a
+  native Linux port (DiRT Rally) follows the native-Linux recipe in
   `docs/playbooks/new-launcher.md` ("Patterns").
 - **Old-game trouble spots** to check for every game (skip what doesn't
   apply to its runtime, and say so): timers and frame
@@ -303,10 +307,13 @@ that: if a step could be done by the launcher, the launcher does it.
 ## Code
 
 - Rust for our code (see "Rust first"); edition 2024. `unsafe` and Win32 FFI only inside
-  `rea-launcher-win32`, one narrow `win32.rs` module, or a small hook crate
-  at an FFI boundary the launcher doesn't own: a DLL injected into the game
-  (CMR4's close hook) or a library linked into a third-party engine
-  (Screamer's hooks in DOSBox).
+  `rea-launcher-win32`, `rea-launcher-native` (SDL, process ties, later
+  the MAME bridge's mmap), one narrow `win32.rs` module, or a small hook
+  crate at an FFI boundary the launcher doesn't own: a DLL injected into
+  the game (CMR4's close hook) or a library linked into a third-party
+  engine (Screamer's hooks in DOSBox). In `rea-launcher-native` every
+  `unsafe` block sits inside a safe type that is tested on Linux and under
+  `scripts/wine-test --target x86_64-pc-windows-gnu`.
 - General solutions first: find the one place a whole class of cases goes
   through and fix it there.
 - Use the SDK for everything it covers. Never copy SDK code into a launcher;
@@ -353,6 +360,15 @@ these rules are firm:
   `THIRD_PARTY.md` (file, author, licence, source URL), and show the credit
   in the window when the licence asks for attribution. Resize to what the
   window needs (JPEG, a few hundred KB at most).
+- **Two sanctioned looks.** The SDK window (`rea-launcher-ui`) for most
+  launchers, and the **arcade list menu** of an emulator wrapper
+  (rea-rad-mobile, after Wanszai's front ends): full screen, pad first,
+  one list of rows with `◀ value ▶`. The rules below apply to both
+  (contrast test, 13/11 pt, a focus ring, mouse, keyboard and pad). Until
+  the list menu exists in `rea-launcher-ui`, its launcher meets the
+  `egui_kittest` rule by testing the menu model on the host (its items,
+  actions and values, option by option); that is a waiver the owner
+  records in `.rea-check-waivers`, never a silent gap.
 - **Accessibility comes first.**
   - Text and controls meet WCAG AA contrast; each launcher keeps a test of
     its palette (`Palette::contrast_problems`).
@@ -394,6 +410,25 @@ these rules are firm:
   `--help`, every flag, bad values and their messages. When the window
   code only builds for Windows, the GUI tests run under `scripts/wine-test`
   (the harness works there, headless).
+
+## Wheels and force feedback
+
+Every racing launcher, by who owns the wheel:
+
+- **The launcher owns it** (an emulator wrapper feeding the emulator's
+  input): follow `docs/playbooks/wheels-and-ffb.md` with the SDK's
+  `rea_launcher::wheel`, `rea_launcher::ffb` and
+  `rea_launcher_native::sdl`. The known-wheel table, a steering lock that
+  defaults to the original hardware's (270° for an arcade cabinet), pedals
+  found by where they rest plus a setup wizard, a test that checks the
+  *direction* of the force ("from the west"), the keepalive, a pad
+  fallback while the wheel is unplugged, and an input monitor (steering,
+  pedals, force) in the window.
+- **The game owns it** (a PC game reading DirectInput or XInput under
+  Wine): document the wheel status in `docs/RUNTIME_NOTES.md` (models
+  tested, force feedback under Wine/Proton, which winebus path), and have
+  the launcher's device diagnostics flag twin HID collections and spare
+  interfaces.
 
 ## Clean exit, single instance
 
@@ -534,7 +569,9 @@ What this family learned, bug by bug:
   error offsets; old formats from every earlier release.
 - **Fakes at the boundary, not mocks of our own code:** a fake HTTP server for
   downloads, fake `wine`/`gamescope`/`cargo` on `PATH` for shell tests,
-  synthetic PE/LE images for patches, temp folders for file sync.
+  synthetic PE/LE images for patches, temp folders for file sync, fake
+  uinput devices (a force-feedback wheel that logs every effect, a pad)
+  for input code, and synthetic device states for the pure wheel logic.
 - **Shell is tested too**, under dash and busybox as well as bash, with
   globbing and quoting cases (`*` in a value, an apostrophe in a path).
 - **Measure, then aim.** Run `cargo llvm-cov` now and then to find untested

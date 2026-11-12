@@ -1,6 +1,6 @@
 //! Wheels, pedals and pads through SDL2's joystick, game-controller and
 //! haptic APIs (DirectInput/XInput on Windows, evdev on Linux). From
-//! rea-rad-mobile `input/{sdl,haptic}.rs`, with three fixes (study §5):
+//! rea-rad-mobile `input/{sdl,haptic}.rs`, with three fixes:
 //! a pad from a wheel vendor keeps its pad view ([`wheel::classify`]), a
 //! plug event inside the rescan throttle is not lost, and a device that
 //! refuses force feedback is not reopened every tick.

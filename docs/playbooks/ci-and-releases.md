@@ -106,6 +106,12 @@ A launcher for a game's native Linux build (DiRT Rally) calls
 
 and the `release` job `needs: [linux-packages, windows-tests]`.
 
+A launcher on `rea-launcher-native` with the `sdl` feature (wheels, pads,
+force feedback) needs SDL2's development files on the Linux runner:
+`apt-packages: libsdl2-dev`. Its Windows-target tests run on
+`rust-target: x86_64-pc-windows-gnu` (a native launcher ships x86_64
+Windows builds); the `child` feature's job object is tested there.
+
 ## 2. What the package must contain
 
 `packaging/package.sh` assembles the zip folder: the launcher exe, the

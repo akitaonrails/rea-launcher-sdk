@@ -91,9 +91,12 @@ this repository, not the launcher's (`CONTRIBUTING.md`).
 
 | Path | What | Used as |
 |---|---|---|
-| `crates/rea-launcher` | Portable core: runtime folder sync, atomic installs, save mirroring, component ownership ledger, `launcher.cfg` and INI editing, edition hashing, byte patching, Wine override merging, display and pad logic, logging | Cargo git dependency |
+| `crates/rea-launcher` | Portable core: runtime folder sync, atomic installs, save mirroring, component ownership ledger, `launcher.cfg` and INI editing, edition hashing, byte patching, Wine override merging, display and pad logic, wheels and synthetic force feedback, logging | Cargo git dependency |
 | `crates/rea-launcher-win32` | Windows helpers: registry, process launch with Wine overrides, XInput, monitors and DPI, dialogs, GPU preference | Cargo git dependency |
 | `crates/rea-launcher-ui` | Settings window: theme and fonts, widgets, Wine-safe window sizing, gamepad navigation | Cargo git dependency |
+| `crates/rea-launcher-native` | Native launchers only (emulator wrappers, native ports): a child process tied to the launcher, and with the `sdl` feature wheels, pads, force feedback and rumble through SDL2 | Cargo git dependency |
+| `crates/rea-launcher-build` | `build.rs` helper: version information, an icon and a manifest in the exe or a hook DLL | Cargo git build dependency |
+| `crates/rea-launcher-close-hook` | A DLL that makes an old game honour Alt+F4 and window-close requests, imported into the runtime copy of the game | built by the launcher's release |
 | `shell/rea-play.sh` | Linux helper library: session lock and stop, GPU env, gamescope, Wine prefix setup | vendored as `sdk/rea-play.sh` |
 | `packaging/` | Pin files, AppImage builder (portable Wine or native), package allowlist check, release notes | vendored under `sdk/packaging/` |
 | `.github/workflows/launcher-*.yml` | Reusable CI and release workflows | `uses:` by tag |

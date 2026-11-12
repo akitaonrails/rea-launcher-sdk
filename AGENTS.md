@@ -15,6 +15,8 @@ every launcher built on it.
 | Pin, bundle, download and configure community fixes and packs | `docs/playbooks/community-components.md` |
 | Unpack a game's installer (GOG, repacks) instead of asking the player to install it | `docs/playbooks/installers.md` |
 | Reverse engineer, test and apply a binary patch | `docs/playbooks/binary-patching.md` |
+| Read wheels, pedals and pads, or make force feedback (a launcher that owns the input) | `docs/playbooks/wheels-and-ffb.md` |
+| Run an arcade game on a bundled MAME | `docs/playbooks/arcade-mame.md` |
 | Share a fix we found with PCGamingWiki / upstream | `docs/playbooks/contribute-back.md` |
 | Understand what lives here and why | `docs/DESIGN.md`, `docs/AUDIT.md`, each crate's README |
 
@@ -66,7 +68,9 @@ skipping the check silently.
 - `scripts/dev-check` runs every check (it skips tools that are missing,
   with a warning). Everything must pass before a commit.
 - Pure logic goes in `crates/rea-launcher` with host tests; `unsafe`/FFI only
-  in `crates/rea-launcher-win32`; egui in `crates/rea-launcher-ui`.
+  in `crates/rea-launcher-win32` (Wine launchers) or
+  `crates/rea-launcher-native` (native launchers: SDL, tied children);
+  egui in `crates/rea-launcher-ui`.
 - A change that alters a launcher's behaviour is opt-in, or listed in the
   crate README's MIGRATION section and the CHANGELOG.
 - Conventional Commits. Issues and PRs about shared code belong here, not in

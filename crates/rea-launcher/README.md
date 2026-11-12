@@ -12,7 +12,7 @@ made that copy the reference.
 | Module | What it does |
 |---|---|
 | `fsx` | Whole-file swaps (temp + rename) that never write through a hard link; stale temp cleanup |
-| `paths` | `resolve`, the runtime/game overlap check, `native`, `\\?\` stripping |
+| `paths` | `resolve`, the runtime/game overlap check, `native`, `\\?\` stripping; `data_dir`, a portable-first data folder |
 | `runtime` | The private runtime copy: list, plan, sync (with progress), restore, manifest |
 | `saves` | Save mirroring by recorded state, for one file or a folder |
 | `ledger` | SHA-256 record of the components the launcher installed |
@@ -26,8 +26,10 @@ made that copy the reference.
 | `patch` | Declarative patch sets (`PatchSet`, `apply_sets`, `describe`), byte sites, signatures, caves, result hashes |
 | `pe` | PE32/PE32+ headers and sections, VA ↔ file offset |
 | `display` | Monitor choice, landscape sizes, Steam Deck, the largest 16:9 size |
-| `pad` | XInput state parsing and settings-window navigation by edges |
-| `log` | `launcher.log` with a size cap |
+| `pad` | XInput state parsing and settings-window navigation by edges; `PadNav::with_repeat` for list menus |
+| `wheel` | Wheels, pedals and pads as racing controls: known wheels, `classify`, spare interfaces, `pick_wheel`, steering lock, curves, pedals, `WheelProfile<B>` (`wheel.ini`), the setup `wizard`, `pad_map` (docs/playbooks/wheels-and-ffb.md) |
+| `ffb` | Synthetic force feedback from a normalised `CarState` (`SyntheticFfb`, `Tuning::ARCADE`), the menu's `test_pattern` |
+| `log` | `launcher.log` with a size cap; opt-in `per_run` (previous run kept as `.old`) and `timestamps` |
 | `args` | Windows command-line quoting |
 | `instance` | One launcher at a time without the play helper (native Linux): `instance::single`, a `flock` |
 | `testing` | Golden snapshots for launcher tests: `snapshot!`, version as `<version>`, CRLF-proof |
@@ -368,6 +370,40 @@ exit code, `instance::ALREADY_RUNNING` (5), which `rea-play.sh` reads as
 `$XDG_RUNTIME_DIR/rea-launcher-<name>.lock`; the kernel drops it when the
 process ends, so a killed launcher leaves no stale lock.
 
+### wheel and ffb (a launcher that owns the input)
+
+The launcher's buttons implement `wheel::Control` (key, label, bit); the
+module's own docs have a full example. A frame of an emulator wrapper:
+
+```rust,no_run
+use rea_launcher::ffb::{CarState, FfbSettings, SyntheticFfb, Tuning};
+use rea_launcher::wheel::{self, Control, DeviceState, WheelProfile, WheelSettings};
+# fn frame<B: Control>(profile: &WheelProfile<B>, wheel: &DeviceState, pedals: Option<&DeviceState>,
+#                      pads: &[(wheel::PadSettings<B>, wheel::PadState)], car: Option<CarState>,
+#                      ffb: &mut SyntheticFfb) {
+let settings = WheelSettings::default(); // 270° lock
+let mut controls = profile.read(&settings, wheel, pedals);
+for (pad_settings, pad) in pads {
+    controls = controls.merge(wheel::read_pad(pad_settings, pad, None));
+}
+// …hand `controls` to the emulator, then the force for this frame:
+let force = ffb.update(0.004, controls.steer, car, &FfbSettings::default());
+# let _ = force; }
+# let _ = SyntheticFfb::new(Tuning::ARCADE);
+```
+
+### data_dir and a per-run log
+
+```rust,no_run
+use rea_launcher::{log::Log, paths};
+# let exe_dir = std::path::Path::new(".");
+let names = paths::DataDir { portable: "data", windows: "RadMobile", xdg: "rad-mobile" };
+let data = paths::data_dir(exe_dir, None, names, &|k| std::env::var_os(k));
+// The first line is always this run's; the previous run is launcher.log.old.
+let log = Log::new(data.join("launcher.log")).per_run().timestamps(true);
+log.line(concat!("Rad Mobile launcher ", env!("CARGO_PKG_VERSION")));
+```
+
 ## One table for the window and the command line
 
 The rule: every window option has a flag and a `launcher.cfg` key, every
@@ -667,6 +703,35 @@ Behaviour not listed here is the same.
   UTF-8 file is now edited as UTF-8 text (SRR always used Latin-1 per
   byte, which wrote UTF-8 names back unchanged too, but would have
   written a new non-ASCII value as Latin-1 into a UTF-8 file).
+
+### rea-rad-mobile (v0.8.0)
+
+What changes when it moves its own copies onto the SDK:
+
+- `wheel/*`, `pad_map.rs`, the generic half of `ffb.rs`, `NavTracker`,
+  `is_spare_interface`, `find_aux` → `rea_launcher::wheel`, `::ffb`,
+  `pad::PadNav::with_repeat`. `Button` implements `wheel::Control` with
+  `bit()` in today's order (the bridge's and MAME's button order: never
+  renumber it). `Cabinet` → `wheel::Controls` (`to_frame` stays local).
+  `WheelProfile::guess(id, initial, Some((Light, Wiper)))`; the wizard
+  takes the step list; `PadMap::with(…)` is the default layout;
+  `read_pad(…, Some(Exit { button: Exit, suppress: &[Start, Coin] }))`.
+- `wheel.ini` and the `pad_*` keys of `settings.ini`: the same keys, read
+  in any case and in the old `key=value` form; written as `key = value`
+  through `cfg::set_key`, keeping the player's comments (it rewrote the
+  whole file). Keys the profile no longer has are commented out.
+- `FfbEngine` → `SyntheticFfb::new(Tuning::ARCADE)`, fed
+  `CarState { racing: t.playing, speed: t.speed / 430.0, contact:
+  t.touching() }`; the hit threshold is the same (600/430 top speeds/s).
+- Behaviour that changes for players: a Logitech or Thrustmaster pad is a
+  pad (it was a wheel); an armed wizard pedal times out 10 s after it
+  armed; the menu's test pattern uses at least 25 % and at most 100 %
+  strength.
+- `paths.rs`'s data folder → `paths::data_dir` (same order; an empty
+  `XDG_DATA_HOME`/`LOCALAPPDATA` counts as unset). `log.rs` →
+  `Log::new(..).per_run().timestamps(true)`: `info` lines go to the file
+  only (it printed every line to stderr too), and lines get `info:`/
+  `warning:` prefixes from `info`/`warn`.
 
 ### OR
 

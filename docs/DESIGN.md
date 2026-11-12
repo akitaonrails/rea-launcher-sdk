@@ -20,6 +20,12 @@ About 2,000 lines per launcher are shared. Every bug found in the audit
 (`AUDIT.md`) existed in one or more copies and was already fixed in another —
 the shared code is where the drift costs the most.
 
+rea-rad-mobile (a MAME wrapper) added the wheel and force-feedback layer
+in v0.8.0: about 2,000 lines of pure, tested code with Wanszai-derived
+hardware knowledge, generic once the game's buttons became a trait. Its
+MAME pieces (bridge, romset finder, command line) wait for a second MAME
+launcher; `docs/playbooks/arcade-mame.md` records them meanwhile.
+
 What we do **not** extract: game knowledge. Edition tables, patch sites,
 config generators for SilentPatch/Tweaks/dgVoodoo/DOSBox, profile byte
 layouts, which files a game writes, its look values, its tabs. The SDK takes
@@ -32,6 +38,7 @@ crates/
   rea-launcher        portable, host-tested core (no GUI, no Win32)
   rea-launcher-win32  Windows-only helpers (compiles to nothing elsewhere)
   rea-launcher-ui     eframe/egui theme, fonts, widgets, window shell
+  rea-launcher-native native launchers only: tied children, SDL wheels/pads/FFB
 shell/
   rea-play.sh         POSIX library sourced by each linux/<x>-play
   tests/              shell tests for the library
@@ -63,7 +70,14 @@ templates/            skeleton for a new launcher
 ## Rules for SDK code
 
 - Pure logic lives in `rea-launcher` and is unit-tested on the host.
-- `unsafe` and FFI live only in `rea-launcher-win32`.
+- `unsafe` and FFI live only in `rea-launcher-win32` (what the Wine-run
+  launchers need) and `rea-launcher-native` (what only native launchers
+  need: a child tied to the launcher, SDL devices and haptics). The second
+  is a separate crate with features, not a feature of `rea-launcher-ui`:
+  an i686 Wine launcher never owns a wheel, and `sdl2-sys` in every
+  launcher's lockfile and `cargo deny` would cost them for nothing. The
+  pure halves (wheel maths, the setup wizard, synthetic force feedback)
+  stay in `rea-launcher`, where every launcher can test against them.
 - Never write through a hard link; every install is a whole-file swap
   (temp file + rename).
 - A setting the launcher does not own is never rewritten. Unset means "keep
