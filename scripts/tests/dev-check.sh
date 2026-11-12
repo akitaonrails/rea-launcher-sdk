@@ -23,7 +23,7 @@ printf '#!%s\nexit 0\n' "$SH" > "$T/min/cargo"
 chmod +x "$T/min/cargo"
 # Full PATH: plus every optional tool, stubbed.
 cp -P "$T/min/"* "$T/full/"
-for u in dash wine i686-w64-mingw32-gcc ld.lld cargo-deny cargo-audit shellcheck actionlint gitleaks; do
+for u in dash wine i686-w64-mingw32-gcc x86_64-w64-mingw32-gcc ld.lld cargo-deny cargo-audit shellcheck actionlint gitleaks pkg-config; do
   printf '#!%s\nexit 0\n' "$SH" > "$T/full/$u"; chmod +x "$T/full/$u"
 done
 
@@ -31,6 +31,8 @@ PATH=$T/min "$SH" "$F/scripts/dev-check" --list >"$T/out" 2>"$T/err"
 has_line "runs fmt" "RUN  cargo fmt" "$T/out"
 has_line "runs the shell suites" "RUN  shell suites (shell/tests/run-all.sh)" "$T/out"
 has_line "skips i686 clippy without MinGW" "SKIP cargo clippy (i686 Windows): i686-w64-mingw32-gcc missing" "$T/err"
+has_line "skips x86_64 clippy without MinGW" "SKIP cargo clippy (rea-launcher-native, x86_64 Windows): x86_64-w64-mingw32-gcc missing" "$T/err"
+has_line "skips the sdl feature without SDL2" "SKIP rea-launcher-native sdl feature: SDL2 development files not found (libsdl2-dev, SDL2-devel or sdl2)" "$T/err"
 has_line "skips dash runs without dash" "SKIP packaging and scripts tests (dash): dash not installed" "$T/err"
 has_line "skips wine-test without Wine" "SKIP wine-test: wine not installed" "$T/err"
 has_line "skips actionlint" "SKIP actionlint: actionlint not installed" "$T/err"
@@ -38,7 +40,8 @@ has_line "skips cargo deny" "SKIP cargo deny: cargo-deny not installed" "$T/err"
 has_line "skips the secret scan without gitleaks" "SKIP secret scan: gitleaks not installed (CI runs the pinned one)" "$T/err"
 
 PATH=$T/full "$SH" "$F/scripts/dev-check" --list >"$T/out" 2>"$T/err"
-for c in "secret scan (prepush-scan)" "cargo clippy (i686 Windows)" "cargo deny" "packaging and scripts tests (dash)" "shellcheck" "actionlint" "wine-test (i686)"; do
+for c in "secret scan (prepush-scan)" "cargo clippy (i686 Windows)" "cargo deny" "packaging and scripts tests (dash)" "shellcheck" "actionlint" "wine-test (i686)" \
+  "cargo test (rea-launcher-native, sdl)" "cargo clippy (rea-launcher-native, sdl)" "cargo clippy (rea-launcher-native, x86_64 Windows)" "wine-test (x86_64, rea-launcher-native)"; do
   has_line "runs $c when its tools exist" "RUN  $c" "$T/out"
 done
 [ ! -s "$T/err" ] && ok "nothing skipped with every tool" || bad "nothing skipped with every tool: $(cat "$T/err")"
