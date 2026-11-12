@@ -7,7 +7,9 @@
 //! RAM disks and `subst` drives (CMR3 3d63927). `check_separate` adds CMR3's
 //! second, lexical comparison as written: when only one side canonicalises,
 //! the two spellings differ (`\\?\` prefixes, resolved aliases).
-//! `simplify_extended_length` is OR's/CMR4's.
+//! `simplify_extended_length` is OR's/CMR4's. [`data_dir`] is
+//! rea-rad-mobile's portable-first data folder (`paths.rs`), with the
+//! environment passed in so its fallback order is tested.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -248,9 +250,151 @@ pub fn simplify_extended_length(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// The names [`data_dir`] uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataDir<'a> {
+    /// Beside the executable: `data`.
+    pub portable: &'a str,
+    /// Under `%LOCALAPPDATA%`: `RadMobile`.
+    pub windows: &'a str,
+    /// Under the XDG data folder: `rad-mobile`.
+    pub xdg: &'a str,
+}
+
+/// Where a portable-first launcher keeps its settings and logs, as an
+/// absolute path:
+///
+/// 1. `override_` (a `--data` flag), as given;
+/// 2. `exe_dir/portable` when that folder can be created and written (a
+///    probe file `.write-test` is written and removed), as Wanszai's builds
+///    keep everything beside the executable;
+/// 3. `%LOCALAPPDATA%\windows` on Windows; `$XDG_DATA_HOME/xdg`, else
+///    `$HOME/.local/share/xdg` elsewhere;
+/// 4. the temp folder joined with that name.
+///
+/// `env` reads the environment (`|k| std::env::var_os(k)`); empty values
+/// count as unset.
+pub fn data_dir(
+    exe_dir: &Path,
+    override_: Option<PathBuf>,
+    names: DataDir,
+    env: &dyn Fn(&str) -> Option<OsString>,
+) -> PathBuf {
+    data_dir_on(cfg!(windows), exe_dir, override_, names, env)
+}
+
+fn data_dir_on(
+    windows: bool,
+    exe_dir: &Path,
+    override_: Option<PathBuf>,
+    names: DataDir,
+    env: &dyn Fn(&str) -> Option<OsString>,
+) -> PathBuf {
+    let var = |k: &str| env(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let data = override_.unwrap_or_else(|| {
+        let portable = exe_dir.join(names.portable);
+        if is_writable(&portable) {
+            return portable;
+        }
+        if windows {
+            var("LOCALAPPDATA")
+                .unwrap_or_else(std::env::temp_dir)
+                .join(names.windows)
+        } else {
+            var("XDG_DATA_HOME")
+                .or_else(|| var("HOME").map(|h| h.join(".local").join("share")))
+                .unwrap_or_else(std::env::temp_dir)
+                .join(names.xdg)
+        }
+    });
+    std::path::absolute(&data).unwrap_or(data)
+}
+
+/// The folder exists or was created, and a file can be written in it.
+fn is_writable(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(".write-test");
+    let ok = crate::fsx::put_in_place(&probe, |tmp| std::fs::write(tmp, b"")).is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const NAMES: DataDir = DataDir {
+        portable: "data",
+        windows: "RadMobile",
+        xdg: "rad-mobile",
+    };
+
+    fn env_of(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+        let vars: Vec<(String, OsString)> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), OsString::from(v)))
+            .collect();
+        move |k| {
+            vars.iter()
+                .find(|(name, _)| name == k)
+                .map(|(_, v)| v.clone())
+        }
+    }
+
+    #[test]
+    fn the_data_folder_is_portable_first_then_the_users() {
+        let dir = test_dir("data-dir");
+        let exe = dir.join("exe");
+        let env = env_of(&[
+            ("LOCALAPPDATA", "/l/AppData/Local"),
+            ("XDG_DATA_HOME", "/x/share"),
+            ("HOME", "/h"),
+        ]);
+        for windows in [false, true] {
+            // a --data folder wins, made absolute
+            let given = data_dir_on(windows, &exe, Some("rel/data".into()), NAMES, &env);
+            assert!(given.is_absolute() && given.ends_with("rel/data"));
+            // beside the executable when it can be written, without leftovers
+            let portable = data_dir_on(windows, &exe, None, NAMES, &env);
+            assert_eq!(portable, exe.join("data"));
+            assert_eq!(std::fs::read_dir(&portable).unwrap().count(), 0);
+        }
+        // a portable folder that can't be made: the user's data folder
+        let blocked = dir.join("blocked");
+        std::fs::create_dir_all(&blocked).unwrap();
+        std::fs::write(blocked.join("data"), "a file, not a folder").unwrap();
+        let on = |windows, vars: &[(&str, &str)]| {
+            data_dir_on(windows, &blocked, None, NAMES, &env_of(vars))
+        };
+        // (absolute: under Windows a rooted path gets the current drive)
+        let abs = |p: &str| std::path::absolute(p).unwrap();
+        assert_eq!(
+            on(true, &[("LOCALAPPDATA", "/l/Local")]),
+            abs("/l/Local/RadMobile")
+        );
+        assert_eq!(
+            on(false, &[("XDG_DATA_HOME", "/x/share"), ("HOME", "/h")]),
+            abs("/x/share/rad-mobile")
+        );
+        assert_eq!(
+            on(false, &[("XDG_DATA_HOME", ""), ("HOME", "/h")]),
+            abs("/h/.local/share/rad-mobile")
+        );
+        let temp = std::path::absolute(std::env::temp_dir()).unwrap();
+        assert_eq!(on(false, &[]), temp.join("rad-mobile"));
+        assert_eq!(on(true, &[("HOME", "/h")]), temp.join("RadMobile"));
+        // the platform's own choice
+        let expected = if cfg!(windows) {
+            "/l/Local/RadMobile"
+        } else {
+            "/x/share/rad-mobile"
+        };
+        let env = env_of(&[("LOCALAPPDATA", "/l/Local"), ("XDG_DATA_HOME", "/x/share")]);
+        assert_eq!(data_dir(&blocked, None, NAMES, &env), abs(expected));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn a_path_is_fitted_to_a_games_buffer() {
