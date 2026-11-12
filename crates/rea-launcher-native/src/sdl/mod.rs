@@ -443,10 +443,16 @@ impl<'sdl> Devices<'sdl> {
 
     /// Drives the force feedback of the wheel at `index`, opening it the
     /// first time (or after a rescan, or [`HapticPolicy::retry_after`]
-    /// after it refused). Returns a line for the log when it opened or
-    /// was refused.
+    /// after it refused). Returns a line for the log when it opened, or
+    /// the first time a device refused; a device without force feedback
+    /// is left alone, without a line.
     pub fn force_feedback(&mut self, index: usize, out: &FfbOutput) -> Option<String> {
         let device = self.list.get(index)?;
+        if !device.haptic {
+            // Nothing to open: no note, no retries (a wheel without a motor).
+            self.haptic = None;
+            return None;
+        }
         let mut note = None;
         if self
             .haptic
@@ -472,8 +478,9 @@ impl<'sdl> Devices<'sdl> {
                     self.haptic = Some(h);
                 }
                 Err(e) => {
-                    self.retry.failed(device.instance, now);
-                    return Some(format!("ffb: \"{}\": {e}", device.id.name));
+                    // Said once per device; the retries stay quiet.
+                    let news = self.retry.failed(device.instance, now);
+                    return news.then(|| format!("ffb: \"{}\": {e}", device.id.name));
                 }
             }
         }

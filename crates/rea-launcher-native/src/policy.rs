@@ -100,8 +100,12 @@ impl Retry {
         }
     }
 
-    pub fn failed(&mut self, instance: i32, now: Instant) {
+    /// Records a refusal; true when it is news (not a retry of the same
+    /// device), so a launcher logs it once instead of every retry.
+    pub fn failed(&mut self, instance: i32, now: Instant) -> bool {
+        let news = self.failed.is_none_or(|(i, _)| i != instance);
         self.failed = Some((instance, now));
+        news
     }
 
     /// Forget the failure (it opened, or the devices changed).
@@ -233,10 +237,12 @@ mod tests {
         let after = HapticPolicy::default().retry_after;
         let mut retry = Retry::default();
         assert!(retry.may_try(7, t0, after));
-        retry.failed(7, t0);
+        assert!(retry.failed(7, t0), "the first refusal is news");
         assert!(!retry.may_try(7, t0 + ms(4), after), "not every tick");
+        assert!(!retry.failed(7, t0 + after), "a retry's refusal is not");
         assert!(retry.may_try(8, t0 + ms(4), after), "another device may");
-        assert!(retry.may_try(7, t0 + after, after));
+        assert!(retry.may_try(7, t0 + after + after, after));
+        assert!(retry.failed(8, t0 + after), "another device's is");
         retry.clear();
         assert!(retry.may_try(7, t0 + ms(8), after));
     }

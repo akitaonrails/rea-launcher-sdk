@@ -7,6 +7,16 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.8.2] - 2026-11-12
+
+### Fixed
+
+- `rea_launcher_native::sdl::Devices::force_feedback` no longer tries,
+  and logs a refusal for, a wheel without force feedback every 5 seconds
+  (seen in rea-rad-mobile's review: about 720 log lines an hour). A
+  device that refuses is still retried, but reported once.
+  `policy::Retry::failed` now returns whether the refusal is news.
+
 ## [0.8.1] - 2026-11-12
 
 Rust 1.100 (on GitHub's runners since 2026-11-12) moved Cargo's test
@@ -1193,6 +1203,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.8.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.1...v0.7.2
