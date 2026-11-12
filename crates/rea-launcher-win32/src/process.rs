@@ -474,9 +474,7 @@ mod tests {
 
     fn child(mode: &str) -> Running {
         headless_wine_windows();
-        let exe = std::env::current_exe().unwrap();
-        let examples = exe.parent().unwrap().parent().unwrap().join("examples");
-        let running = Launch::new(examples.join("close_child.exe"))
+        let running = Launch::new(rea_launcher::testing::example("close_child.exe"))
             .arg(mode)
             .spawn()
             .unwrap();

@@ -16,8 +16,9 @@ const ALT_DOWN: isize = 1 << 29;
 
 /// `target/<triple>/debug`: the test runs from its `deps` folder.
 fn build_dir() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    exe.parent().unwrap().parent().unwrap().to_path_buf()
+    // The profile folder: the parent of `examples` (either Cargo layout).
+    let example = rea_launcher::testing::example("hooked_game.exe");
+    example.parent().unwrap().parent().unwrap().to_path_buf()
 }
 
 /// Headless Wine creates windows only through its null graphics driver.
@@ -63,16 +64,7 @@ fn game_with(
     let window = window.expect("the game's window");
     // Cargo leaves the test build's DLL next to the test (`deps`), a plain
     // build's in `debug`.
-    let deps = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let dll = [deps, dir]
-        .into_iter()
-        .map(|d| d.join("rea_close_hook.dll"))
-        .find(|p| p.exists())
-        .expect("rea_close_hook.dll built");
+    let dll = rea_launcher::testing::built(rea_close_hook::DLL);
     let hook = game.message_hook(&dll, c"close_hook").unwrap();
     (game, window, hook)
 }

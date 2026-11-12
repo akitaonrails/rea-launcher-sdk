@@ -13,8 +13,9 @@ use rea_launcher_win32::reg::{Hive, Key};
 
 /// `target/<triple>/debug`.
 fn build_dir() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    exe.parent().unwrap().parent().unwrap().to_path_buf()
+    // The profile folder: the parent of `examples` (either Cargo layout).
+    let example = rea_launcher::testing::example("registry_game.exe");
+    example.parent().unwrap().parent().unwrap().to_path_buf()
 }
 
 /// A fresh key name under SOFTWARE: the test prefix keeps earlier runs'.
@@ -57,16 +58,7 @@ fn run(name: &str, base: &str, rules: Option<&str>) -> BTreeMap<String, String> 
     let game = std::fs::read(build.join("examples").join("registry_game.exe")).unwrap();
     let exe = dir.join("registry_game.exe");
     std::fs::write(&exe, rea_close_hook::import_into(&game).unwrap()).unwrap();
-    let deps = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let dll = [deps, build]
-        .into_iter()
-        .map(|d| d.join(rea_close_hook::DLL))
-        .find(|p| p.exists())
-        .expect("rea_close_hook.dll built");
+    let dll = rea_launcher::testing::built(rea_close_hook::DLL);
     std::fs::copy(dll, dir.join(rea_close_hook::DLL)).unwrap();
     let mut command = Command::new(&exe);
     command.arg(base).env_remove(rea_close_hook::registry::ENV);

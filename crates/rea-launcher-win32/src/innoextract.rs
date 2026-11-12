@@ -268,9 +268,7 @@ mod tests {
     /// The stand-in for innoextract (`examples/inno_child.rs`), told what
     /// to do through `REA_INNO_CHILD`.
     fn child(mode: &str) -> Launch {
-        let exe = std::env::current_exe().unwrap();
-        let examples = exe.parent().unwrap().parent().unwrap().join("examples");
-        Launch::new(examples.join("inno_child.exe")).env("REA_INNO_CHILD", mode)
+        Launch::new(rea_launcher::testing::example("inno_child.exe")).env("REA_INNO_CHILD", mode)
     }
 
     fn check(dir: &Path) -> Result<Vec<u8>, String> {

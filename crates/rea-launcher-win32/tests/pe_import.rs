@@ -18,8 +18,8 @@ const DLL_NOT_FOUND: u32 = 0xC000_0135;
 /// A private folder with the stand-in DLL and the probe, the probe's bytes
 /// passed through `edit`.
 fn install(name: &str, edit: impl FnOnce(&[u8]) -> Vec<u8>) -> PathBuf {
-    let build = std::env::current_exe().unwrap();
-    let examples = build.parent().unwrap().parent().unwrap().join("examples");
+    let probe = rea_launcher::testing::example("dll_probe.exe");
+    let examples = probe.parent().unwrap();
     let dir = examples.join(format!("pe-import-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

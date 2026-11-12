@@ -531,3 +531,145 @@ mod tests {
         assert_eq!(s.normalize(env!("CARGO_PKG_VERSION")), VERSION_MARK);
     }
 }
+
+/// The folder that holds this crate's built examples (`<profile>/examples`),
+/// found from the running test binary.
+///
+/// Cargo 1.100 moved test binaries out of `<profile>/deps` into
+/// `<profile>/build/<package>/<hash>/`, so "two folders up from the test"
+/// no longer reaches the profile folder (the SDK's Wine tests broke on the
+/// day GitHub's runners took 1.100). This walks up from the test binary to
+/// the first folder whose `examples/<name>` exists, and so works with both
+/// layouts.
+///
+/// ```no_run
+/// let probe = rea_launcher::testing::example("dll_probe.exe");
+/// let examples = probe.parent().unwrap();
+/// ```
+///
+/// # Panics
+///
+/// When no such file is found: build the examples first (`cargo test`
+/// builds a package's examples with its tests).
+pub fn example(name: &str) -> std::path::PathBuf {
+    let exe = std::env::current_exe().expect("the test binary's path");
+    find_example(&exe, name).unwrap_or_else(|| {
+        panic!(
+            "no examples/{name} above {}: build the examples first",
+            exe.display()
+        )
+    })
+}
+
+fn find_example(exe: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    exe.ancestors()
+        .skip(1)
+        .map(|dir| dir.join("examples").join(name))
+        .find(|path| path.is_file())
+}
+
+/// A file this build produced (the crate's own `cdylib`, say), found from
+/// the running test binary: the newest of `<dir>/<name>`, `<dir>/deps/<name>`
+/// and, for Cargo 1.100's layout, `<dir>/build/*/*/out/<name>`, for every
+/// folder above the test.
+///
+/// Cargo 1.100 no longer copies a package's own DLL next to its tests;
+/// each build unit keeps its output in `build/<package>/<hash>/out/`. The
+/// newest copy is the one this `cargo test` just built (an older layout's
+/// copy can still lie in `deps/`).
+///
+/// # Panics
+///
+/// When no copy is found.
+pub fn built(name: &str) -> std::path::PathBuf {
+    let exe = std::env::current_exe().expect("the test binary's path");
+    find_built(&exe, name)
+        .unwrap_or_else(|| panic!("{name} was not built (looked above {})", exe.display()))
+}
+
+fn find_built(exe: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for dir in exe.ancestors().skip(1) {
+        found.push(dir.join(name));
+        found.push(dir.join("deps").join(name));
+        let units = std::fs::read_dir(dir.join("build"))
+            .into_iter()
+            .flatten()
+            .flatten();
+        for package in units {
+            let hashes = std::fs::read_dir(package.path())
+                .into_iter()
+                .flatten()
+                .flatten();
+            found.extend(hashes.map(|hash| hash.path().join("out").join(name)));
+        }
+    }
+    found
+        .into_iter()
+        .filter_map(|path| Some((std::fs::metadata(&path).ok()?.modified().ok()?, path)))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+#[cfg(test)]
+mod example_tests {
+    use super::{find_built, find_example};
+
+    #[test]
+    fn examples_are_found_from_either_cargo_layout() {
+        let root = crate::test_dir("find-example");
+        let profile = root.join("i686-pc-windows-gnu").join("debug");
+        std::fs::create_dir_all(profile.join("examples")).unwrap();
+        std::fs::write(profile.join("examples").join("probe.exe"), b"MZ").unwrap();
+        let want = profile.join("examples").join("probe.exe");
+        // Cargo up to 1.99: <profile>/deps/<test>.exe
+        let old = profile.join("deps").join("tests-1234.exe");
+        assert_eq!(find_example(&old, "probe.exe"), Some(want.clone()));
+        // Cargo 1.100: <profile>/build/<package>/<hash>/<test>.exe
+        let new = profile
+            .join("build")
+            .join("pkg")
+            .join("29f2")
+            .join("deps")
+            .join("tests.exe");
+        assert_eq!(find_example(&new, "probe.exe"), Some(want));
+        assert_eq!(find_example(&old, "missing.exe"), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_newest_build_output_wins_in_either_layout() {
+        let root = crate::test_dir("find-built");
+        let profile = root.join("debug");
+        let stale = profile.join("deps").join("hook.dll");
+        let fresh_dir = profile.join("build").join("hook").join("0071").join("out");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&fresh_dir).unwrap();
+        std::fs::write(&stale, b"old").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let exe = profile
+            .join("build")
+            .join("hook")
+            .join("557e")
+            .join("out")
+            .join("t.exe");
+        assert_eq!(
+            find_built(&exe, "hook.dll"),
+            Some(stale.clone()),
+            "only the old layout"
+        );
+        std::fs::write(fresh_dir.join("hook.dll"), b"new").unwrap();
+        assert_eq!(
+            find_built(&exe, "hook.dll"),
+            Some(fresh_dir.join("hook.dll"))
+        );
+        assert_eq!(find_built(&exe, "none.dll"), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

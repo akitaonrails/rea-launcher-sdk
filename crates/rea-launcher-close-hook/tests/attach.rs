@@ -14,8 +14,9 @@ const SC_CLOSE: usize = 0xF060;
 
 /// `target/<triple>/debug`.
 fn build_dir() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    exe.parent().unwrap().parent().unwrap().to_path_buf()
+    // The profile folder: the parent of `examples` (either Cargo layout).
+    let example = rea_launcher::testing::example("hooked_game.exe");
+    example.parent().unwrap().parent().unwrap().to_path_buf()
 }
 
 fn headless_wine_windows() {
@@ -49,16 +50,7 @@ fn start(name: &str, config: &str, attach: bool) -> (Running, usize, PathBuf) {
     );
     let exe = dir.join("hooked_game.exe");
     std::fs::write(&exe, imported).unwrap();
-    let deps = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let dll = [deps, build]
-        .into_iter()
-        .map(|d| d.join(rea_close_hook::DLL))
-        .find(|p| p.exists())
-        .expect("rea_close_hook.dll built");
+    let dll = rea_launcher::testing::built(rea_close_hook::DLL);
     std::fs::copy(dll, dir.join(rea_close_hook::DLL)).unwrap();
     let mut launch = Launch::new(&exe).cwd(&dir).env(rea_close_hook::ENV, config);
     if attach {

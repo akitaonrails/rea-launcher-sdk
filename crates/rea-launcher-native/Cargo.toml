@@ -8,7 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rea-launcher.workspace = true
+# Wheel and force-feedback types for the `sdl` feature.
+rea-launcher = { workspace = true, optional = true }
 # SDL2 joysticks, game controllers and haptics (the `sdl` feature). Links the
 # system SDL2 (libsdl2-dev on Debian/Ubuntu; SDL2.dll beside a Windows exe).
 sdl2 = { version = "0.38", optional = true }
@@ -18,7 +19,7 @@ default = ["child"]
 # `child::spawn_tied`: an emulator or game that dies with the launcher.
 child = []
 # `sdl`: devices, wheels, pads, haptics and rumble through SDL2.
-sdl = ["dep:sdl2"]
+sdl = ["dep:sdl2", "dep:rea-launcher"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

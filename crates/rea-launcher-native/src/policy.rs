@@ -179,7 +179,7 @@ pub struct EffectParams {
 
 /// The effect for an output value `v`: a level for the constant force, a
 /// coefficient for the conditions, always "from the west", so a positive
-/// level pushes right as [`rea_launcher::ffb::FfbOutput::constant`] means.
+/// level pushes right as `rea_launcher::ffb::FfbOutput::constant` means.
 /// East (`[1, 0, 0]`), as rea-rad-mobile 0.4.0 shipped, turned every force
 /// around: centring pushed away from the centre on a Fanatec CSL DD.
 pub fn effect_params(kind: EffectKind, v: f32) -> EffectParams {

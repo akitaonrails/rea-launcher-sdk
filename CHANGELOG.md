@@ -7,6 +7,30 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [0.8.1] - 2026-11-12
+
+Rust 1.100 (on GitHub's runners since 2026-11-12) moved Cargo's test
+binaries, and the SDK's own Windows tests could no longer find their
+helper programs.
+
+### Added
+
+- `rea_launcher::testing::example(name)`: a built example
+  (`<profile>/examples/<name>`), found from the test binary in either
+  Cargo layout. `testing::built(name)`: the newest copy of a file this
+  build produced (a crate's own DLL), including Cargo 1.100's
+  `build/<package>/<hash>/out/`.
+
+### Fixed
+
+- The close-hook and win32 tests under Wine find `hooked_game.exe`,
+  `registry_game.exe`, `close_child.exe`, `inno_child.exe`,
+  `dll_probe.exe` and `rea_close_hook.dll` with Rust 1.100 (they looked
+  two folders above the test binary, which is now inside
+  `build/<package>/<hash>/`).
+- `rea-launcher-native` depends on `rea-launcher` only with the `sdl`
+  feature (Cargo 1.100's `unused_dependencies` warning).
+
 ## [0.8.0] - 2026-11-12
 
 Wheels, force feedback and native launchers, from rea-rad-mobile (a MAME
@@ -1169,6 +1193,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.8.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.0...v0.7.1

@@ -416,8 +416,8 @@ mod tests {
 
         /// A private copy of the probe as `<name>.exe`, with the stand-in.
         pub fn install(name: &str) -> PathBuf {
-            let build = std::env::current_exe().unwrap();
-            let examples = build.parent().unwrap().parent().unwrap().join("examples");
+            let probe = rea_launcher::testing::example("dll_probe.exe");
+            let examples = probe.parent().unwrap();
             let dir = examples.join(format!("dll-test-{}-{name}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
