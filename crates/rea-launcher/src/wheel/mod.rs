@@ -155,7 +155,7 @@ pub fn find_aux(devices: &[DeviceId], aux: &DeviceId, wheel: usize) -> Option<us
     let candidates = || devices.iter().enumerate().filter(|(i, _)| *i != wheel);
     let model = |d: &DeviceId| (d.vid, d.pid) == (aux.vid, aux.pid);
     candidates()
-        .find(|(_, d)| model(d) && d.guid == aux.guid)
+        .find(|(_, d)| model(d) && d.guid.eq_ignore_ascii_case(&aux.guid))
         .or_else(|| candidates().find(|(_, d)| model(d)))
         .map(|(i, _)| i)
 }
@@ -185,7 +185,9 @@ pub fn pick_wheel(
     chosen: &str,
 ) -> Option<usize> {
     if !chosen.is_empty()
-        && let Some(i) = wheels.iter().position(|w| w.path == chosen)
+        && let Some(i) = wheels
+            .iter()
+            .position(|w| w.path.eq_ignore_ascii_case(chosen))
     {
         return Some(i);
     }

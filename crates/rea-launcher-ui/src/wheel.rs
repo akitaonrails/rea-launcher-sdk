@@ -136,7 +136,7 @@ impl WheelTab {
     ) {
         let name = |i: usize| list[i].id.name.as_str();
         let chosen = self.setup.wheel.device.clone();
-        let chosen_here = list.iter().any(|d| d.id.guid == chosen);
+        let chosen_here = list.iter().any(|d| rig::same_guid(&d.id.guid, &chosen));
         let wheel_note = match (rig, in_use) {
             _ if list.is_empty() => {
                 "No controller is connected. Plug in your wheel: it shows up here within two seconds.".to_owned()
@@ -168,6 +168,14 @@ impl WheelTab {
         });
 
         let wheel_guid = rig.map(|r| list[r.wheel].id.guid.clone());
+        // Pedals "on a separate device" that is the wheel itself: on the
+        // wheel, which Automatic means (rig::pick never takes the wheel).
+        if wheel_guid
+            .as_deref()
+            .is_some_and(|w| rig::same_guid(w, &self.setup.pedals))
+        {
+            self.setup.pedals.clear();
+        }
         let picked = self.setup.pedals.clone();
         let pedal_note = match rig.and_then(|r| r.pedals) {
             Some(i) => format!("Using {}.", name(i)),
@@ -180,7 +188,7 @@ impl WheelTab {
         pedals.extend(labels(list, |d| {
             d.kind != Kind::Pad && Some(&d.id.guid) != wheel_guid.as_ref()
         }));
-        if !picked.is_empty() && !pedals.iter().any(|(g, _)| *g == picked) {
+        if !picked.is_empty() && !pedals.iter().any(|(g, _)| rig::same_guid(g, &picked)) {
             pedals.push((picked, "Not connected".to_owned()));
         }
         row(ui, &WHEEL_PEDALS, &pedal_note, |ui| {
@@ -301,7 +309,7 @@ impl WheelTab {
             .iter()
             .map(|id| {
                 list.iter()
-                    .find(|d| d.id.guid == id.guid)
+                    .find(|d| rig::same_guid(&d.id.guid, &id.guid))
                     .map(|d| d.state.clone())
                     .unwrap_or_default()
             })
@@ -775,6 +783,36 @@ mod tests {
             2,
             "the saved picks stay chosen"
         );
+    }
+
+    #[test]
+    fn pedals_picked_as_the_wheel_itself_are_automatic() {
+        // The pick names the wheel (in another case): the pedals are on it.
+        let ui = open(vec![csl(), pedals()], "wheel_pedals = {CSL}\n");
+        let chips: Vec<(String, bool)> = ui
+            .get_all_by_role(Role::RadioButton)
+            .map(|n| {
+                (
+                    n.accesskit_node().label().unwrap_or_default(),
+                    testing::checked(&n),
+                )
+            })
+            .collect();
+        assert!(
+            !chips.iter().any(|(label, _)| label == "Not connected"),
+            "{chips:?}"
+        );
+        assert_eq!(
+            chips
+                .iter()
+                .filter(|(label, _)| label == "Automatic")
+                .collect::<Vec<_>>(),
+            [
+                &("Automatic".to_owned(), true),
+                &("Automatic".to_owned(), true)
+            ]
+        );
+        ui.get_by_label_contains("On the wheel, or the pedals you calibrate.");
     }
 
     #[test]

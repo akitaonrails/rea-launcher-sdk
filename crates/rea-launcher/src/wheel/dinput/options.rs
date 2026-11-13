@@ -149,8 +149,8 @@ impl Setup {
         let percent = |n: u32, max: u8| u8::try_from(n).unwrap_or(max).min(max);
         match (key, value) {
             ("wheel", Value::Choice(v)) => self.mode = Mode::parse(v).unwrap_or(self.mode),
-            ("wheel_device", Value::Text(v)) => self.wheel.device = v.to_owned(),
-            ("wheel_pedals", Value::Text(v)) => self.pedals = v.to_owned(),
+            ("wheel_device", Value::Text(v)) => self.wheel.device = super::guid(Some(v)),
+            ("wheel_pedals", Value::Text(v)) => self.pedals = super::guid(Some(v)),
             ("wheel_lock", Value::Choice(v)) => {
                 self.wheel.lock = SteeringLock::from_setting(v.parse().unwrap_or(0));
             }

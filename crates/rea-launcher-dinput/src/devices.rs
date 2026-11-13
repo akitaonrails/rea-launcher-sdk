@@ -60,7 +60,7 @@ pub fn plan(all: &[Device], mode: Mode, setup: &Setup, saved: Option<&Profile>) 
     let hidden = (0..all.len())
         .filter(|&i| {
             let d = &all[i];
-            merged.iter().any(|m| m.id.guid == d.id.guid)
+            merged.iter().any(|m| rig::same_guid(&m.id.guid, &d.id.guid))
                 || wheel
                     .as_ref()
                     .is_some_and(|w| model(w) == model(d) && !d.ffb)

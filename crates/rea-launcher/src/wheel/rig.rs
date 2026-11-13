@@ -62,6 +62,13 @@ pub fn guid_text(data1: u32, data2: u16, data3: u16, data4: [u8; 8]) -> String {
     )
 }
 
+/// Whether two instance GUIDs name the same device: without case or
+/// surrounding blanks (hand edits, other tools), never two empty ones.
+pub fn same_guid(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    !a.is_empty() && a.eq_ignore_ascii_case(b)
+}
+
 /// `DI8DEVTYPE_GAMEPAD` and `DI8DEVTYPE_DRIVING`: a `dwDevType`'s low byte.
 pub const DEVTYPE_GAMEPAD: u32 = 0x15;
 pub const DEVTYPE_DRIVING: u32 = 0x16;
@@ -130,7 +137,7 @@ fn drives_unasked(d: &Device) -> bool {
 pub fn pick(devices: &[Device], setup: &Setup, saved: Option<&Profile>) -> Option<Rig> {
     let chosen = setup.wheel.device.as_str();
     let pool: Vec<usize> = (0..devices.len())
-        .filter(|&i| drives_unasked(&devices[i]) || devices[i].id.guid == chosen)
+        .filter(|&i| drives_unasked(&devices[i]) || same_guid(&devices[i].id.guid, chosen))
         .collect();
     let candidates: Vec<WheelCandidate> = pool
         .iter()
@@ -148,7 +155,7 @@ pub fn pick(devices: &[Device], setup: &Setup, saved: Option<&Profile>) -> Optio
             .and_then(|p| p.aux.as_ref())
             .and_then(|aux| find_aux(&ids, aux, wheel))
     } else {
-        (0..devices.len()).find(|&i| i != wheel && devices[i].id.guid == setup.pedals)
+        (0..devices.len()).find(|&i| i != wheel && same_guid(&devices[i].id.guid, &setup.pedals))
     };
     Some(Rig { wheel, pedals })
 }
@@ -411,6 +418,23 @@ mod tests {
         // the wheel itself is never its own pedals
         setup.pedals = "{csl}".into();
         assert_eq!(pick(&devices, &setup, None).unwrap().pedals, None);
+    }
+
+    #[test]
+    fn guids_compare_without_case() {
+        let devices = rig();
+        let mut setup = Setup::default();
+        setup.wheel.device = "{CSL}".into();
+        setup.pedals = " {Pedals} ".into();
+        assert_eq!(
+            pick(&devices, &setup, None),
+            Some(Rig {
+                wheel: 1,
+                pedals: Some(2)
+            })
+        );
+        assert!(same_guid("{AbC}", "{abc}"));
+        assert!(!same_guid("", ""), "no GUID is no match");
     }
 
     #[test]

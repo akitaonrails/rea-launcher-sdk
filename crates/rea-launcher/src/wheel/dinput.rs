@@ -201,9 +201,9 @@ impl Setup {
                     .map_or(d.wheel.lock, SteeringLock::from_setting),
                 invert_accel: flag("invert_accel", d.wheel.invert_accel),
                 invert_brake: flag("invert_brake", d.wheel.invert_brake),
-                device: keys.get("device").unwrap_or_default().trim().to_owned(),
+                device: guid(keys.get("device")),
             },
-            pedals: keys.get("pedals").unwrap_or_default().trim().to_owned(),
+            pedals: guid(keys.get("pedals")),
             deadzone: percent("deadzone", Self::MAX_DEADZONE, d.deadzone),
             linearity: percent("linearity", 100, d.linearity),
             ffb: FfbSettings {
@@ -245,6 +245,12 @@ impl Setup {
     }
 }
 
+/// An instance GUID as the file keeps it: trimmed, lower case
+/// ([`super::rig::guid_text`]'s form).
+pub(crate) fn guid(value: Option<&str>) -> String {
+    value.unwrap_or_default().trim().to_ascii_lowercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +277,15 @@ mod tests {
             log: true,
         };
         assert_eq!(Setup::from_cfg(&setup.to_cfg("", "hello")), setup);
+    }
+
+    #[test]
+    fn guids_are_kept_in_lower_case() {
+        let s = Setup::from_cfg("device = {6F1D2B61-D5A0-11CF}\npedals = {ABC}\n");
+        assert_eq!(
+            (s.wheel.device.as_str(), s.pedals.as_str()),
+            ("{6f1d2b61-d5a0-11cf}", "{abc}")
+        );
     }
 
     #[test]
