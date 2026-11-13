@@ -1,0 +1,571 @@
+//! A stand-in for a Colin McRae game's input layer, for the layer's
+//! tests (`tests/game.rs`): it imports `dinput8!DirectInput8Create`, and
+//! does what CMR3/04/2005 do with a controller (EnumDevices of the
+//! attached game controllers, `c_dfDIJoystick2`, every axis at 0..255 by
+//! object ID, exclusive and foreground on a hidden window, force
+//! feedback through Spring, Damper, Sine, Square and Constant effects).
+//! It prints `key=value` lines of what it saw; its arguments are steps:
+//!
+//! - `read`: Poll and GetDeviceState, printed as `state=X,Y,Z,Rz
+//!   buttons=… pov=…`;
+//! - `input:<device>:<8 axes>:<buttons>:<pov>`: moves a fake device;
+//! - `unplug:<device>`, `plug:<device>`: unplugs a fake device or plugs
+//!   it back;
+//! - `effects`: autocentre off, the five effects made and started, then
+//!   the constant force changed with `DIEP_NORESTART`;
+//! - `events`: what reached the fake devices, as `fake <line>`;
+//! - `wait:<ms>`.
+
+#[cfg(windows)]
+fn main() {
+    game::run(std::env::args().skip(1).collect());
+}
+
+#[cfg(not(windows))]
+fn main() {}
+
+#[cfg(windows)]
+mod game {
+    use std::ffi::c_void;
+    use std::ptr::{null, null_mut};
+
+    use rea_dinput::format::{self, Guid};
+    use windows_sys::Win32::Devices::HumanInterfaceDevice::{
+        DI8DEVCLASS_GAMECTRL, DICONDITION, DICONSTANTFORCE, DIDATAFORMAT, DIDEVCAPS,
+        DIDEVICEINSTANCEA, DIDEVICEOBJECTINSTANCEA, DIDF_ABSAXIS, DIDFT_AXIS, DIEB_NOTRIGGER,
+        DIEDFL_ATTACHEDONLY, DIEFF_CARTESIAN, DIEFF_OBJECTOFFSETS, DIEFFECT, DIENUM_CONTINUE,
+        DIEP_NORESTART, DIEP_TYPESPECIFICPARAMS, DIJOYSTATE2, DIOBJECTDATAFORMAT, DIPERIODIC,
+        DIPH_BYID, DIPH_DEVICE, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DISCL_EXCLUSIVE,
+        DISCL_FOREGROUND, DirectInput8Create, GUID_Button, GUID_ConstantForce, GUID_Damper,
+        GUID_POV, GUID_RxAxis, GUID_RyAxis, GUID_RzAxis, GUID_Sine, GUID_Slider, GUID_Spring,
+        GUID_Square, GUID_XAxis, GUID_YAxis, GUID_ZAxis,
+    };
+    use windows_sys::Win32::Foundation::{HMODULE, HWND};
+    use windows_sys::Win32::System::LibraryLoader::{
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        GetModuleFileNameW, GetModuleHandleExW, GetModuleHandleW, GetProcAddress,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, RegisterClassW, WNDCLASSW,
+    };
+    use windows_sys::core::{BOOL, GUID, HRESULT};
+
+    type This = *mut c_void;
+
+    /// `IID_IDirectInput8A`.
+    const IID_DIRECTINPUT8A: GUID = GUID::from_u128(0xbf798030_483a_4da2_aa99_5d64ed369700);
+
+    /// Method `n` of a COM object, as a function of type `F`.
+    ///
+    /// # Safety
+    /// `this` is a live COM object whose method `n` has type `F`.
+    unsafe fn method<F: Copy>(this: This, n: usize) -> F {
+        // SAFETY: the caller's contract.
+        unsafe {
+            let vtbl = *this.cast::<*const usize>();
+            std::mem::transmute_copy(&*vtbl.add(n))
+        }
+    }
+
+    unsafe fn release(this: This) {
+        // SAFETY: IUnknown::Release.
+        unsafe { method::<unsafe extern "system" fn(This) -> u32>(this, 2)(this) };
+    }
+
+    /// The file name of the module that implements `this`'s methods.
+    fn module_of(this: This) -> String {
+        let mut module: HMODULE = null_mut();
+        let mut name = [0u16; 260];
+        // SAFETY: a live object's first method; plain module queries.
+        let len = unsafe {
+            let first = method::<usize>(this, 0);
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                    | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                first as *const u16,
+                &mut module,
+            );
+            GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32)
+        };
+        let path = String::from_utf16_lossy(&name[..len as usize]);
+        path.rsplit(['\\', '/'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    }
+
+    fn guid_ptr(guid: Guid) -> *const GUID {
+        match guid {
+            Guid::XAxis => &GUID_XAxis,
+            Guid::YAxis => &GUID_YAxis,
+            Guid::ZAxis => &GUID_ZAxis,
+            Guid::RxAxis => &GUID_RxAxis,
+            Guid::RyAxis => &GUID_RyAxis,
+            Guid::RzAxis => &GUID_RzAxis,
+            Guid::Slider => &GUID_Slider,
+            Guid::Button => &GUID_Button,
+            Guid::Pov => &GUID_POV,
+            Guid::Key | Guid::Other => null(),
+        }
+    }
+
+    fn hidden_window() -> HWND {
+        unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: usize, l: isize) -> isize {
+            // SAFETY: the default procedure for our window.
+            unsafe { DefWindowProcW(hwnd, msg, w, l) }
+        }
+        let class: Vec<u16> = "rea_wheel_game\0".encode_utf16().collect();
+        // SAFETY: a window class and a hidden window of it; pointers to
+        // live locals.
+        unsafe {
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(proc),
+                hInstance: GetModuleHandleW(null()),
+                lpszClassName: class.as_ptr(),
+                ..std::mem::zeroed()
+            };
+            RegisterClassW(&wc);
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                0,
+                0,
+                0,
+                64,
+                64,
+                null_mut(),
+                null_mut(),
+                wc.hInstance,
+                null(),
+            )
+        }
+    }
+
+    /// A function the DLL `dll` next to the game exports, if loaded (by
+    /// path: the stand-in and the system's DirectInput share a name).
+    fn export<F: Copy>(dll: &str, name: &std::ffi::CStr) -> Option<F> {
+        let exe = std::env::current_exe().ok()?;
+        let path: Vec<u16> = exe
+            .with_file_name(dll)
+            .as_os_str()
+            .to_string_lossy()
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        // SAFETY: plain module queries; the caller names the type.
+        unsafe {
+            let module = GetModuleHandleW(path.as_ptr());
+            if module.is_null() {
+                return None;
+            }
+            GetProcAddress(module, name.as_ptr().cast()).map(|f| std::mem::transmute_copy(&f))
+        }
+    }
+
+    unsafe extern "system" fn collect(instance: *mut DIDEVICEINSTANCEA, list: *mut c_void) -> BOOL {
+        // SAFETY: `list` is the game's Vec; the instance is DirectInput's.
+        unsafe { (*list.cast::<Vec<DIDEVICEINSTANCEA>>()).push(*instance) };
+        DIENUM_CONTINUE as BOOL
+    }
+
+    unsafe extern "system" fn collect_axes(
+        object: *mut DIDEVICEOBJECTINSTANCEA,
+        list: *mut c_void,
+    ) -> BOOL {
+        // SAFETY: as above.
+        unsafe { (*list.cast::<Vec<u32>>()).push((*object).dwType) };
+        DIENUM_CONTINUE as BOOL
+    }
+
+    fn name(instance: &DIDEVICEINSTANCEA) -> String {
+        let bytes: Vec<u8> = instance
+            .tszProductName
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8)
+            .collect();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    pub fn run(steps: Vec<String>) {
+        let window = hidden_window();
+        let mut di: This = null_mut();
+        // SAFETY: the game's DirectInput8Create, through its import table.
+        let code = unsafe {
+            DirectInput8Create(
+                GetModuleHandleW(null()),
+                0x0800,
+                &IID_DIRECTINPUT8A,
+                &mut di,
+                null_mut(),
+            )
+        };
+        println!("create={code:#x}");
+        if code < 0 || di.is_null() {
+            return;
+        }
+        println!("wrapped={}", module_of(di));
+        let calls = export::<unsafe extern "system" fn() -> u32>("dinput8.dll", c"stand_in_calls");
+        // SAFETY: the stand-in's counter.
+        println!(
+            "stand_in={}",
+            calls.map_or("none".into(), |f| unsafe { f() }.to_string())
+        );
+        let mut found: Vec<DIDEVICEINSTANCEA> = Vec::new();
+        type EnumDevices =
+            unsafe extern "system" fn(This, u32, *const c_void, *mut c_void, u32) -> HRESULT;
+        // SAFETY: IDirectInput8A::EnumDevices with a callback that pushes
+        // to `found`.
+        unsafe {
+            method::<EnumDevices>(di, 4)(
+                di,
+                DI8DEVCLASS_GAMECTRL,
+                collect as *const c_void,
+                (&raw mut found).cast(),
+                DIEDFL_ATTACHEDONLY,
+            )
+        };
+        println!(
+            "devices={}",
+            found.iter().map(name).collect::<Vec<_>>().join("|")
+        );
+        if let Some(first) = found.first().filter(|f| name(f) == "rea wheel") {
+            // SAFETY: a live DirectInput and the wheel it listed.
+            unsafe { drive(di, first, window, &steps) };
+        }
+        // SAFETY: our reference.
+        unsafe { release(di) };
+        println!("done");
+    }
+
+    /// The CMR sequence on the listed wheel, then the steps.
+    ///
+    /// # Safety
+    /// `di` is a live IDirectInput8A.
+    unsafe fn drive(di: This, wheel: &DIDEVICEINSTANCEA, window: HWND, steps: &[String]) {
+        type CreateDevice =
+            unsafe extern "system" fn(This, *const GUID, *mut This, This) -> HRESULT;
+        let mut device: This = null_mut();
+        // SAFETY: the caller's contract; COM calls on the device made here
+        // with structures that live across each call.
+        unsafe {
+            let code =
+                method::<CreateDevice>(di, 3)(di, &wheel.guidInstance, &mut device, null_mut());
+            println!("device={code:#x}");
+            if code < 0 {
+                return;
+            }
+            let mut info = DIDEVICEINSTANCEA {
+                dwSize: size_of::<DIDEVICEINSTANCEA>() as u32,
+                ..std::mem::zeroed()
+            };
+            method::<unsafe extern "system" fn(This, *mut DIDEVICEINSTANCEA) -> HRESULT>(
+                device, 15,
+            )(device, &mut info);
+            println!(
+                "info=type:{:#x} product:{:08x}",
+                info.dwDevType, info.guidProduct.data1
+            );
+            let mut caps = DIDEVCAPS {
+                dwSize: size_of::<DIDEVCAPS>() as u32,
+                ..std::mem::zeroed()
+            };
+            method::<unsafe extern "system" fn(This, *mut DIDEVCAPS) -> HRESULT>(device, 3)(
+                device, &mut caps,
+            );
+            println!(
+                "caps=axes:{} buttons:{} povs:{} ff:{}",
+                caps.dwAxes,
+                caps.dwButtons,
+                caps.dwPOVs,
+                caps.dwFlags & 0x100 != 0
+            );
+            let objects: Vec<DIOBJECTDATAFORMAT> = format::joystate2()
+                .iter()
+                .map(|e| DIOBJECTDATAFORMAT {
+                    pguid: e.guid.map_or(null(), guid_ptr),
+                    dwOfs: e.offset,
+                    dwType: e.kind,
+                    dwFlags: e.flags,
+                })
+                .collect();
+            let df = DIDATAFORMAT {
+                dwSize: size_of::<DIDATAFORMAT>() as u32,
+                dwObjSize: size_of::<DIOBJECTDATAFORMAT>() as u32,
+                dwFlags: DIDF_ABSAXIS,
+                dwDataSize: size_of::<DIJOYSTATE2>() as u32,
+                dwNumObjs: objects.len() as u32,
+                rgodf: objects.as_ptr().cast_mut(),
+            };
+            let code = method::<unsafe extern "system" fn(This, *const DIDATAFORMAT) -> HRESULT>(
+                device, 11,
+            )(device, &df);
+            println!("format={code:#x}");
+            // Every axis at 0..255, addressed by its object ID (CMR04).
+            let mut axes: Vec<u32> = Vec::new();
+            type EnumObjects =
+                unsafe extern "system" fn(This, *const c_void, *mut c_void, u32) -> HRESULT;
+            method::<EnumObjects>(device, 4)(
+                device,
+                collect_axes as *const c_void,
+                (&raw mut axes).cast(),
+                DIDFT_AXIS,
+            );
+            type SetProperty =
+                unsafe extern "system" fn(This, usize, *const DIPROPHEADER) -> HRESULT;
+            let set_property = method::<SetProperty>(device, 6);
+            let ranged = axes
+                .iter()
+                .filter(|&&id| {
+                    let range = DIPROPRANGE {
+                        diph: DIPROPHEADER {
+                            dwSize: size_of::<DIPROPRANGE>() as u32,
+                            dwHeaderSize: size_of::<DIPROPHEADER>() as u32,
+                            dwObj: id,
+                            dwHow: DIPH_BYID,
+                        },
+                        lMin: 0,
+                        lMax: 255,
+                    };
+                    set_property(device, 4, &range.diph) >= 0
+                })
+                .count();
+            println!("ranges={ranged}/{}", axes.len());
+            let code = method::<unsafe extern "system" fn(This, HWND, u32) -> HRESULT>(device, 13)(
+                device,
+                window,
+                DISCL_EXCLUSIVE | DISCL_FOREGROUND,
+            );
+            println!("cooperate={code:#x}");
+            let code = method::<unsafe extern "system" fn(This) -> HRESULT>(device, 7)(device);
+            println!("acquire={code:#x}");
+            let mut gain = DIPROPDWORD {
+                diph: dword_header(),
+                dwData: 0,
+            };
+            type GetProperty = unsafe extern "system" fn(This, usize, *mut DIPROPHEADER) -> HRESULT;
+            let code = method::<GetProperty>(device, 5)(device, 7, &mut gain.diph);
+            println!("ffgain={code:#x},{}", gain.dwData);
+            let mut effects = Vec::new();
+            for step in steps {
+                run_step(device, step, set_property, &mut effects);
+            }
+            for effect in effects {
+                release(effect);
+            }
+            method::<unsafe extern "system" fn(This) -> HRESULT>(device, 8)(device);
+            release(device);
+        }
+    }
+
+    fn dword_header() -> DIPROPHEADER {
+        DIPROPHEADER {
+            dwSize: size_of::<DIPROPDWORD>() as u32,
+            dwHeaderSize: size_of::<DIPROPHEADER>() as u32,
+            dwObj: 0,
+            dwHow: DIPH_DEVICE,
+        }
+    }
+
+    /// # Safety
+    /// `device` is a live, acquired virtual wheel.
+    unsafe fn run_step(
+        device: This,
+        step: &str,
+        set_property: unsafe extern "system" fn(This, usize, *const DIPROPHEADER) -> HRESULT,
+        effects: &mut Vec<This>,
+    ) {
+        let parts: Vec<&str> = step.split(':').collect();
+        let number = |i: usize| {
+            parts
+                .get(i)
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0)
+        };
+        // SAFETY: the caller's contract; structures live across each call.
+        unsafe {
+            match parts[0] {
+                "read" => {
+                    method::<unsafe extern "system" fn(This) -> HRESULT>(device, 25)(device);
+                    let mut state: DIJOYSTATE2 = std::mem::zeroed();
+                    type GetState = unsafe extern "system" fn(This, u32, *mut c_void) -> HRESULT;
+                    let code = method::<GetState>(device, 9)(
+                        device,
+                        size_of::<DIJOYSTATE2>() as u32,
+                        (&raw mut state).cast(),
+                    );
+                    let buttons = (0..32).fold(0u32, |bits, n| {
+                        bits | (u32::from(state.rgbButtons[n] & 0x80 != 0) << n)
+                    });
+                    println!(
+                        "state={code:#x}:{},{},{},{} buttons={buttons:#x} pov={}",
+                        state.lX, state.lY, state.lZ, state.lRz, state.rgdwPOV[0] as i32
+                    );
+                }
+                "input" => {
+                    let axes: Vec<i32> = parts[2]
+                        .split(',')
+                        .map(|v| v.parse().unwrap_or(0))
+                        .collect();
+                    let input = export::<unsafe extern "system" fn(u32, *const i32, u32, u32) -> i32>(
+                        "rea_dinput.dll",
+                        c"rea_dinput_fake_input",
+                    );
+                    if let Some(input) = input {
+                        input(
+                            number(1) as u32,
+                            axes.as_ptr(),
+                            number(3) as u32,
+                            number(4) as u32,
+                        );
+                    }
+                }
+                "unplug" | "plug" => {
+                    let unplug = export::<unsafe extern "system" fn(u32, i32) -> i32>(
+                        "rea_dinput.dll",
+                        c"rea_dinput_fake_unplug",
+                    );
+                    if let Some(unplug) = unplug {
+                        unplug(number(1) as u32, i32::from(parts[0] == "unplug"));
+                    }
+                }
+                "events" => {
+                    let events = export::<unsafe extern "system" fn(*mut u8, u32) -> u32>(
+                        "rea_dinput.dll",
+                        c"rea_dinput_fake_events",
+                    );
+                    let mut buffer = vec![0u8; 1 << 16];
+                    let len = events.map_or(0, |f| f(buffer.as_mut_ptr(), buffer.len() as u32));
+                    for line in String::from_utf8_lossy(&buffer[..len as usize]).lines() {
+                        println!("fake {line}");
+                    }
+                }
+                "effects" => make_effects(device, set_property, effects),
+                "wait" => std::thread::sleep(std::time::Duration::from_millis(number(1) as u64)),
+                other => println!("unknown step {other}"),
+            }
+        }
+    }
+
+    /// CMR's effects: autocentre off, a spring and a damper on both
+    /// axes, a sine and a square wave and a constant force along X, each
+    /// started; then the constant force changed in place.
+    ///
+    /// # Safety
+    /// As [`run_step`].
+    unsafe fn make_effects(
+        device: This,
+        set_property: unsafe extern "system" fn(This, usize, *const DIPROPHEADER) -> HRESULT,
+        effects: &mut Vec<This>,
+    ) {
+        type CreateEffect = unsafe extern "system" fn(
+            This,
+            *const GUID,
+            *const DIEFFECT,
+            *mut This,
+            This,
+        ) -> HRESULT;
+        type SetParameters = unsafe extern "system" fn(This, *const DIEFFECT, u32) -> HRESULT;
+        type Start = unsafe extern "system" fn(This, u32, u32) -> HRESULT;
+        let condition = |coefficient| DICONDITION {
+            lOffset: 0,
+            lPositiveCoefficient: coefficient,
+            lNegativeCoefficient: coefficient,
+            dwPositiveSaturation: 10_000,
+            dwNegativeSaturation: 10_000,
+            lDeadBand: 0,
+        };
+        let conditions = [condition(8_000), condition(2_000)];
+        let sine = DIPERIODIC {
+            dwMagnitude: 6_000,
+            lOffset: 0,
+            dwPhase: 0,
+            dwPeriod: 100_000,
+        };
+        let square = DIPERIODIC {
+            dwMagnitude: 10_000,
+            ..sine
+        };
+        let mut constant = DICONSTANTFORCE { lMagnitude: 6_000 };
+        let mut axes = [0u32, 4];
+        let mut direction = [1i32, 0];
+        let (axes_ptr, direction_ptr) = (axes.as_mut_ptr(), direction.as_mut_ptr());
+        let params = |data: *const c_void, size: usize| DIEFFECT {
+            dwSize: size_of::<DIEFFECT>() as u32,
+            dwFlags: DIEFF_CARTESIAN | DIEFF_OBJECTOFFSETS,
+            dwDuration: u32::MAX,
+            dwSamplePeriod: 0,
+            dwGain: 10_000,
+            dwTriggerButton: DIEB_NOTRIGGER,
+            dwTriggerRepeatInterval: 0,
+            cAxes: 2,
+            rgdwAxes: axes_ptr,
+            rglDirection: direction_ptr,
+            lpEnvelope: null_mut(),
+            cbTypeSpecificParams: size as u32,
+            lpvTypeSpecificParams: data.cast_mut(),
+            dwStartDelay: 0,
+        };
+        // SAFETY: the caller's contract; every structure lives across the
+        // calls.
+        unsafe {
+            let off = DIPROPDWORD {
+                diph: dword_header(),
+                dwData: 0,
+            };
+            println!("autocenter={:#x}", set_property(device, 9, &off.diph));
+            let made = [
+                (
+                    "spring",
+                    &GUID_Spring,
+                    params(conditions.as_ptr().cast(), size_of_val(&conditions)),
+                ),
+                (
+                    "damper",
+                    &GUID_Damper,
+                    params(conditions.as_ptr().cast(), size_of_val(&conditions)),
+                ),
+                (
+                    "sine",
+                    &GUID_Sine,
+                    params((&raw const sine).cast(), size_of::<DIPERIODIC>()),
+                ),
+                (
+                    "square",
+                    &GUID_Square,
+                    params((&raw const square).cast(), size_of::<DIPERIODIC>()),
+                ),
+                (
+                    "constant",
+                    &GUID_ConstantForce,
+                    params((&raw const constant).cast(), size_of::<DICONSTANTFORCE>()),
+                ),
+            ];
+            for (name, guid, p) in &made {
+                let mut effect: This = null_mut();
+                let code =
+                    method::<CreateEffect>(device, 18)(device, *guid, p, &mut effect, null_mut());
+                let started = if effect.is_null() {
+                    -1
+                } else {
+                    method::<Start>(effect, 7)(effect, 1, 0)
+                };
+                println!("effect={name},{code:#x},{started:#x}");
+                if !effect.is_null() {
+                    effects.push(effect);
+                }
+            }
+            constant.lMagnitude = -8_000;
+            let update = params((&raw const constant).cast(), size_of::<DICONSTANTFORCE>());
+            if let Some(&last) = effects.last() {
+                let code = method::<SetParameters>(last, 6)(
+                    last,
+                    &update,
+                    DIEP_TYPESPECIFICPARAMS | DIEP_NORESTART,
+                );
+                println!("update={code:#x}");
+            }
+        }
+    }
+}

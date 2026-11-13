@@ -1926,6 +1926,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rea-launcher-dinput"
+version = "0.8.2"
+dependencies = [
+ "rea-launcher",
+ "rea-launcher-build",
+ "rea-launcher-win32",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rea-launcher-native"
 version = "0.8.2"
 dependencies = [

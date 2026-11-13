@@ -4,6 +4,7 @@ members = [
     "crates/rea-launcher-win32",
     "crates/rea-launcher-ui",
     "crates/rea-launcher-close-hook",
+    "crates/rea-launcher-dinput",
     "crates/rea-launcher-build",
     "crates/rea-launcher-native",
 ]
