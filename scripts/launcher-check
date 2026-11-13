@@ -52,7 +52,7 @@ USAGE_API_SINCE='v0.4.2'
 # Version info, icon and manifest in the exe; editing the runtime copy's
 # imports instead of injecting into the running game.
 RESOURCES_API='rea_launcher_build::Resources'
-IMPORT_API='rea_launcher::pe::edit::add_import rea_close_hook::import_into'
+IMPORT_API='rea_launcher::pe::edit::add_import rea_close_hook::import_into rea_dinput::import_into'
 AV_API_SINCE='v0.4.3'
 # The game's HKLM key answered from HKCU, instead of the VirtualStore.
 REGISTRY_API='rea_close_hook::registry'

@@ -97,6 +97,7 @@ this repository, not the launcher's (`CONTRIBUTING.md`).
 | `crates/rea-launcher-native` | Native launchers only (emulator wrappers, native ports): a child process tied to the launcher, and with the `sdl` feature wheels, pads, force feedback and rumble through SDL2 | Cargo git dependency |
 | `crates/rea-launcher-build` | `build.rs` helper: version information, an icon and a manifest in the exe or a hook DLL | Cargo git build dependency |
 | `crates/rea-launcher-close-hook` | A DLL that makes an old game honour Alt+F4 and window-close requests, imported into the runtime copy of the game | built by the launcher's release |
+| `crates/rea-launcher-dinput` | A DLL that shows a DirectInput game one virtual wheel made from the player's wheel and pedals (steering lock, separate pedals, force feedback), imported into the runtime copy of the game | built by the launcher's release |
 | `shell/rea-play.sh` | Linux helper library: session lock and stop, GPU env, gamescope, Wine prefix setup | vendored as `sdk/rea-play.sh` |
 | `packaging/` | Pin files, AppImage builder (portable Wine or native), package allowlist check, release notes | vendored under `sdk/packaging/` |
 | `.github/workflows/launcher-*.yml` | Reusable CI and release workflows | `uses:` by tag |

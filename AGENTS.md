@@ -15,7 +15,7 @@ every launcher built on it.
 | Pin, bundle, download and configure community fixes and packs | `docs/playbooks/community-components.md` |
 | Unpack a game's installer (GOG, repacks) instead of asking the player to install it | `docs/playbooks/installers.md` |
 | Reverse engineer, test and apply a binary patch | `docs/playbooks/binary-patching.md` |
-| Read wheels, pedals and pads, or make force feedback (a launcher that owns the input) | `docs/playbooks/wheels-and-ffb.md` |
+| Read wheels, pedals and pads, or make force feedback (a launcher that owns the input, or a DirectInput game through `rea-launcher-dinput`) | `docs/playbooks/wheels-and-ffb.md` |
 | Run an arcade game on a bundled MAME | `docs/playbooks/arcade-mame.md` |
 | Share a fix we found with PCGamingWiki / upstream | `docs/playbooks/contribute-back.md` |
 | Understand what lives here and why | `docs/DESIGN.md`, `docs/AUDIT.md`, each crate's README |

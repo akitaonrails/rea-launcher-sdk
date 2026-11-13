@@ -120,8 +120,9 @@ on:
         description: >-
           Commands (bash) run after the workspace release build, for what
           `cargo build --workspace` doesn't build: e.g. a dependency's DLL
-          such as rea-launcher-close-hook (`cargo build --release --locked
-          --target "$RUST_TARGET" -p rea-launcher-close-hook`). REA_RELEASE_DIR
+          such as rea-launcher-close-hook or rea-launcher-dinput (`cargo
+          build --release --locked --target "$RUST_TARGET" -p
+          rea-launcher-close-hook`). REA_RELEASE_DIR
           is the release output folder.
         type: string
         default: ""

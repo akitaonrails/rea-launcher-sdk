@@ -11,6 +11,22 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ### Added
 
+- `rea-launcher-dinput` (`rea_dinput.dll`): the in-game DirectInput
+  wheel layer for games that read wheels themselves (CMR3, CMR04,
+  CMR2005). Added to the runtime copy's import table
+  (`rea_dinput::import_into`), it wraps the game's
+  `DirectInput8Create` (in front of Xidi or the system's) and shows one
+  virtual wheel, "rea wheel", made from the player's wheel and separate
+  pedals through `wheel::rig`: steering lock, deadzone and curve,
+  separate and combined pedals, force feedback on the real wheel at the
+  player's strength, revived after a re-acquire. Configured by
+  `rea_wheel.ini`; `REA_WHEEL_MODE=on|off` (`rea_dinput::MODE_ENV`)
+  carries the launcher's decision. Opt-in: nothing changes for a
+  launcher that doesn't ship it.
+- `rea_launcher::wheel::rig::{kind, product_ids, reading}`: the
+  DirectInput conversions (device kind, USB ids from a product GUID,
+  `DIJOYSTATE2` as a `DeviceState`) the launcher and the in-game layer
+  share; `rea_launcher_win32::dinput` uses them.
 - `rea_launcher::wheel::rig`: the devices behind the DirectInput virtual
   wheel, shared by the launcher's Wheel tab and the in-game layer —
   `pick` (wheel and pedals), `profile` (saved or guessed calibration),
