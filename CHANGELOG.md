@@ -9,6 +9,27 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-13
+
+Wheel support for games that read wheels through DirectInput themselves
+(the CMR3, CMR04 and CMR2005 launchers): an in-game layer that shows the
+game one virtual wheel, the launcher's Wheel tab and its options.
+
+### Migration
+
+- Nothing to do for a launcher that doesn't adopt the wheel layer: no
+  existing API or behaviour changed, and `rea-launcher-close-hook` keeps
+  its default features.
+- To adopt it, follow `crates/rea-launcher-dinput/README.md` ("Ship and
+  enable it") and docs/playbooks/wheels-and-ffb.md ("DirectInput games").
+  Depend on `rea-launcher-dinput` (and the close hook, when you ship both)
+  with `default-features = false`, add a `layer-dlls` feature and a
+  `[profile.dll]` with `panic = "unwind"`, and build the DLLs with
+  `cargo build --profile dll --lib -p <launcher> -p rea-launcher-dinput
+  --features layer-dlls`. Verify: `objdump -p` shows `DllMain` and
+  `rea_dinput_load` in `rea_dinput.dll` and no `DllMain` in the launcher
+  exe; `sdk/scripts/launcher-check` reports no `dll-unwind` error.
+
 ### Added
 
 - `rea-launcher-dinput` (`rea_dinput.dll`): the in-game DirectInput
@@ -1283,6 +1304,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.9.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.7.2...v0.8.0
