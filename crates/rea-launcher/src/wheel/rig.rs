@@ -62,6 +62,49 @@ pub fn guid_text(data1: u32, data2: u16, data3: u16, data4: [u8; 8]) -> String {
     )
 }
 
+/// `DI8DEVTYPE_GAMEPAD` and `DI8DEVTYPE_DRIVING`: a `dwDevType`'s low byte.
+pub const DEVTYPE_GAMEPAD: u32 = 0x15;
+pub const DEVTYPE_DRIVING: u32 = 0x16;
+
+/// What a DirectInput device is: [`super::classify`] of its USB ids, with
+/// `DI8DEVTYPE_DRIVING` as a wheel type and `DI8DEVTYPE_GAMEPAD` as a game
+/// controller.
+pub fn kind(vid: u16, pid: u16, dev_type: u32, axes: usize) -> Kind {
+    let class = dev_type & 0xff;
+    super::classify(&super::DeviceFacts {
+        vid,
+        pid,
+        sdl_wheel_type: class == DEVTYPE_DRIVING,
+        game_controller: class == DEVTYPE_GAMEPAD,
+        axes,
+    })
+}
+
+/// The USB ids in a DirectInput product GUID, when DirectInput put them
+/// there (`Data1` = PID << 16 | VID, `Data4` ending in "PIDVID"); else
+/// 0, 0.
+pub fn product_ids(data1: u32, data4: [u8; 8]) -> (u16, u16) {
+    if &data4[2..] == b"PIDVID" {
+        (data1 as u16, (data1 >> 16) as u16)
+    } else {
+        (0, 0)
+    }
+}
+
+/// A `DIJOYSTATE2` as a [`DeviceState`]: `axes` are its `lX`, `lY`, `lZ`,
+/// `lRx`, `lRy`, `lRz` and `rglSlider` read at
+/// [`super::dinput::REAL_RANGE`] (clamped to `i16`), then the first
+/// `count` of `buttons` (`rgbButtons`).
+pub fn reading(axes: [i32; 8], buttons: &[u8], count: usize) -> DeviceState {
+    DeviceState {
+        axes: axes
+            .iter()
+            .map(|&v| v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16)
+            .collect(),
+        buttons: buttons.iter().take(count).map(|&b| b & 0x80 != 0).collect(),
+    }
+}
+
 /// The devices that drive the virtual wheel, as indices into the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rig {
@@ -322,6 +365,24 @@ mod tests {
             guid_text(1, 2, 3, [0; 8]),
             "{00000001-0002-0003-0000-000000000000}"
         );
+    }
+
+    #[test]
+    fn directinput_facts_become_kinds_ids_and_readings() {
+        assert_eq!(kind(0x0eb7, 0x0020, 0x0001_0216, 6), Kind::Wheel);
+        assert_eq!(kind(0x1209, 0x0001, DEVTYPE_DRIVING, 3), Kind::Wheel);
+        assert_eq!(kind(0x045e, 0x028e, DEVTYPE_GAMEPAD, 4), Kind::Pad);
+        assert_eq!(kind(0x1209, 0x0001, 0x14, 2), Kind::Other);
+        let pidvid = [0, 0, b'P', b'I', b'D', b'V', b'I', b'D'];
+        assert_eq!(product_ids(0x0020_0eb7, pidvid), (0x0eb7, 0x0020));
+        assert_eq!(product_ids(0x0020_0eb7, [0; 8]), (0, 0));
+        let r = reading(
+            [-40_000, 0, 0, 0, 0, 0, 5, 70_000],
+            &[0, 0x80, 0, 0, 0, 0x80],
+            4,
+        );
+        assert_eq!(r.axes, vec![-32_768, 0, 0, 0, 0, 0, 5, 32_767]);
+        assert_eq!(r.buttons, vec![false, true, false, false]);
     }
 
     #[test]

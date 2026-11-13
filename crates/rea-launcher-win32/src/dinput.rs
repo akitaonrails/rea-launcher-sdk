@@ -26,14 +26,14 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
-    DI_FFNOMINALMAX, DI8DEVCLASS_GAMECTRL, DI8DEVTYPE_DRIVING, DI8DEVTYPE_GAMEPAD, DICONSTANTFORCE,
-    DIDATAFORMAT, DIDC_FORCEFEEDBACK, DIDEVCAPS, DIDEVICEINSTANCEW, DIDF_ABSAXIS,
-    DIDFT_ANYINSTANCE, DIDFT_AXIS, DIDFT_BUTTON, DIDFT_POV, DIDOI_ASPECTPOSITION, DIEB_NOTRIGGER,
-    DIEDFL_ATTACHEDONLY, DIEFF_CARTESIAN, DIEFF_OBJECTOFFSETS, DIEFFECT, DIENUM_CONTINUE,
-    DIEP_TYPESPECIFICPARAMS, DIJOYSTATE2, DIOBJECTDATAFORMAT, DIPH_DEVICE, DIPROPAUTOCENTER_OFF,
-    DIPROPAUTOCENTER_ON, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DISCL_BACKGROUND, DISCL_EXCLUSIVE,
-    DISCL_NONEXCLUSIVE, DirectInput8Create, GUID_ConstantForce, GUID_POV, GUID_RxAxis, GUID_RyAxis,
-    GUID_RzAxis, GUID_Slider, GUID_XAxis, GUID_YAxis, GUID_ZAxis,
+    DI_FFNOMINALMAX, DI8DEVCLASS_GAMECTRL, DICONSTANTFORCE, DIDATAFORMAT, DIDC_FORCEFEEDBACK,
+    DIDEVCAPS, DIDEVICEINSTANCEW, DIDF_ABSAXIS, DIDFT_ANYINSTANCE, DIDFT_AXIS, DIDFT_BUTTON,
+    DIDFT_POV, DIDOI_ASPECTPOSITION, DIEB_NOTRIGGER, DIEDFL_ATTACHEDONLY, DIEFF_CARTESIAN,
+    DIEFF_OBJECTOFFSETS, DIEFFECT, DIENUM_CONTINUE, DIEP_TYPESPECIFICPARAMS, DIJOYSTATE2,
+    DIOBJECTDATAFORMAT, DIPH_DEVICE, DIPROPAUTOCENTER_OFF, DIPROPAUTOCENTER_ON, DIPROPDWORD,
+    DIPROPHEADER, DIPROPRANGE, DISCL_BACKGROUND, DISCL_EXCLUSIVE, DISCL_NONEXCLUSIVE,
+    DirectInput8Create, GUID_ConstantForce, GUID_POV, GUID_RxAxis, GUID_RyAxis, GUID_RzAxis,
+    GUID_Slider, GUID_XAxis, GUID_YAxis, GUID_ZAxis,
 };
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -46,8 +46,8 @@ use windows_sys::core::{BOOL, GUID, HRESULT};
 use crate::wide::wide;
 use rea_launcher::ffb::{FfbSettings, test_pattern};
 use rea_launcher::wheel::dinput::REAL_RANGE;
-use rea_launcher::wheel::rig::{Device, FfbTest, WheelDevices, guid_text};
-use rea_launcher::wheel::{self, DeviceFacts, DeviceId, DeviceShape, DeviceState};
+use rea_launcher::wheel::rig::{self, Device, FfbTest, WheelDevices, guid_text};
+use rea_launcher::wheel::{self, DeviceId, DeviceShape, DeviceState};
 
 /// How often the worker reads the devices while they are watched.
 pub const TICK: Duration = Duration::from_millis(10);
@@ -67,8 +67,6 @@ const DIPROP_RANGE: usize = 4;
 const DIPROP_AUTOCENTER: usize = 9;
 const DIDFT_OPTIONAL: u32 = 0x8000_0000;
 const INFINITE: u32 = u32::MAX;
-/// What `guidProduct.Data4` ends with when Data1 holds the USB ids.
-const PIDVID: &[u8; 6] = b"PIDVID";
 
 // ---------------------------------------------------------------- COM
 
@@ -190,39 +188,19 @@ fn ok(hr: HRESULT) -> bool {
 
 // ---------------------------------------------------------------- pure parts
 
-/// The USB ids in a product GUID, when DirectInput put them there
-/// (`Data1` = PID << 16 | VID, `Data4` ending in "PIDVID"); else 0, 0.
-fn product_ids(product: &GUID) -> (u16, u16) {
-    if &product.data4[2..] == PIDVID {
-        (product.data1 as u16, (product.data1 >> 16) as u16)
-    } else {
-        (0, 0)
-    }
-}
-
 /// A NUL-terminated UTF-16 buffer as text.
 fn text(buffer: &[u16]) -> String {
     let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
     String::from_utf16_lossy(&buffer[..end]).trim().to_owned()
 }
 
-/// A `DIJOYSTATE2` as a [`DeviceState`]: the eight axes of [`rea_launcher::wheel::dinput::REAL_AXES`]
-/// (clamped to `i16`) and the first `buttons` buttons.
+/// A `DIJOYSTATE2` as a [`DeviceState`] ([`rig::reading`]).
 fn reading(state: &DIJOYSTATE2, buttons: usize) -> DeviceState {
     let [s0, s1] = state.rglSlider;
     let axes = [
         state.lX, state.lY, state.lZ, state.lRx, state.lRy, state.lRz, s0, s1,
     ];
-    DeviceState {
-        axes: axes
-            .iter()
-            .map(|&v| v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16)
-            .collect(),
-        buttons: state.rgbButtons[..buttons.min(128)]
-            .iter()
-            .map(|&b| b & 0x80 != 0)
-            .collect(),
-    }
+    rig::reading(axes, &state.rgbButtons, buttons.min(128))
 }
 
 /// `c_dfDIJoystick2` without the velocity, acceleration and force axes:
@@ -354,7 +332,8 @@ impl Open {
             (v.set_property)(com.raw(), DIPROP_RANGE as *const GUID, &range.diph);
             (v.acquire)(com.raw());
         }
-        let (vid, pid) = product_ids(&instance.guidProduct);
+        let product = &instance.guidProduct;
+        let (vid, pid) = rig::product_ids(product.data1, product.data4);
         let id = DeviceId {
             name: text(&instance.tszProductName),
             vid,
@@ -366,14 +345,7 @@ impl Open {
                 instance.guidInstance.data4,
             ),
         };
-        let devtype = instance.dwDevType & 0xff;
-        let kind = wheel::classify(&DeviceFacts {
-            vid,
-            pid,
-            sdl_wheel_type: devtype == DI8DEVTYPE_DRIVING,
-            game_controller: devtype == DI8DEVTYPE_GAMEPAD,
-            axes: caps.dwAxes as usize,
-        });
+        let kind = rig::kind(vid, pid, instance.dwDevType, caps.dwAxes as usize);
         let mut open = Open {
             com,
             info: Device {
@@ -910,21 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_ids_come_from_a_pidvid_product_guid() {
-        let csl = GUID {
-            data1: 0x0020_0eb7,
-            data2: 0,
-            data3: 0,
-            data4: [0, 0, b'P', b'I', b'D', b'V', b'I', b'D'],
-        };
-        assert_eq!(product_ids(&csl), (0x0eb7, 0x0020));
-        assert_eq!(
-            product_ids(&GUID {
-                data4: [0; 8],
-                ..csl
-            }),
-            (0, 0)
-        );
+    fn names_are_read_up_to_their_nul() {
         assert_eq!(text(&[0x52, 0x65, 0x61, 0, 0x41]), "Rea");
     }
 
