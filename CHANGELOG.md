@@ -18,11 +18,19 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   `DirectInput8Create` (in front of Xidi or the system's) and shows one
   virtual wheel, "rea wheel", made from the player's wheel and separate
   pedals through `wheel::rig`: steering lock, deadzone and curve,
-  separate and combined pedals, force feedback on the real wheel at the
-  player's strength, revived after a re-acquire. Configured by
-  `rea_wheel.ini`; `REA_WHEEL_MODE=on|off` (`rea_dinput::MODE_ENV`)
-  carries the launcher's decision. Opt-in: nothing changes for a
-  launcher that doesn't ship it.
+  separate and combined pedals, force feedback on the real wheel (the
+  player's strength in the wheel's gain, so its autocentre too;
+  conditions mirrored, never negated, on invert), revived after a
+  re-acquire. One wheel opened per DirectInput and shared; a wheel that
+  can't be opened leaves the game untouched, one held by another program
+  steers without force feedback, `on` without a wheel picks one up when
+  it is plugged in. Configured by `rea_wheel.ini`; `REA_WHEEL_MODE=on|off`
+  (`rea_dinput::MODE_ENV`) carries the launcher's decision. Opt-in:
+  nothing changes for a launcher that doesn't ship it.
+- `rea_launcher::wheel::rig::same_guid`: instance GUIDs compared trimmed
+  and without case. `Setup` keeps `device` and `pedals` in lower case
+  (file and launcher options), so a hand edit still picks the device;
+  the Wheel tab shows a pedals pick that names the wheel as Automatic.
 - `rea_launcher::wheel::rig::{kind, product_ids, reading}`: the
   DirectInput conversions (device kind, USB ids from a product GUID,
   `DIJOYSTATE2` as a `DeviceState`) the launcher and the in-game layer
