@@ -106,6 +106,17 @@ impl Axis {
     pub const ALL: [Axis; 4] = [Axis::X, Axis::Y, Axis::Z, Axis::Rz];
 }
 
+/// A real device's axes in [`super::DeviceState::axes`] order, as both the
+/// launcher (calibration, live check) and the in-game layer read them:
+/// `DIJOYSTATE2`'s `lX`, `lY`, `lZ`, `lRx`, `lRy`, `lRz`, `rglSlider[0]`,
+/// `rglSlider[1]`, with each axis's `DIPROP_RANGE` set to
+/// [`REAL_RANGE`]. A [`Profile`]'s axis numbers index this list.
+pub const REAL_AXES: [&str; 8] = ["X", "Y", "Z", "Rx", "Ry", "Rz", "Slider 1", "Slider 2"];
+
+/// The range both sides set on a real device's axes, so a reading is a
+/// [`super::DeviceState`] value as it is.
+pub const REAL_RANGE: (i32, i32) = (-32_768, 32_767);
+
 /// A [`Control`] with no buttons: the layer passes the wheel's buttons
 /// through by number and gives none of them a launcher meaning, so its
 /// profile is a `WheelProfile<NoButtons>`.
