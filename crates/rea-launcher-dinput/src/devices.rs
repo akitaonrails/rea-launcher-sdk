@@ -8,6 +8,7 @@ use rea_launcher::wheel::dinput::{Mode, Profile, Setup, VIRTUAL};
 use rea_launcher::wheel::rig::{self, Device, Rig};
 use rea_launcher::wheel::{self, DeviceShape, DeviceState};
 
+use crate::format::POV_CENTRED;
 use crate::state::Reading;
 
 /// The environment variable the launcher sets on the game to `on` or
@@ -60,7 +61,9 @@ pub fn plan(all: &[Device], mode: Mode, setup: &Setup, saved: Option<&Profile>) 
     let hidden = (0..all.len())
         .filter(|&i| {
             let d = &all[i];
-            merged.iter().any(|m| rig::same_guid(&m.id.guid, &d.id.guid))
+            merged
+                .iter()
+                .any(|m| rig::same_guid(&m.id.guid, &d.id.guid))
                 || wheel
                     .as_ref()
                     .is_some_and(|w| model(w) == model(d) && !d.ffb)
@@ -144,20 +147,28 @@ impl Merge {
     }
 
     /// The virtual wheel's reading from the wheel's (with its first hat,
-    /// `pov`) and the pedal device's; neutral while the wheel can't be
-    /// read.
+    /// `pov`) and the pedal device's. While the wheel can't be read it is
+    /// centred and the pedal device still drives; neutral before there is
+    /// a calibration to read them with.
     pub fn reading(
         &mut self,
         now: Instant,
         wheel: Option<(&DeviceState, u32)>,
         pedals: Option<&DeviceState>,
     ) -> Reading {
-        let Some((wheel, pov)) = wheel else {
-            return Reading::NEUTRAL;
+        let lost = DeviceState {
+            axes: Vec::new(),
+            buttons: vec![false; self.devices[0].buttons],
         };
-        let profile = self.profile(now, wheel, pedals).clone();
-        let controls = rig::virtual_controls(&self.setup, &profile, wheel, pedals);
-        let buttons = wheel
+        let (state, pov, profile) = match wheel {
+            Some((state, pov)) => (state, pov, self.profile(now, state, pedals).clone()),
+            None => match &self.profile {
+                Some(profile) => (&lost, POV_CENTRED, profile.clone()),
+                None => return Reading::NEUTRAL,
+            },
+        };
+        let controls = rig::virtual_controls(&self.setup, &profile, state, pedals);
+        let buttons = state
             .buttons
             .iter()
             .chain(pedals.into_iter().flat_map(|a| a.buttons.iter()))
@@ -311,7 +322,17 @@ mod tests {
         // Pedals unplugged: released.
         let r = m.reading(later(), Some((&wheel, 0)), None);
         assert_eq!(r.axes[1..], [0.0, -1.0, -1.0]);
-        assert_eq!(m.reading(later(), None, Some(&pedals)), Reading::NEUTRAL);
+        // The wheel lost: centred, but the pedal device still drives, its
+        // buttons where they were (after the wheel's four).
+        let r = m.reading(later(), None, Some(&pedals));
+        assert_eq!(r.axes, [0.0, 1.0, 1.0, -1.0]);
+        assert_eq!((r.buttons, r.pov), (0b1_0000, crate::format::POV_CENTRED));
+        // Before any calibration, nothing to read the pedals with.
+        let mut fresh = Merge::new(Setup::default(), None, csl(), Some(self::pedals()));
+        assert_eq!(
+            fresh.reading(start(), None, Some(&pedals)),
+            Reading::NEUTRAL
+        );
     }
 
     #[test]
