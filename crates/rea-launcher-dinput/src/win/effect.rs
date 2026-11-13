@@ -658,16 +658,6 @@ impl Effects {
         self.no_restart_refused = false;
     }
 
-    /// Every real effect's parameters sent again (the strength they are
-    /// made at changed).
-    pub fn refresh(&self, ffb: &FfbSettings) {
-        for slot in &self.slots {
-            if let Some(real) = &slot.real {
-                real.set(&slot.game.for_wheel(ffb), ALL_PARAMS);
-            }
-        }
-    }
-
     /// After the wheel was (re-)acquired: every effect made, downloaded
     /// and, if the game had it playing, started again. Drivers drop a
     /// device's effects when it is lost or unacquired; the game doesn't

@@ -211,6 +211,10 @@ pub(super) unsafe fn attached(di: &Com<DirectInputVtbl>) -> Vec<Attached> {
 /// How often a lost device is acquired again.
 const RETRY: Duration = Duration::from_millis(500);
 
+/// How often a wheel held shared (another program had it) is asked for
+/// exclusive access again, for force feedback.
+const EXCLUSIVE_RETRY: Duration = Duration::from_secs(5);
+
 /// What a reading found.
 pub(super) enum Read {
     State(DeviceState, u32),
@@ -225,7 +229,10 @@ pub(super) struct Real {
     com: Com<DeviceVtbl>,
     pub device: Device,
     window: usize,
+    /// Exclusive access is wanted (force feedback, a window to hold it on).
+    wants_exclusive: bool,
     exclusive: bool,
+    exclusive_retry_at: Instant,
     lost: bool,
     /// Acquired again outside [`Real::read`] (a property that needed it):
     /// the next reading says [`Read::Back`].
@@ -235,8 +242,8 @@ pub(super) struct Real {
 
 impl Real {
     /// `com` (a new device) set up to read `c_dfDIJoystick2` at the real
-    /// range.
-    pub fn open(com: Com<DeviceVtbl>, device: Device) -> Option<Real> {
+    /// range; the code of a refused data format.
+    pub fn open(com: Com<DeviceVtbl>, device: Device) -> Result<Real, HRESULT> {
         let format = Joystate2::new();
         let df = format.data_format();
         let range = DIPROPRANGE {
@@ -249,19 +256,17 @@ impl Real {
         unsafe {
             let code = (com.vtbl().set_data_format)(com.raw(), &df);
             if !hr::ok(code) {
-                log!(
-                    "{}: the data format was refused ({code:#x})",
-                    device.id.name
-                );
-                return None;
+                return Err(code);
             }
             (com.vtbl().set_property)(com.raw(), prop(PROP_RANGE), &range.diph);
         }
-        Some(Real {
+        Ok(Real {
             com,
             device,
             window: 0,
+            wants_exclusive: false,
             exclusive: false,
+            exclusive_retry_at: Instant::now(),
             lost: true,
             regained: false,
             retry_at: Instant::now(),
@@ -274,7 +279,8 @@ impl Real {
         // SAFETY: a live device.
         unsafe { (self.com.vtbl().unacquire)(self.com.raw()) };
         self.window = hwnd as usize;
-        self.exclusive = self.device.ffb && !hwnd.is_null() && self.set_level(true);
+        self.wants_exclusive = self.device.ffb && !hwnd.is_null();
+        self.exclusive = self.wants_exclusive && self.set_level(true);
         if !self.exclusive {
             self.set_level(false);
         }
@@ -303,29 +309,40 @@ impl Real {
         })
     }
 
-    /// Acquires the device. When another program holds the wheel
-    /// exclusively it is acquired shared instead: it steers, without force
-    /// feedback.
+    /// Acquires the device, exclusive when force feedback wants it. When
+    /// another program holds the wheel exclusively it is acquired shared
+    /// instead: it steers, without force feedback, and exclusive access is
+    /// asked for again every [`EXCLUSIVE_RETRY`] ([`Real::read`]).
     pub fn acquire(&mut self) -> bool {
         let try_acquire = |real: &Real| {
             // SAFETY: a live device.
             unsafe { (real.com.vtbl().acquire)(real.com.raw()) }
         };
+        let was_exclusive = self.exclusive;
+        if self.wants_exclusive && !self.exclusive {
+            self.exclusive = self.set_level(true);
+        }
         let mut code = try_acquire(self);
         if !hr::ok(code) && self.exclusive && self.set_level(false) {
             code = try_acquire(self);
             if hr::ok(code) {
                 self.exclusive = false;
-                log!(
-                    "{}: taken by another program: shared, no force feedback",
-                    self.device.id.name
-                );
+                if was_exclusive {
+                    log!(
+                        "{}: taken by another program: shared, no force feedback",
+                        self.device.id.name
+                    );
+                }
             } else {
                 self.set_level(true);
             }
         }
+        if self.exclusive && !was_exclusive && hr::ok(code) {
+            log!("{}: exclusive: force feedback", self.device.id.name);
+        }
         self.lost = !hr::ok(code);
         self.retry_at = Instant::now() + RETRY;
+        self.exclusive_retry_at = Instant::now() + EXCLUSIVE_RETRY;
         if self.lost {
             log!("{}: not acquired ({code:#x})", self.device.id.name);
         }
@@ -342,6 +359,10 @@ impl Real {
     /// every [`RETRY`].
     pub fn read(&mut self, now: Instant) -> Read {
         let mut back = std::mem::take(&mut self.regained);
+        if !self.lost && self.wants_exclusive && !self.exclusive && now >= self.exclusive_retry_at {
+            self.unacquire();
+            back |= self.acquire() && self.exclusive;
+        }
         if self.lost {
             if now < self.retry_at || !self.acquire() {
                 return Read::Lost;

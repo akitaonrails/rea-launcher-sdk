@@ -2,7 +2,8 @@
 //! DirectInput and shared by every virtual device the game makes from it
 //! and by their effects ([`Rig`]), and where they come from ([`Source`]).
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rea_launcher::ffb::FfbSettings;
@@ -17,7 +18,7 @@ use windows_sys::core::HRESULT;
 use super::com::{Com, DeviceVtbl, DirectInputVtbl};
 use super::effect::Effects;
 use super::real::{self, Attached, PROP_AUTOCENTER, PROP_FFGAIN, Read, Real};
-use super::{config, fake, hr, log};
+use super::{config, fake, guard, hr, lock, log};
 use crate::devices::{self, Merge};
 use crate::state::{FULL, Reading};
 
@@ -31,6 +32,8 @@ const RESCAN: Duration = Duration::from_secs(2);
 /// The game's DirectInput, for listing and opening real devices.
 pub(super) struct Source {
     inner: Com<DirectInputVtbl>,
+    /// Devices whose failure to open was logged (once each).
+    told: Vec<String>,
 }
 
 /// The devices a plan opened.
@@ -43,7 +46,10 @@ pub(super) struct Opened {
 
 impl Source {
     pub fn new(inner: Com<DirectInputVtbl>) -> Source {
-        Source { inner }
+        Source {
+            inner,
+            told: Vec::new(),
+        }
     }
 
     /// The game controllers attached now, and the test-only fakes.
@@ -59,33 +65,25 @@ impl Source {
     /// The devices of the plan for `attached` in `mode`, opened. `None`
     /// when the game gets its DirectInput untouched: no virtual wheel, or
     /// the picked wheel can't be opened (then nothing is hidden).
-    pub fn open_plan(&self, attached: &[Attached], mode: Mode) -> Option<Opened> {
+    pub fn open_plan(&mut self, attached: &[Attached], mode: Mode) -> Option<Opened> {
         let config = config();
         let devices: Vec<Device> = attached.iter().map(|a| a.device.clone()).collect();
         let plan = devices::plan(&devices, mode, &config.setup, config.profile.as_ref());
         if !plan.show {
             return None;
         }
-        let open = |device: &Device| {
-            let found = attached
-                .iter()
-                .find(|a| rig::same_guid(&a.device.id.guid, &device.id.guid))?;
-            self.open(found)
-        };
         let wheel = match &plan.wheel {
-            Some(device) => Some(open(device).or_else(|| {
-                log!(
-                    "{}: can't be opened: the game gets its DirectInput untouched",
-                    device.id.name
-                );
-                None
-            })?),
+            Some(device) => {
+                Some(self.open(attached, device, "the game gets its DirectInput untouched")?)
+            }
             None => None,
         };
-        let pedals = plan.pedals.as_ref().and_then(open);
+        let pedals = plan
+            .pedals
+            .as_ref()
+            .and_then(|device| self.open(attached, device, "left to the game"));
         let mut hidden = plan.hidden;
         if let (Some(wanted), None) = (&plan.pedals, &pedals) {
-            log!("{}: can't be opened: left to the game", wanted.id.name);
             hidden.retain(|g| !rig::same_guid(g, &wanted.id.guid));
         }
         Some(Opened {
@@ -95,9 +93,27 @@ impl Source {
         })
     }
 
-    fn open(&self, attached: &Attached) -> Option<Real> {
+    /// Opens the attached `device`; a failure is logged once per device,
+    /// with what follows from it.
+    fn open(&mut self, attached: &[Attached], device: &Device, then: &str) -> Option<Real> {
+        let found = attached
+            .iter()
+            .find(|a| rig::same_guid(&a.device.id.guid, &device.id.guid))?;
+        match self.open_attached(found) {
+            Ok(real) => Some(real),
+            Err(code) => {
+                if !self.told.contains(&device.id.guid) {
+                    log!("{}: can't be opened ({code:#x}): {then}", device.id.name);
+                    self.told.push(device.id.guid.clone());
+                }
+                None
+            }
+        }
+    }
+
+    fn open_attached(&self, attached: &Attached) -> Result<Real, HRESULT> {
         let com = match attached.fake {
-            Some(index) => fake::open(index)?,
+            Some(index) => fake::open(index).ok_or(hr::GENERIC)?,
             None => {
                 let mut ptr = std::ptr::null_mut();
                 // SAFETY: a live DirectInput; the out pointer takes one
@@ -110,10 +126,9 @@ impl Source {
                         std::ptr::null_mut(),
                     );
                     if !hr::ok(code) {
-                        log!("{}: not opened ({code:#x})", attached.device.id.name);
-                        return None;
+                        return Err(code);
                     }
-                    Com::<DeviceVtbl>::from_raw(ptr)?
+                    Com::<DeviceVtbl>::from_raw(ptr).ok_or(hr::GENERIC)?
                 }
             }
         };
@@ -121,10 +136,62 @@ impl Source {
     }
 }
 
+/// The devices listed again on a thread of its own every [`RESCAN`] until
+/// a wheel can be opened (`on` with none at the start), so the game's
+/// input thread never waits on a listing; it only takes the result.
+/// DirectInput may be called from any thread.
+struct Rescan {
+    found: Arc<Mutex<Option<Opened>>>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Rescan {
+    fn start(inner: Com<DirectInputVtbl>) -> Rescan {
+        let found = Arc::new(Mutex::new(None));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (out, quit) = (Arc::clone(&found), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            guard((), || {
+                let mut source = Source::new(inner);
+                while !quit.load(Ordering::Acquire) {
+                    let wait = Instant::now() + RESCAN;
+                    while Instant::now() < wait {
+                        if quit.load(Ordering::Acquire) {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    let attached = source.attached();
+                    if let Some(opened) = source
+                        .open_plan(&attached, Mode::On)
+                        .filter(|o| o.wheel.is_some())
+                    {
+                        *lock(&out) = Some(opened);
+                        return;
+                    }
+                }
+            });
+        });
+        Rescan { found, stop }
+    }
+
+    fn take(&self) -> Option<Opened> {
+        lock(&self.found).take()
+    }
+}
+
+impl Drop for Rescan {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+    }
+}
+
 /// The real devices, the force feedback state the game set on the
 /// virtual wheel, and its effects.
 pub(super) struct Rig {
     source: Source,
+    /// Looking for a wheel (`on` without one).
+    rescan: Option<Rescan>,
     wheel: Option<Real>,
     pedals: Option<Real>,
     /// `None` without a wheel: the wheel reads neutral.
@@ -135,14 +202,10 @@ pub(super) struct Rig {
     /// The game's `DIPROP_AUTOCENTER` and `DIPROP_FFGAIN`.
     autocenter: u32,
     gain: u32,
-    /// The wheel took the gain with the player's strength in it, so the
-    /// effects go at full strength (else each effect is scaled).
-    gain_carries_strength: bool,
     window: usize,
     cooperated: bool,
     /// Virtual devices the game holds acquired.
     holders: u32,
-    rescan_at: Instant,
     keep_alive_at: Instant,
 }
 
@@ -150,6 +213,7 @@ impl Rig {
     pub fn new(source: Source, opened: Opened) -> Rig {
         let mut rig = Rig {
             source,
+            rescan: None,
             wheel: None,
             pedals: None,
             merge: None,
@@ -158,14 +222,15 @@ impl Rig {
             ffb: config().setup.ffb,
             autocenter: 1,
             gain: FULL,
-            gain_carries_strength: false,
             window: 0,
             cooperated: false,
             holders: 0,
-            rescan_at: Instant::now() + RESCAN,
             keep_alive_at: Instant::now(),
         };
         rig.take(opened);
+        if rig.wheel.is_none() {
+            rig.rescan = Some(Rescan::start(rig.source.inner.clone()));
+        }
         rig
     }
 
@@ -196,33 +261,27 @@ impl Rig {
         self.wheel.as_ref().is_some_and(|w| w.device.ffb)
     }
 
-    /// The settings effects are made with: full strength when the wheel's
-    /// gain carries the player's.
-    fn effect_ffb(&self) -> FfbSettings {
-        FfbSettings {
-            strength: if self.gain_carries_strength {
-                100
-            } else {
-                self.ffb.strength
-            },
-            ..self.ffb
-        }
-    }
-
     pub fn effects_mut(&mut self) -> &mut Effects {
         &mut self.effects
     }
 
     /// The effects, with the wheel and settings they are made for.
     pub fn effects_with_wheel(&mut self) -> (&mut Effects, Option<&Real>, FfbSettings) {
-        let ffb = self.effect_ffb();
-        (&mut self.effects, self.wheel.as_ref(), ffb)
+        (&mut self.effects, self.wheel.as_ref(), self.ffb)
     }
 
-    /// The game's window: the real devices cooperate on it.
+    /// The game's window: the real devices cooperate on it. Another
+    /// virtual device on the same window changes nothing; a new window
+    /// while the devices are held takes them again on it.
     pub fn set_window(&mut self, window: HWND) {
+        if self.cooperated && self.window == window as usize {
+            return;
+        }
         self.window = window as usize;
         self.cooperate();
+        if self.holders > 0 {
+            self.acquire_reals();
+        }
     }
 
     fn cooperate(&mut self) {
@@ -263,12 +322,12 @@ impl Rig {
         }
     }
 
-    /// The virtual wheel's reading now. Without a wheel the devices are
-    /// listed again every [`RESCAN`] until one is plugged in.
+    /// The virtual wheel's reading now. Without a wheel, one the
+    /// [`Rescan`] found is taken first.
     pub fn read(&mut self, now: Instant) -> Reading {
-        if self.wheel.is_none() && now >= self.rescan_at {
-            self.rescan_at = now + RESCAN;
-            self.rescan();
+        if let Some(opened) = self.rescan.as_ref().and_then(Rescan::take) {
+            self.rescan = None;
+            self.found(opened);
         }
         let wheel = self.wheel.as_mut().map(|w| w.read(now));
         let pedals = self.pedals.as_mut().map(|p| p.read(now));
@@ -298,16 +357,14 @@ impl Rig {
         reading
     }
 
-    /// Lists the devices again; drives with a wheel that is there now.
-    fn rescan(&mut self) {
-        let attached = self.source.attached();
-        let Some(opened) = self.source.open_plan(&attached, Mode::On) else {
-            return;
-        };
-        let Some(name) = opened.wheel.as_ref().map(|w| w.device.id.name.clone()) else {
-            return;
-        };
-        log!("{name} plugged in: the virtual wheel drives with it");
+    /// Drives with a wheel plugged in after the start.
+    fn found(&mut self, opened: Opened) {
+        if let Some(wheel) = &opened.wheel {
+            log!(
+                "{} plugged in: the virtual wheel drives with it",
+                wheel.device.id.name
+            );
+        }
         self.take(opened);
         if self.cooperated {
             self.cooperate();
@@ -332,27 +389,17 @@ impl Rig {
         }
     }
 
-    /// The game's gain times the player's strength to the wheel; when the
-    /// wheel takes it, its autocentre spring is at the player's strength
-    /// too, and the effects go at full strength.
+    /// The game's gain to the wheel, as the game set it. The player's
+    /// strength goes into each effect instead: a driver may take the gain
+    /// and ignore it (Logitech with "allow game to adjust" off, Wine
+    /// backends without it), which would lose the strength unseen.
     fn push_gain(&mut self) {
-        let gain = self.gain * u32::from(self.ffb.strength.min(100)) / 100;
-        let carries = match self.wheel.as_mut().filter(|w| w.exclusive()) {
-            Some(wheel) => {
-                let code = wheel.set_dword(PROP_FFGAIN, gain);
-                if !hr::ok(code) {
-                    log!(
-                        "the wheel refused gain {gain} ({code:#x}): the strength goes into each effect"
-                    );
-                }
-                hr::ok(code)
+        let gain = self.gain;
+        if let Some(wheel) = self.wheel.as_mut().filter(|w| w.exclusive()) {
+            let code = wheel.set_dword(PROP_FFGAIN, gain);
+            if !hr::ok(code) {
+                log!("the wheel refused gain {gain} ({code:#x})");
             }
-            None => false,
-        };
-        if carries != self.gain_carries_strength {
-            self.gain_carries_strength = carries;
-            let ffb = self.effect_ffb();
-            self.effects.refresh(&ffb);
         }
     }
 
@@ -401,4 +448,4 @@ impl Rig {
 }
 
 /// A rig shared by the virtual devices and effects of one DirectInput.
-pub(super) type Shared = Arc<std::sync::Mutex<Rig>>;
+pub(super) type Shared = Arc<Mutex<Rig>>;

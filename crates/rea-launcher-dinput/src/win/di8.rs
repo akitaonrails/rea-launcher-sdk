@@ -46,7 +46,7 @@ pub(super) unsafe fn wrap(inner: This) -> Option<This> {
     }
     // SAFETY: the caller's contract.
     let inner = unsafe { Com::<DirectInputVtbl>::add_ref(inner) }?;
-    let source = Source::new(inner.clone());
+    let mut source = Source::new(inner.clone());
     let attached = source.attached();
     for d in attached.iter().map(|a| &a.device) {
         log!(

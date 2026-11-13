@@ -22,6 +22,9 @@
 //! - `reset`: `DISFFC_RESET`, then every effect started again;
 //! - `autocenter:<0|1>`: `DIPROP_AUTOCENTER`;
 //! - `second`: a second virtual device made, read and released;
+//!   `second-drop`: the same, released while still acquired;
+//! - `unacquire`: the wheel unacquired;
+//! - `gain:<n>`: `DIPROP_FFGAIN` set, then read back as `gain=<code>,<n>`;
 //! - `events`: what reached the fake devices, as `fake <line>`;
 //! - `wait:<ms>`.
 
@@ -42,13 +45,13 @@ mod game {
     use windows_sys::Win32::Devices::HumanInterfaceDevice::{
         DI8DEVCLASS_GAMECTRL, DICONDITION, DICONSTANTFORCE, DIDATAFORMAT, DIDEVCAPS,
         DIDEVICEINSTANCEA, DIDEVICEOBJECTDATA, DIDEVICEOBJECTINSTANCEA, DIDF_ABSAXIS, DIDFT_AXIS,
-        DIEB_NOTRIGGER, DIEDFL_ATTACHEDONLY, DIEFF_CARTESIAN, DIEFF_OBJECTOFFSETS, DIEFFECT,
-        DIENUM_CONTINUE, DIEP_AXES, DIEP_DIRECTION, DIEP_DURATION, DIEP_NORESTART,
-        DIEP_TYPESPECIFICPARAMS, DIJOYSTATE2, DIOBJECTDATAFORMAT, DIPERIODIC, DIPH_BYID,
-        DIPH_DEVICE, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DISCL_EXCLUSIVE, DISCL_FOREGROUND,
-        DirectInput8Create, GUID_Button, GUID_ConstantForce, GUID_Damper, GUID_POV, GUID_RxAxis,
-        GUID_RyAxis, GUID_RzAxis, GUID_Sine, GUID_Slider, GUID_Spring, GUID_Square, GUID_XAxis,
-        GUID_YAxis, GUID_ZAxis,
+        DIEB_NOTRIGGER, DIEDFL_ATTACHEDONLY, DIEDFL_FORCEFEEDBACK, DIEFF_CARTESIAN,
+        DIEFF_OBJECTOFFSETS, DIEFFECT, DIENUM_CONTINUE, DIEP_AXES, DIEP_DIRECTION, DIEP_DURATION,
+        DIEP_NORESTART, DIEP_TYPESPECIFICPARAMS, DIJOYSTATE2, DIOBJECTDATAFORMAT, DIPERIODIC,
+        DIPH_BYID, DIPH_DEVICE, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DISCL_EXCLUSIVE,
+        DISCL_FOREGROUND, DirectInput8Create, GUID_Button, GUID_ConstantForce, GUID_Damper,
+        GUID_POV, GUID_RxAxis, GUID_RyAxis, GUID_RzAxis, GUID_Sine, GUID_Slider, GUID_Spring,
+        GUID_Square, GUID_XAxis, GUID_YAxis, GUID_ZAxis,
     };
     use windows_sys::Win32::Foundation::{HMODULE, HWND};
     use windows_sys::Win32::System::LibraryLoader::{
@@ -245,6 +248,21 @@ mod game {
             "devices={}",
             found.iter().map(name).collect::<Vec<_>>().join("|")
         );
+        let mut force: Vec<DIDEVICEINSTANCEA> = Vec::new();
+        // SAFETY: as above, only devices with force feedback.
+        unsafe {
+            method::<EnumDevices>(di, 4)(
+                di,
+                DI8DEVCLASS_GAMECTRL,
+                collect as *const c_void,
+                (&raw mut force).cast(),
+                DIEDFL_ATTACHEDONLY | DIEDFL_FORCEFEEDBACK,
+            )
+        };
+        println!(
+            "ffdevices={}",
+            force.iter().map(name).collect::<Vec<_>>().join("|")
+        );
         if let Some(first) = found.first().filter(|f| name(f) == "rea wheel") {
             // SAFETY: a live DirectInput and the wheel it listed.
             unsafe { drive(di, first, window, &steps) };
@@ -390,10 +408,14 @@ mod game {
             let set_property = method::<SetProperty>(device, 6);
             let mut effects = Vec::new();
             for step in steps {
-                if step == "second" {
+                if step == "second" || step == "second-drop" {
                     if let Some(other) = open_device(di, wheel, window) {
                         run_step(other, "read", set_property, &mut effects);
-                        close(other);
+                        if step == "second" {
+                            close(other);
+                        } else {
+                            release(other);
+                        }
                     }
                     continue;
                 }
@@ -534,6 +556,26 @@ mod game {
                         .map(|&e| format!("{:#x}", method::<Start>(e, 7)(e, 1, 0)))
                         .collect();
                     println!("reset={code:#x}:{}", started.join(","));
+                }
+                "unacquire" => {
+                    let code =
+                        method::<unsafe extern "system" fn(This) -> HRESULT>(device, 8)(device);
+                    println!("unacquire={code:#x}");
+                }
+                "gain" => {
+                    let value = DIPROPDWORD {
+                        diph: dword_header(),
+                        dwData: number(1) as u32,
+                    };
+                    let set = set_property(device, 7, &value.diph);
+                    let mut read = DIPROPDWORD {
+                        diph: dword_header(),
+                        dwData: 0,
+                    };
+                    type GetProperty =
+                        unsafe extern "system" fn(This, usize, *mut DIPROPHEADER) -> HRESULT;
+                    method::<GetProperty>(device, 5)(device, 7, &mut read.diph);
+                    println!("gain={set:#x},{}", read.dwData);
                 }
                 "autocenter" => {
                     let value = DIPROPDWORD {

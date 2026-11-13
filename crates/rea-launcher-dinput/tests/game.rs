@@ -274,22 +274,26 @@ fn effects_reach_the_wheel_scaled_and_survive_a_replug() {
     ] {
         assert!(has(line), "{line}: {fake:#?}");
     }
-    // Half strength in the wheel's gain (its autocentre too), so the
-    // effects go as the game made them, along X, on one axis.
+    // Half strength in each effect, once; the wheel gets the game's own
+    // gain. Along X, on one axis.
     for line in [
-        "0: gain 5000",
+        "0: gain 10000",
         "0: autocenter 0",
-        "0: create spring offset=0 coefficient=8000/8000 saturation=10000/10000 deadband=0 duration=-1 gain=10000 direction=[1]",
-        "0: create damper offset=0 coefficient=8000/8000",
-        "0: create sine magnitude=6000 offset=0 phase=0 period=100000",
-        "0: create square magnitude=10000",
-        "0: create constant magnitude=6000",
+        "0: create spring offset=0 coefficient=4000/4000 saturation=5000/5000 deadband=0 duration=-1 gain=10000 direction=[1]",
+        "0: create damper offset=0 coefficient=4000/4000",
+        "0: create sine magnitude=3000 offset=0 phase=0 period=100000",
+        "0: create square magnitude=5000",
+        "0: create constant magnitude=3000",
         "0: start 1 spring",
         "0: start 1 constant",
-        "0: set 0x40000100 constant magnitude=-8000",
+        "0: set 0x40000100 constant magnitude=-4000",
     ] {
         assert!(has(line), "{line}: {fake:#?}");
     }
+    assert!(
+        !has("0: gain 5000"),
+        "the strength is not in the gain too: {fake:#?}"
+    );
     // Unplugged: the wheel reads neutral; plugged back: acquired, its
     // settings and every effect back and playing.
     assert_eq!(r.all("state")[0], "0x0:127,127,0,0 buttons=0x0 pov=-1");
@@ -301,7 +305,7 @@ fn effects_reach_the_wheel_scaled_and_survive_a_replug() {
     for line in [
         "0: acquire",
         "0: autocenter 0",
-        "0: gain 5000",
+        "0: gain 10000",
         "0: download spring",
         "0: start 1 spring",
         "0: start 1 constant",
@@ -314,7 +318,7 @@ fn effects_reach_the_wheel_scaled_and_survive_a_replug() {
     assert!(
         after
             .iter()
-            .any(|l| l.starts_with("0: set ") && l.contains("constant magnitude=-8000")),
+            .any(|l| l.starts_with("0: set ") && l.contains("constant magnitude=-4000")),
         "{after:#?}"
     );
 }
@@ -337,17 +341,23 @@ fn inverted_force_feedback_pushes_the_other_way() {
 }
 
 #[test]
-fn a_wheel_without_a_gain_gets_the_strength_in_each_effect() {
+fn the_games_gain_reaches_the_wheel_as_it_set_it() {
+    let ini = "mode = auto\nfake = wheel\nffb_strength = 50\n";
+    let r = run(
+        "gain",
+        Some(ini),
+        false,
+        &[],
+        &["events", "gain:7000", "events"],
+    );
+    assert_eq!(r.value("gain"), Some("0x0,7000"), "{:?}", r.lines);
+    let fake = r.fake();
+    assert!(fake.contains(&"0: gain 7000"), "{fake:#?}");
+    // A wheel that refuses the gain changes nothing for the effects.
     let ini = "mode = auto\nfake = wheel nogain\nffb_strength = 50\n";
     let r = run("nogain", Some(ini), false, &[], &["effects", "events"]);
     let fake = r.fake();
-    for line in [
-        "0: refused gain",
-        "0: create spring offset=0 coefficient=4000/4000 saturation=5000/5000",
-        "0: create sine magnitude=3000",
-        "0: create constant magnitude=3000",
-        "0: set 0x40000100 constant magnitude=-4000",
-    ] {
+    for line in ["0: refused gain", "0: create constant magnitude=3000"] {
         assert!(
             fake.iter().any(|l| l.starts_with(line)),
             "{line}: {fake:#?}"
@@ -396,7 +406,7 @@ fn effects_started_early_or_after_a_reset_play() {
     let fake = r.fake();
     let made = fake
         .iter()
-        .position(|l| l.starts_with("0: create constant magnitude=7000"))
+        .position(|l| l.starts_with("0: create constant magnitude=3500"))
         .expect("made once complete");
     assert_eq!(
         fake.get(made + 1).copied(),
@@ -457,19 +467,37 @@ fn a_wheel_another_program_holds_still_steers() {
             "read",
             "effects",
             "events",
+            // The other program lets go (the fake: until it is replugged).
+            "unplug:0",
+            "read",
+            "plug:0",
+            "wait:700",
+            "read",
+            "events",
         ],
     );
     assert_eq!(
-        r.value("state"),
-        Some("0x0:255,127,0,0 buttons=0x0 pov=-1"),
+        r.all("state")[0],
+        "0x0:255,127,0,0 buttons=0x0 pov=-1",
         "{:?}",
         r.lines
     );
     let fake = r.fake();
-    assert!(fake.contains(&"0: cooperate shared"), "{fake:#?}");
+    let back = fake
+        .iter()
+        .position(|l| *l == "0: plugged")
+        .expect("plugged");
+    let (before, after) = fake.split_at(back);
+    assert!(before.contains(&"0: cooperate shared"), "{fake:#?}");
     assert!(
-        !fake.iter().any(|l| l.starts_with("0: create")),
+        !before.iter().any(|l| l.starts_with("0: create")),
         "no force feedback: {fake:#?}"
+    );
+    // Exclusive again: the effects are made and play.
+    assert!(after.contains(&"0: cooperate exclusive"), "{after:#?}");
+    assert!(
+        after.iter().any(|l| l.starts_with("0: create constant")),
+        "{after:#?}"
     );
 }
 
@@ -533,15 +561,69 @@ fn a_second_virtual_device_shares_the_one_wheel() {
         Some(FAKE_WHEEL),
         false,
         &[],
-        &["second", "events"],
+        &[
+            "input:0:8192,32767,32767,0,0,0,0,0:0:-1",
+            "second",
+            "read",
+            "events",
+        ],
     );
     assert_eq!(r.all("device"), ["0x0", "0x0"]);
-    assert_eq!(r.all("state"), ["0x0:127,127,0,0 buttons=0x0 pov=-1"]);
-    let fake = r.fake();
+    // Both devices read the turned wheel: the second one's set-up never
+    // let the first one's wheel go.
     assert_eq!(
-        fake.iter().filter(|l| l.starts_with("0: format")).count(),
-        1,
-        "opened once: {fake:#?}"
+        r.all("state"),
+        [
+            "0x0:255,127,0,0 buttons=0x0 pov=-1",
+            "0x0:255,127,0,0 buttons=0x0 pov=-1"
+        ],
+        "{:?}",
+        r.lines
+    );
+    let fake = r.fake();
+    let count = |prefix: &str| fake.iter().filter(|l| l.starts_with(prefix)).count();
+    assert_eq!(count("0: format"), 1, "opened once: {fake:#?}");
+    assert_eq!(count("0: cooperate"), 1, "cooperates once: {fake:#?}");
+}
+
+#[test]
+fn a_device_released_while_acquired_lets_the_wheel_go() {
+    let r = run(
+        "dropped",
+        Some(FAKE_WHEEL),
+        false,
+        &[],
+        &["second-drop", "events", "unacquire", "events"],
+    );
+    assert_eq!(r.value("unacquire"), Some("0x0"));
+    let step = r.lines.iter().position(|l| l == "unacquire=0x0").unwrap();
+    let after: Vec<&str> = r.lines[step..]
+        .iter()
+        .filter_map(|l| l.strip_prefix("fake "))
+        .collect();
+    assert_eq!(
+        after,
+        ["0: unacquire"],
+        "the last holder lets the wheel go: {:?}",
+        r.lines
+    );
+}
+
+#[test]
+fn only_a_wheel_with_force_feedback_lists_under_the_force_feedback_filter() {
+    let r = run("fflist", Some(FAKE_WHEEL), false, &[], &[]);
+    assert_eq!(
+        r.value("ffdevices").unwrap_or_default().split('|').next(),
+        Some("rea wheel")
+    );
+    let r = run("fflist-on", Some("mode = on\n"), false, &[], &[]);
+    assert_eq!(r.first_device(), "rea wheel");
+    assert!(
+        !r.value("ffdevices")
+            .unwrap_or_default()
+            .contains("rea wheel"),
+        "{:?}",
+        r.lines
     );
 }
 

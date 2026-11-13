@@ -609,8 +609,18 @@ unsafe extern "system" fn add_ref(this: This) -> u32 {
 }
 
 unsafe extern "system" fn release(this: This) -> u32 {
-    // SAFETY: a call on our object; not used after its last release.
-    guard(1, || unsafe { DeviceObject::release(this) })
+    guard(1, || {
+        // SAFETY: a call on our object; its view is taken before the last
+        // release frees it.
+        let view = unsafe { Arc::clone(&device(this).view) };
+        // SAFETY: a call on our object, not used after its last release.
+        let left = unsafe { DeviceObject::release(this) };
+        if left == 0 {
+            // Released while acquired: its hold on the wheel goes too.
+            lock(&view).unacquire();
+        }
+        left
+    })
 }
 
 unsafe extern "system" fn get_capabilities(this: This, caps: *mut DIDEVCAPS) -> HRESULT {

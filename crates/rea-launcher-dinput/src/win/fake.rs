@@ -149,6 +149,10 @@ pub extern "system" fn rea_dinput_fake_unplug(device: u32, unplugged: i32) -> i3
         if d.unplugged {
             d.acquired = false;
             d.epoch += 1;
+            // The other program that held it lets go.
+            if i == 0 {
+                fakes.quirks.busy = false;
+            }
         }
         record(
             fakes,
@@ -333,7 +337,9 @@ unsafe extern "system" fn acquire(this: This) -> HRESULT {
 unsafe extern "system" fn unacquire(this: This) -> HRESULT {
     // SAFETY: a call on our object.
     with(unsafe { index(this) }, hr::GENERIC, |fakes, i| {
-        fakes.devices[i].acquired = false;
+        if std::mem::take(&mut fakes.devices[i].acquired) {
+            record(fakes, i, "unacquire".into());
+        }
         hr::OK
     })
 }

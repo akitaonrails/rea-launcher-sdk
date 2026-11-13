@@ -29,7 +29,8 @@ pub enum Set {
 pub struct Quirks {
     /// `unplugged`: not attached when the game starts.
     pub unplugged: bool,
-    /// `busy`: another program holds it exclusively.
+    /// `busy`: another program holds it exclusively (until it is
+    /// unplugged).
     pub busy: bool,
     /// `nogain`: refuses `DIPROP_FFGAIN`.
     pub no_gain: bool,
