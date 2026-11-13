@@ -30,8 +30,8 @@
 use super::dinput::{Mode, NoButtons, Profile, Setup};
 use super::wizard::Captures;
 use super::{
-    Controls, DeviceId, DeviceState, Kind, PedalAxis, Source, WheelCandidate, find_aux, pick_wheel,
-    shape,
+    Controls, DeviceId, DeviceState, Kind, PedalAxis, Source, WheelCandidate, find_aux, known,
+    pick_wheel, shape,
 };
 use crate::ffb::FfbSettings;
 
@@ -113,6 +113,14 @@ pub struct Rig {
     pub pedals: Option<usize>,
 }
 
+/// Whether a device may drive without being picked by hand: a wheel we
+/// know by model, or one that takes force feedback. A wheel maker's other
+/// devices (Fanatec's USB pedals, shifters, button boxes) look like wheels
+/// to [`super::classify`] but are neither.
+fn drives_unasked(d: &Device) -> bool {
+    d.kind == Kind::Wheel && (d.ffb || known::lookup(d.id.vid, d.id.pid).is_some())
+}
+
 /// The wheel and pedals to drive with: the wheel by [`pick_wheel`] among
 /// the wheels and the device picked by hand (`setup.wheel.device`, which
 /// may be one [`super::classify`] doesn't call a wheel); the pedals picked
@@ -122,7 +130,7 @@ pub struct Rig {
 pub fn pick(devices: &[Device], setup: &Setup, saved: Option<&Profile>) -> Option<Rig> {
     let chosen = setup.wheel.device.as_str();
     let pool: Vec<usize> = (0..devices.len())
-        .filter(|&i| devices[i].kind == Kind::Wheel || devices[i].id.guid == chosen)
+        .filter(|&i| drives_unasked(&devices[i]) || devices[i].id.guid == chosen)
         .collect();
     let candidates: Vec<WheelCandidate> = pool
         .iter()
@@ -433,6 +441,35 @@ mod tests {
         assert!(shows_virtual_wheel(&setup, &[]));
         setup.mode = Mode::Off;
         assert!(!shows_virtual_wheel(&setup, &devices));
+    }
+
+    #[test]
+    fn a_wheel_makers_pedals_alone_are_not_a_wheel() {
+        // Fanatec ClubSport pedals on their own USB: a wheel vendor, axes,
+        // no force feedback, not a wheel model.
+        let mut pedals = device(
+            "ClubSport Pedals",
+            0x0eb7,
+            0x183b,
+            "{p}",
+            Kind::Wheel,
+            vec![0; 8],
+        );
+        pedals.ffb = false;
+        let setup = Setup::default();
+        assert_eq!(pick(std::slice::from_ref(&pedals), &setup, None), None);
+        assert!(!shows_virtual_wheel(&setup, std::slice::from_ref(&pedals)));
+        let by_hand = Setup {
+            wheel: crate::wheel::WheelSettings {
+                device: "{p}".into(),
+                ..setup.wheel.clone()
+            },
+            ..setup
+        };
+        assert!(
+            pick(&[pedals], &by_hand, None).is_some(),
+            "a hand pick still drives"
+        );
     }
 
     #[test]
