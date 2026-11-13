@@ -404,7 +404,7 @@ fn joystate2_axis(by_id: bool, value: u32) -> Option<Axis> {
     let part = if by_id {
         Part::by_id(value)
     } else {
-        Part::all().find(|p| p.joystate2_offset() == value)
+        Part::at_joystate2(value)
     };
     match part {
         Some(Part::Axis(axis)) => Some(axis),

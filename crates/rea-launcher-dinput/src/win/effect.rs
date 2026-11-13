@@ -516,6 +516,8 @@ impl Effects {
             slot.playing = Some(1);
         }
         let Some(real) = &slot.real else {
+            // A real effect made now has every parameter already: only
+            // the start is left to pass on.
             slot.ensure_real(wheel, ffb);
             if flags & DIEP_START != 0
                 && let Some(real) = &slot.real
@@ -669,7 +671,7 @@ pub(super) struct GameEffect {
 type EffectObject = Object<EffectVtbl, GameEffect>;
 
 /// A new effect object for the game, its slot made with `game`.
-pub(super) fn create(rig: &Arc<Mutex<Rig>>, guard_rig: &mut Rig, game: Effect) -> This {
+pub(super) fn create(rig: &Arc<Mutex<Rig>>, locked: &mut Rig, game: Effect) -> This {
     let kind = game.kind;
     let object = EffectObject::create(
         &VTBL,
@@ -679,8 +681,8 @@ pub(super) fn create(rig: &Arc<Mutex<Rig>>, guard_rig: &mut Rig, game: Effect) -
             kind,
         },
     );
-    let wheel = guard_rig.wheel.as_ref();
-    let id = guard_rig.effects.add(object, game, wheel, &guard_rig.ffb);
+    let wheel = locked.wheel.as_ref();
+    let id = locked.effects.add(object, game, wheel, &locked.ffb);
     // SAFETY: the object was just made and nobody else has it yet.
     unsafe { (*object.cast::<EffectObject>()).value.id = id };
     object

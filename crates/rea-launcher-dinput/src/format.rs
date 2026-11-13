@@ -180,6 +180,11 @@ impl Object {
         Object::all().find(|o| o.usage() == (page, usage))
     }
 
+    /// The object `c_dfDIJoystick2` puts at `offset`.
+    pub fn at_joystate2(offset: u32) -> Option<Object> {
+        Object::all().find(|o| o.joystate2_offset() == offset)
+    }
+
     pub fn by_id(id: u32) -> Option<Object> {
         Object::all().find(|o| o.has_id(id))
     }
@@ -578,6 +583,10 @@ mod tests {
             assert_eq!(Object::by_id(object.type_id()), Some(object));
             let (page, usage) = object.usage();
             assert_eq!(Object::by_usage(page, usage), Some(object));
+            assert_eq!(
+                Object::at_joystate2(object.joystate2_offset()),
+                Some(object)
+            );
         }
         assert_eq!(
             Object::by_id(didft::AXIS | didft::make_instance(3)),

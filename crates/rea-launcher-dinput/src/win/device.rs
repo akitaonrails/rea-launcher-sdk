@@ -210,7 +210,7 @@ impl Rig {
     fn object_at(&self, offset: u32) -> Option<Part> {
         match &self.layout {
             Some(layout) => layout.object_at(offset),
-            None => Part::all().find(|p| p.joystate2_offset() == offset),
+            None => Part::at_joystate2(offset),
         }
     }
 
@@ -1070,12 +1070,11 @@ fn offered() -> impl Iterator<Item = Kind> {
 }
 
 unsafe extern "system" fn enum_effects(
-    this: This,
+    _: This,
     callback: LPDIENUMEFFECTSCALLBACKA,
     context: *mut c_void,
     kind: u32,
 ) -> HRESULT {
-    let _ = this;
     let Some(callback) = callback else {
         return hr::INVALIDPARAM;
     };
