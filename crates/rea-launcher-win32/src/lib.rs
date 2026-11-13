@@ -19,6 +19,8 @@ pub mod report;
 #[cfg(windows)]
 pub mod dialog;
 #[cfg(windows)]
+pub mod dinput;
+#[cfg(windows)]
 pub mod disk;
 #[cfg(windows)]
 pub mod display;
