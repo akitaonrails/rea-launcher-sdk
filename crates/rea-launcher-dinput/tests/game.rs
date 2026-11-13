@@ -125,8 +125,7 @@ fn run_as(
         .env_remove(rea_dinput::MODE_ENV);
     if stand_in {
         std::fs::copy(examples.join("dinput8.dll"), dir.join("dinput8.dll")).unwrap();
-        let overrides = std::env::var("WINEDLLOVERRIDES").unwrap_or_default();
-        command.env("WINEDLLOVERRIDES", format!("{overrides};dinput8=n,b"));
+        prefer_the_folders_dinput8();
     }
     for (key, value) in env {
         command.env(key, value);
@@ -136,6 +135,30 @@ fn run_as(
     }
     let lines = finish(command.spawn().unwrap(), &dir);
     Run { lines, dir }
+}
+
+/// Under Wine, the game takes the `dinput8.dll` in its folder (Xidi's
+/// place) only with a native override. An override in the child's
+/// environment is ignored by some Wine versions (9.0 in CI) when a Windows
+/// process starts another, so it goes in the prefix's registry, for the
+/// stand-in game only. Windows loads a folder's `dinput8.dll` first anyway
+/// (it is no KnownDLL) and ignores the key.
+fn prefer_the_folders_dinput8() {
+    let status = Command::new("reg")
+        .args([
+            "add",
+            r"HKCU\Software\Wine\AppDefaults\wheel_game.exe\DllOverrides",
+            "/v",
+            "dinput8",
+            "/d",
+            "native,builtin",
+            "/f",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "reg add: {status}");
 }
 
 /// The game's output once it ends (killed after 60 s: never a hang).
