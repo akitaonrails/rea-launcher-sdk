@@ -5,7 +5,8 @@
 //! Damper, a periodic and a constant force, cartesian on X and Y). A wheel
 //! has one actuator, so the effect becomes a one-axis effect on the
 //! wheel's X: its force is the share of the direction along X, scaled by
-//! the player's strength and flipped on invert ([`Effect::for_wheel`]).
+//! the player's strength and flipped on invert ([`Effect::for_wheel`]); a
+//! condition is mirrored on invert, never made negative.
 
 use rea_launcher::ffb::FfbSettings;
 use rea_launcher::wheel::dinput::Axis;
@@ -262,7 +263,7 @@ impl Effect {
                 period: *period,
             },
             Params::Condition(conditions) => {
-                Params::Condition(vec![self.x_condition(conditions, strength * sign)])
+                Params::Condition(vec![self.x_condition(conditions, strength, ffb.invert)])
             }
             Params::None => Params::None,
         };
@@ -281,8 +282,12 @@ impl Effect {
     }
 
     /// X's condition: its own when there is one per axis, else the one
-    /// condition weighted by the X share of the direction.
-    fn x_condition(&self, conditions: &[Condition], factor: f32) -> Condition {
+    /// condition weighted by the X share of the direction; its
+    /// coefficients and saturations scaled by `strength`. `mirror` (the
+    /// player's invert) mirrors it: the centre negated, the two sides
+    /// swapped. A coefficient never turns negative, which would push the
+    /// wheel to full lock.
+    fn x_condition(&self, conditions: &[Condition], strength: f32, mirror: bool) -> Condition {
         let x = self.axes.iter().position(|a| *a == Some(Axis::X));
         let (condition, weight) = match x {
             Some(i) if conditions.len() == self.axes.len() && conditions.len() > 1 => {
@@ -294,13 +299,24 @@ impl Effect {
             ),
             None => (Condition::default(), 0.0),
         };
-        let f = factor * weight;
-        Condition {
+        let f = strength * weight;
+        let scaled = Condition {
             positive_coefficient: scale(condition.positive_coefficient, f),
             negative_coefficient: scale(condition.negative_coefficient, f),
-            positive_saturation: scale_u(condition.positive_saturation, f.abs()),
-            negative_saturation: scale_u(condition.negative_saturation, f.abs()),
+            positive_saturation: scale_u(condition.positive_saturation, f),
+            negative_saturation: scale_u(condition.negative_saturation, f),
             ..condition
+        };
+        if !mirror {
+            return scaled;
+        }
+        Condition {
+            offset: -scaled.offset,
+            positive_coefficient: scaled.negative_coefficient,
+            negative_coefficient: scaled.positive_coefficient,
+            positive_saturation: scaled.negative_saturation,
+            negative_saturation: scaled.positive_saturation,
+            deadband: scaled.deadband,
         }
     }
 
@@ -503,13 +519,18 @@ mod tests {
             ..x
         };
         assert_eq!(wheel.params, Params::Condition(vec![expected]));
+        // Inverted: the same spring seen in a mirror, never a negative
+        // coefficient (that pushes a direct-drive base to full lock).
         let inverted = spring.for_wheel(&settings(40, true));
         assert_eq!(
             inverted.params,
             Params::Condition(vec![Condition {
-                positive_coefficient: -4_000,
-                negative_coefficient: -3_200,
-                ..expected
+                offset: -500,
+                positive_coefficient: 3_200,
+                negative_coefficient: 4_000,
+                positive_saturation: 2_400,
+                negative_saturation: 4_000,
+                deadband: 100,
             }])
         );
         // One condition along a direction: weighted by its X share.
