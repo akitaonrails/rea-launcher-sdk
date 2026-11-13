@@ -56,6 +56,9 @@ IMPORT_API='rea_launcher::pe::edit::add_import rea_close_hook::import_into rea_d
 AV_API_SINCE='v0.4.3'
 # The game's HKLM key answered from HKCU, instead of the VirtualStore.
 REGISTRY_API='rea_close_hook::registry'
+# The in-game DLLs (they catch panics only when built to unwind).
+DLL_CRATES='rea-launcher-dinput rea-launcher-close-hook'
+DLL_UNWIND_SINCE='v0.9.0'
 WAIVERS_FILE='.rea-check-waivers'
 
 RULES='snapshots snapshot-version snapshot-helper audience instance instance-unix
@@ -65,7 +68,7 @@ readme-versions agents-pointer agents-duplicate sdk-workflows sdk-tag lld
 wine-tests look-flag look-sizes option-tests quit-paths issue-unknown-edition
 issue-bug-report sdk-update windows-subsystem bad-command-line action-flags exe-resources
 remote-injection release-notes watch-pins unwatched-pins innoextract process-listing
-real-game-gated drm-exception virtual-store waivers'
+real-game-gated drm-exception virtual-store dll-unwind waivers'
 
 # rule ID: sets SEV (error|warn), SINCE (SDK tag or empty), FIX and WHY.
 rule() {
@@ -173,6 +176,9 @@ rule() {
     action-flags) SEV=error SINCE=$USAGE_API_SINCE
       WHY='An action flag (--check, --setup, --download-*) that finds the window open must be refused with exit 5, never answered by bringing the window forward with exit 0: SRR'"'"'s --setup did nothing and reported success.'
       FIX="pass $ACTION_API(&args, &[own actions]) as the action argument of second_start / SecondStart::decide, and take the instance for --check too" ;;
+    dll-unwind) SEV=error SINCE=$DLL_UNWIND_SINCE
+      WHY='The in-game DLLs (rea_dinput.dll, rea_close_hook.dll) run inside the game and catch their own panics, turning them into an error code for one call. Built with a launcher'"'"'s release profile (panic = "abort") any panic in them ends the game instead.'
+      FIX='add [profile.dll] (inherits = "release", panic = "unwind") to the workspace Cargo.toml and build the DLLs with it: cargo build --profile dll --lib -p <launcher> -p rea-launcher-close-hook -p rea-launcher-dinput --features layer-dlls --target i686-pc-windows-gnu (the DLLs land in target/<triple>/dll/; crate READMEs, "Ship and enable it")' ;;
     exe-resources) SEV=error SINCE=$AV_API_SINCE
       WHY='An executable with no name, version, publisher or icon is one of the signals antivirus heuristics weigh; a player'"'"'s antivirus flagged CMRLauncher 0.9.0, which had none (Quiver feedback, 2026-11-04).'
       FIX="add a build.rs calling $RESOURCES_API::new(name, description).company(..).file_name(\"X.exe\").icon(\"../../packaging/appimage/<id>-launcher.png\").embed() and rea-launcher-build in [build-dependencies] (templates/launcher has it)" ;;
@@ -687,6 +693,29 @@ if [ -s "$T/win-targets" ]; then
   if [ -s "$T/injection" ]; then
     emit remote-injection "$(cat "$T/injection")" "writes into or hooks the running game from outside (the injector pattern antivirus heuristics flag)"
   fi
+fi
+
+# --- in-game DLLs: built to unwind ------------------------------------------------------------------
+dll_pattern=$(printf '%s\n' $DLL_CRATES | paste -sd'|' -)
+if grep -qE "^[ \t]*($dll_pattern)[ \t]*=" Cargo.toml crates/*/Cargo.toml 2>/dev/null; then
+  if ! awk '{ sub(/\r$/, "") } /^\[/ { p = ($0 == "[profile.dll]"); next }
+      p && /^[ \t]*panic[ \t]*=[ \t]*"unwind"/ { ok = 1 } END { exit !ok }' Cargo.toml; then
+    emit dll-unwind Cargo.toml "the in-game DLLs have no [profile.dll] with panic = \"unwind\": a panic in them would end the game"
+  fi
+  # Each cargo build of a DLL crate, with up to three lines before it (a
+  # command broken over lines), must use the dll profile.
+  : > "$T/dll-builds"
+  for f in .github/workflows/*.yml packaging/*.sh scripts/*; do
+    [ -f "$f" ] || continue
+    awk -v f="$f" -v pat="(-p|--package)[ \t=]+($dll_pattern)([^a-z-]|$)" '
+      { sub(/\r$/, ""); w[NR % 4] = $0 }
+      $0 ~ pat { s = ""; for (i = NR - 3; i <= NR; i++) if (i > 0) s = s " " w[i % 4]
+        if (s ~ /cargo/) print f ":" NR " " (s ~ /--profile[ =]dll/ ? "ok" : "bad") }' "$f" >> "$T/dll-builds"
+  done
+  while read -r where verdict; do
+    [ "$verdict" = bad ] && emit dll-unwind "$where" "builds an in-game DLL without --profile dll"
+  done < "$T/dll-builds"
+  [ -s "$T/dll-builds" ] || emit dll-unwind Cargo.toml "nothing builds the in-game DLLs (cargo build --profile dll)"
 fi
 
 # --- registry: never the VirtualStore ---------------------------------------------------------------

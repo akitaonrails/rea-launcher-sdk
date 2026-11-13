@@ -119,10 +119,13 @@ on:
       extra-build:
         description: >-
           Commands (bash) run after the workspace release build, for what
-          `cargo build --workspace` doesn't build: e.g. a dependency's DLL
-          such as rea-launcher-close-hook or rea-launcher-dinput (`cargo
-          build --release --locked --target "$RUST_TARGET" -p
-          rea-launcher-close-hook`). REA_RELEASE_DIR
+          `cargo build --workspace` doesn't build: e.g. the in-game DLLs
+          rea-launcher-close-hook and rea-launcher-dinput, built to unwind
+          with the workspace's [profile.dll] (`cargo build --locked
+          --profile dll --lib -p <launcher> -p rea-launcher-close-hook -p
+          rea-launcher-dinput --features layer-dlls --target
+          "$RUST_TARGET"`; they land in target/$RUST_TARGET/dll/, crate
+          READMEs). REA_RELEASE_DIR
           is the release output folder.
         type: string
         default: ""

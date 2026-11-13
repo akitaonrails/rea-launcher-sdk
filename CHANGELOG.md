@@ -60,9 +60,20 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 - `rea-launcher-close-hook` and `rea-launcher-dinput` have a default
   `dll` feature that holds the DLL's `DllMain` and exports. A launcher
   that links either for `import_into` sets `default-features = false`
-  (required when it links both: two `DllMain`s don't link) and builds the
-  DLL with `--features <crate>/dll`. Launchers that keep the defaults see
-  no change.
+  (required when it links both: two `DllMain`s don't link). Launchers
+  that keep the defaults see no change.
+- The in-game DLLs are built with a `[profile.dll]` (`inherits =
+  "release"`, `panic = "unwind"`), so their own panic guards work: with a
+  launcher's `panic = "abort"` any panic in them ended the game. Recipe
+  (crate READMEs, "Ship and enable it"): the DLL crates with
+  `default-features = false`, a launcher feature `layer-dlls =
+  ["rea-launcher-close-hook/dll", "rea-launcher-dinput/dll"]`, and
+  `cargo build --profile dll --lib -p <launcher> -p
+  rea-launcher-close-hook -p rea-launcher-dinput --features layer-dlls
+  --target i686-pc-windows-gnu`; the DLLs land in `target/<triple>/dll/`.
+  `launcher-check` rule `dll-unwind` (an error from v0.9.0) checks the
+  profile and the build. The SDK workspace and the launcher template
+  have the profile.
 
 ## [0.8.2] - 2026-11-12
 

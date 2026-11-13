@@ -237,7 +237,9 @@ and crashed while `--check` said ready (rea-colin-mcrae#6). So:
   without `REA_CLOSE_HOOK_ATTACH`) and set
   `rea_close_hook::registry::ENV` to the rule, built and checked with
   `registry::Config` (`FROM -> TO`; `walk FROM -> TO` for a game that walks
-  down from `SOFTWARE`).
+  down from `SOFTWARE`). Build the DLL with the workspace's `[profile.dll]`
+  (`panic = "unwind"`) and `--profile dll`, never the launcher's release
+  profile (the crate README's recipe; `launcher-check` rule `dll-unwind`).
 - Read back: `write_verified` returns every value that differs. Play stops
   with that list and the issue link; `--check` fails loudly when the DLL is
   missing, the runtime exe doesn't import it, the rules don't parse or the

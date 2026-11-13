@@ -261,6 +261,29 @@ expect "a pinned GitHub release nobody watches (CMR4's Xidi)" warn unwatched-pin
 fresh; rm "$L/.github/workflows/watch-upstream.yml"
 expect "pins without a watch workflow" warn unwatched-pins
 
+# --- in-game DLLs: built to unwind ------------------------------------------------------------------
+dll_dep() { # a launcher that ships the in-game wheel layer
+  printf 'rea-launcher-dinput = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.4.0", default-features = false }\n' >> "$L/Cargo.toml"
+}
+dll_profile() {
+  printf '\n[profile.dll]\ninherits = "release"\npanic = "unwind"\n' >> "$L/Cargo.toml"
+}
+dll_build() { # build.yml's extra-build: $1 the cargo build command
+  replace "$L/.github/workflows/build.yml" '      wine-tests: true' "      wine-tests: true
+      extra-build: $1"
+}
+DLL_BUILD='cargo build --profile dll --lib -p fx-launcher -p rea-launcher-dinput --features layer-dlls --target i686-pc-windows-gnu'
+fresh; dll_dep; dll_build "$DLL_BUILD"
+expect "an in-game DLL without a [profile.dll] (panic = abort kills the game)" warn dll-unwind
+fresh; dll_dep; dll_profile; dll_build 'cargo build --release --lib -p fx-launcher -p rea-launcher-dinput --features layer-dlls'
+expect "an in-game DLL built with the release profile" warn dll-unwind
+fresh; dll_dep; dll_profile
+expect "an in-game DLL no build makes" warn dll-unwind
+fresh; dll_dep; printf '\n[profile.dll]\ninherits = "release"\npanic = "abort"\n' >> "$L/Cargo.toml"; dll_build "$DLL_BUILD"
+expect "a [profile.dll] that still aborts" warn dll-unwind
+fresh; dll_dep; dll_profile; dll_build "$DLL_BUILD"
+run "$L"; printf '%s\n' "$out" | grep -q 'dll-unwind' && bad "unwinding DLLs: $out" || ok "in-game DLLs built with an unwinding [profile.dll] pass"
+
 # --- innoextract: pinned and credited --------------------------------------------------------------
 inno_code() { # a launcher that runs the bundled innoextract
   printf '\nconst INNOEXTRACT: &str = "innoextract.exe";\n' >> "$L/crates/fx-launcher/src/main.rs"

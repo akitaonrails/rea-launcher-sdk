@@ -147,19 +147,39 @@ docs/playbooks/wheels-and-ffb.md).
 
 ## Ship and enable it
 
-**Depending on it from a launcher.** The launcher links this crate only
-for `import_into` and its constants, so it turns the `dll` feature off:
-`rea-launcher-dinput = { …, default-features = false }`. The feature carries the
-DLL's `DllMain` and exports; with it on, a launcher that also links the
-close hook (`rea-launcher-close-hook`) fails to link (`duplicate symbol: _DllMain@12`). Build the DLL
-itself with the feature on (`cargo build --release -p rea-launcher-dinput
---features rea-launcher-dinput/dll --target i686-pc-windows-gnu`).
+**Build the in-game DLLs** (`rea_dinput.dll`, `rea_close_hook.dll`) from
+the launcher's workspace:
 
-1. Build it for the game (`cargo build --release -p rea-launcher-dinput
-   --target i686-pc-windows-gnu`; in the reusable workflow, the
-   `extra-build` input) and ship `rea_dinput.dll` next to the launcher
-   (add it to the package allowlist).
-2. Write the runtime copy of the game's executable through
+1. Depend on the DLL crates with `default-features = false`. Their `dll`
+   feature holds each DLL's `DllMain` and exports; an exe that links both
+   crates with it on fails (`duplicate symbol: _DllMain@12`).
+2. Give the launcher a feature that turns it on for the DLLs it ships:
+   `layer-dlls = ["rea-launcher-close-hook/dll", "rea-launcher-dinput/dll"]`
+   (Cargo refuses `--features rea-launcher-dinput/dll` for a package
+   outside the workspace).
+3. Add a profile for them to the workspace's `Cargo.toml`:
+
+   ```toml
+   [profile.dll]
+   inherits = "release"
+   panic = "unwind"
+   ```
+
+   A launcher's release profile has `panic = "abort"`: in a DLL inside
+   the game that turns any panic into the game ending. Built to unwind,
+   the DLL catches its own panics and answers that one call with an
+   error. `launcher-check` (rule `dll-unwind`) checks the profile and the
+   build.
+4. Build them with it, for the game's architecture:
+   `cargo build --profile dll --lib -p <launcher> -p rea-launcher-close-hook -p rea-launcher-dinput --features layer-dlls --target i686-pc-windows-gnu`
+   (`--lib` keeps the launcher's exe out of this build; in the reusable
+   workflow, the `extra-build` input). The DLLs land in
+   `target/i686-pc-windows-gnu/dll/`; ship them next to the launcher and
+   add them to the package allowlist.
+
+Then enable it:
+
+1. Write the runtime copy of the game's executable through
    `rea_dinput::import_into` (never the player's file), copy the DLL and
    `rea_wheel.ini` next to it, and start the game with `REA_WHEEL_MODE`:
 
@@ -180,10 +200,9 @@ let code = Launch::new(&exe)
     .run()?;
 ```
 
-Both this DLL and the close hook (`rea_close_hook::import_into`) can be
-added to one runtime copy (each adds its own import descriptor), but the
-pair has not been run together in a test yet: check it in the first
-launcher that uses both.
+Both this DLL and the close hook (`rea_close_hook::import_into`) go in
+one runtime copy, each with its own import descriptor: CMR04's headless
+real-game run loaded both, and Alt+F4 still worked.
 
 ## Tests
 

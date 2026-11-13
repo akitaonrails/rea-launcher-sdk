@@ -25,3 +25,10 @@ jpeg-decoder = { version = "0.3", default-features = false }
 egui_kittest = { version = "0.37", default-features = false }
 rea-launcher = { path = "crates/rea-launcher", version = "0.8.2" }
 rea-launcher-build = { path = "crates/rea-launcher-build", version = "0.8.2" }
+
+# The in-game DLLs (rea-launcher-dinput, rea-launcher-close-hook) catch
+# their own panics: built with this profile a panic unwinds to their guard
+# instead of ending the game (crate READMEs, "Ship and enable it").
+[profile.dll]
+inherits = "release"
+panic = "unwind"

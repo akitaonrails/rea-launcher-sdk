@@ -27,3 +27,11 @@ panic = "abort"
 opt-level = "s"
 lto = true
 strip = true
+
+# The in-game DLLs (rea_close_hook.dll, rea_dinput.dll) unwind, so a panic
+# in them reaches their own guard instead of ending the game: build them
+# with `--profile dll` (rea-launcher-sdk crate READMEs, "Ship and enable
+# it"; launcher-check rule dll-unwind).
+[profile.dll]
+inherits = "release"
+panic = "unwind"

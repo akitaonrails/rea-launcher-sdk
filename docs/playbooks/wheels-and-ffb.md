@@ -286,6 +286,15 @@ virtual wheel ("rea wheel", 1209:5245, the frozen layout of
 - **Calibration without the launcher.** Uncalibrated pedals are guessed
   from where the axes rest during the first second the game reads the
   wheel (a device's first reading after acquire can be all zeros).
+- **Building it.** The DLL crates as dependencies with
+  `default-features = false`, a launcher feature `layer-dlls =
+  ["rea-launcher-close-hook/dll", "rea-launcher-dinput/dll"]`, and a
+  workspace `[profile.dll]` (`inherits = "release"`, `panic = "unwind"`):
+  `cargo build --profile dll --lib -p <launcher> -p
+  rea-launcher-close-hook -p rea-launcher-dinput --features layer-dlls
+  --target i686-pc-windows-gnu`, DLLs in `target/<triple>/dll/`. With a
+  launcher's `panic = "abort"` the layer's own panic guards can't work
+  and any panic ends the game (`launcher-check` rule `dll-unwind`).
 - **Testing.** `fake = wheel` / `wheel+pedals` in `rea_wheel.ini`
   (test-only) adds devices the layer opens, reads and gives force
   feedback to like real ones; the stand-in game drives them through the
