@@ -1931,7 +1931,7 @@ version = "0.8.2"
 dependencies = [
  "rea-launcher",
  "rea-launcher-build",
- "rea-launcher-win32",
+ "rea-launcher-close-hook",
  "windows-sys 0.61.2",
 ]
 

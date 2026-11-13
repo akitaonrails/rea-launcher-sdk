@@ -32,8 +32,10 @@ features = [
 [build-dependencies]
 rea-launcher-build.workspace = true
 
-[dev-dependencies]
-rea-launcher-win32 = { path = "../rea-launcher-win32" }
+# The stand-in game's hidden window.
+[target.'cfg(windows)'.dev-dependencies.windows-sys]
+workspace = true
+features = ["Win32_Graphics_Gdi"]
 
 # The stand-in for a dinput8.dll in the game's folder (Xidi's place).
 [[example]]
