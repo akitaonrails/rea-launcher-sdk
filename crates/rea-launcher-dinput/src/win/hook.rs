@@ -2,10 +2,11 @@
 //! [`direct_input8_create`], which calls the function the import held
 //! (the system's DirectInput, or Xidi's) and wraps what it made.
 //!
-//! The loader has resolved the executable's imports when it runs a
-//! DLL's `DllMain` for the first time, so the slot already holds the
-//! function the game would have called. Only the executable's own import
-//! is changed: other DLLs keep theirs.
+//! The executable's imports are resolved by the time this `DllMain` runs,
+//! whether the DLL is in the import table (`import_into`) or loaded later
+//! by an ASI loader, so the slot already holds the function the game
+//! would have called. Only the executable's own import is changed: other
+//! DLLs keep theirs.
 
 use std::ffi::{CStr, c_void};
 use std::ptr::null;

@@ -48,10 +48,13 @@ DirectInput, and shared by every virtual device it makes from it and by
 their effects. The layer acquires them itself: the wheel exclusive and
 in the background on the game's window (force feedback needs exclusive
 access), pedals shared. A wheel another program holds exclusively is
-acquired shared: it steers, without force feedback. A lost wheel
+acquired shared: it steers, without force feedback, and asks for
+exclusive access again every 5 s and whenever it is re-acquired. A lost
+wheel
 (unplugged) steers centred while separate pedals still drive, and is
 acquired again every 500 ms. With `mode = on` and no wheel at the
-start, the devices are listed again every 2 s until one is plugged in.
+start, the devices are listed again every 2 s, on a thread of the
+layer's own, until one is plugged in.
 
 **Off** without a settings file, with `mode = off`, (`auto`) without a
 wheel attached when the game starts, or when the picked wheel can't be
@@ -138,14 +141,19 @@ game's effect becomes a one-axis effect on the wheel's X:
   coefficient negative, which would drive the wheel to full lock;
 - trigger buttons are not passed on.
 
-**Strength:** the wheel's `DIPROP_FFGAIN` is the game's gain ×
-`ffb_strength`, so the wheel's own autocentre spring is at the player's
-strength too, and effects go as the game made them. A wheel that
-refuses the gain gets the strength in each effect instead (magnitudes,
-coefficients, saturations and envelope levels).
+**Strength:** `ffb_strength` scales the game's effects, each one
+(magnitudes, coefficients, saturations, envelope levels). The wheel's
+`DIPROP_FFGAIN` is the game's own, unchanged, and `GetProperty` answers
+what the game set: some drivers take a gain and ignore it (Logitech with
+"allow game to adjust" off, Wine backends without it), which would lose
+the strength unseen. The wheel's own centring spring (autocentre) can't
+be scaled reliably: the CMR seeds turn it off in the car; for menus, set
+it in the wheel's vendor software.
 
 The virtual wheel claims force feedback (capabilities,
-`DIEDFL_FORCEFEEDBACK`) only when its wheel takes it. `SetParameters`
+`DIEDFL_FORCEFEEDBACK`) when its wheel takes it; it keeps claiming it
+while the wheel is held shared for a moment (another program had it),
+since the game reads its capabilities once. `SetParameters`
 goes to the real effect; when the driver refuses a `DIEP_NORESTART`
 update (an old MOMO report) it is sent again without it, and from then
 on without asking. An effect started before it was complete, or after
@@ -220,6 +228,23 @@ let code = Launch::new(&exe)
 Both this DLL and the close hook (`rea_close_hook::import_into`) go in
 one runtime copy, each with its own import descriptor: CMR04's headless
 real-game run loaded both, and Alt+F4 still worked.
+
+## Games with an ASI loader that checks the exe (SilentPatch)
+
+SilentPatch refuses an exe whose import table changed ("An unsupported
+game version was detected!", then the game crashes), so for such a game
+`import_into` is not an option. Ship the DLL renamed `rea_dinput.asi`
+next to the game instead, for the game's ASI loader to load, and leave
+the exe untouched (CMR3). The settings file stays `rea_wheel.ini` next
+to it.
+
+This needs the loader to load plugins **before the game calls
+`DirectInput8Create`**: the layer points the exe's import at itself in
+its `DllMain`, which works as well when it is loaded after the exe's
+imports were bound (`tests/game.rs`, the `.asi` case; CMR3's headless
+real-game run bound the virtual wheel this way). A game that creates
+DirectInput before its plugins load, or that loads `dinput8` with
+`GetProcAddress`, gets its DirectInput untouched.
 
 ## Tests
 

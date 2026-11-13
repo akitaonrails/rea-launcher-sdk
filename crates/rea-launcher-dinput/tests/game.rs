@@ -70,24 +70,50 @@ impl Drop for Run {
 /// with `ini` as the settings (none for `None`), the stand-in
 /// `dinput8.dll` next to it when `stand_in`, run with `env` and `steps`.
 fn run(name: &str, ini: Option<&str>, stand_in: bool, env: &[(&str, &str)], steps: &[&str]) -> Run {
+    run_as(name, ini, stand_in, env, steps, Load::Imported)
+}
+
+/// How the layer gets into the game.
+enum Load {
+    /// In the game's import table (`import_into`).
+    Imported,
+    /// Renamed `.asi` and loaded by the game itself before it creates
+    /// DirectInput, as an ASI loader does; the exe untouched.
+    Asi,
+}
+
+fn run_as(
+    name: &str,
+    ini: Option<&str>,
+    stand_in: bool,
+    env: &[(&str, &str)],
+    steps: &[&str],
+    load: Load,
+) -> Run {
     let examples = examples();
     let dir = examples.join(format!("dinput-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let game = std::fs::read(examples.join("wheel_game.exe")).unwrap();
-    let imported = rea_dinput::import_into(&game).unwrap();
-    assert_eq!(
-        rea_dinput::import_into(&imported).unwrap(),
-        imported,
-        "added once"
-    );
     let exe = dir.join("wheel_game.exe");
-    std::fs::write(&exe, imported).unwrap();
-    std::fs::copy(
-        rea_launcher::testing::built(rea_dinput::DLL),
-        dir.join(rea_dinput::DLL),
-    )
-    .unwrap();
+    let dll = rea_launcher::testing::built(rea_dinput::DLL);
+    let asi = "rea_dinput.asi";
+    match load {
+        Load::Imported => {
+            let imported = rea_dinput::import_into(&game).unwrap();
+            assert_eq!(
+                rea_dinput::import_into(&imported).unwrap(),
+                imported,
+                "added once"
+            );
+            std::fs::write(&exe, imported).unwrap();
+            std::fs::copy(dll, dir.join(rea_dinput::DLL)).unwrap();
+        }
+        Load::Asi => {
+            std::fs::write(&exe, game).unwrap();
+            std::fs::copy(dll, dir.join(asi)).unwrap();
+        }
+    }
     if let Some(ini) = ini {
         std::fs::write(dir.join(FILE), ini).unwrap();
     }
@@ -104,6 +130,9 @@ fn run(name: &str, ini: Option<&str>, stand_in: bool, env: &[(&str, &str)], step
     }
     for (key, value) in env {
         command.env(key, value);
+    }
+    if matches!(load, Load::Asi) {
+        command.env("REA_WHEEL_GAME_LOAD", asi);
     }
     let lines = finish(command.spawn().unwrap(), &dir);
     Run { lines, dir }
@@ -730,4 +759,21 @@ fn the_log_says_what_happened_when_asked() {
     }
     let quiet = run("quiet", Some(FAKE_WHEEL), false, &[], &[]);
     assert!(!quiet.dir.join(rea_dinput::log::FILE).exists());
+}
+
+#[test]
+fn the_layer_works_loaded_late_as_an_asi_plugin() {
+    let r = run_as(
+        "asi",
+        Some(FAKE_WHEEL),
+        false,
+        &[],
+        &["input:0:8192,32767,32767,0,0,0,0,0:0:-1", "read"],
+        Load::Asi,
+    );
+    assert_eq!(r.value("loaded"), Some("true"), "{:?}", r.lines);
+    // Its DllMain pointed the already-bound import at the wrapper.
+    assert_eq!(r.value("wrapped"), Some("rea_dinput.asi"));
+    assert_eq!(r.first_device(), "rea wheel");
+    assert_eq!(r.value("state"), Some("0x0:255,127,0,0 buttons=0x0 pov=-1"));
 }

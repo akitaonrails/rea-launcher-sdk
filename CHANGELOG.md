@@ -19,12 +19,15 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   virtual wheel, "rea wheel", made from the player's wheel and separate
   pedals through `wheel::rig`: steering lock, deadzone and curve,
   separate and combined pedals, force feedback on the real wheel (the
-  player's strength in the wheel's gain, so its autocentre too;
+  player's strength in each effect, the game's own gain to the wheel;
   conditions mirrored, never negated, on invert), revived after a
-  re-acquire. One wheel opened per DirectInput and shared; a wheel that
-  can't be opened leaves the game untouched, one held by another program
-  steers without force feedback, `on` without a wheel picks one up when
-  it is plugged in. Configured by `rea_wheel.ini`; `REA_WHEEL_MODE=on|off`
+  re-acquire. One wheel opened per DirectInput and shared by every
+  virtual device (a device released while acquired lets it go); a wheel
+  that can't be opened leaves the game untouched, one held by another
+  program steers without force feedback and asks for it again, `on`
+  without a wheel picks one up when it is plugged in (listed on a thread
+  of its own). For games whose ASI loader checks the exe (SilentPatch),
+  it ships as `rea_dinput.asi` instead of `import_into`. Configured by `rea_wheel.ini`; `REA_WHEEL_MODE=on|off`
   (`rea_dinput::MODE_ENV`) carries the launcher's decision. Opt-in:
   nothing changes for a launcher that doesn't ship it.
 - `rea_launcher::wheel::rig::same_guid`: instance GUIDs compared trimmed
@@ -70,9 +73,9 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   that links either for `import_into` sets `default-features = false`
   (required when it links both: two `DllMain`s don't link). Launchers
   that keep the defaults see no change.
-- The in-game DLLs are built with a `[profile.dll]` (`inherits =
-  "release"`, `panic = "unwind"`), so their own panic guards work: with a
-  launcher's `panic = "abort"` any panic in them ended the game. Recipe
+- The wheel layer is built with a `[profile.dll]` (`inherits =
+  "release"`, `panic = "unwind"`), so its own panic guards work: with a
+  launcher's `panic = "abort"` any panic in it ended the game. Recipe
   (crate READMEs, "Ship and enable it"): the DLL crates with
   `default-features = false`, a launcher feature `layer-dlls =
   ["rea-launcher-close-hook/dll", "rea-launcher-dinput/dll"]`, and
@@ -80,8 +83,9 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   rea-launcher-close-hook -p rea-launcher-dinput --features layer-dlls
   --target i686-pc-windows-gnu`; the DLLs land in `target/<triple>/dll/`.
   `launcher-check` rule `dll-unwind` (an error from v0.9.0) checks the
-  profile and the build. The SDK workspace and the launcher template
-  have the profile.
+  profile and the build of `rea_dinput.dll` (the close hook has no panic
+  guard, so it isn't asked to unwind). The SDK workspace and the
+  launcher template have the profile.
 
 ## [0.8.2] - 2026-11-12
 

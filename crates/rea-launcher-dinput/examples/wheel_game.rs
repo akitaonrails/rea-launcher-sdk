@@ -27,6 +27,9 @@
 //! - `gain:<n>`: `DIPROP_FFGAIN` set, then read back as `gain=<code>,<n>`;
 //! - `events`: what reached the fake devices, as `fake <line>`;
 //! - `wait:<ms>`.
+//!
+//! With `REA_WHEEL_GAME_LOAD=<file>` it first loads that DLL itself, as
+//! an ASI loader would (the layer shipped as `rea_dinput.asi`).
 
 #[cfg(windows)]
 fn main() {
@@ -56,7 +59,7 @@ mod game {
     use windows_sys::Win32::Foundation::{HMODULE, HWND};
     use windows_sys::Win32::System::LibraryLoader::{
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        GetModuleFileNameW, GetModuleHandleExW, GetModuleHandleW, GetProcAddress,
+        GetModuleFileNameW, GetModuleHandleExW, GetModuleHandleW, GetProcAddress, LoadLibraryW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, RegisterClassW, WNDCLASSW,
@@ -160,6 +163,12 @@ mod game {
         }
     }
 
+    /// The layer's file: the one the game loaded itself, else the DLL in
+    /// its import table.
+    fn layer() -> String {
+        std::env::var("REA_WHEEL_GAME_LOAD").unwrap_or_else(|_| "rea_dinput.dll".into())
+    }
+
     /// A function the DLL `dll` next to the game exports, if loaded (by
     /// path: the stand-in and the system's DirectInput share a name).
     fn export<F: Copy>(dll: &str, name: &std::ffi::CStr) -> Option<F> {
@@ -207,6 +216,14 @@ mod game {
     }
 
     pub fn run(steps: Vec<String>) {
+        // An ASI loader's way in: the layer loaded after the import table
+        // was bound, before the game creates DirectInput.
+        if let Ok(layer) = std::env::var("REA_WHEEL_GAME_LOAD") {
+            let name: Vec<u16> = layer.encode_utf16().chain([0]).collect();
+            // SAFETY: a NUL-terminated name.
+            let module = unsafe { LoadLibraryW(name.as_ptr()) };
+            println!("loaded={}", !module.is_null());
+        }
         let window = hidden_window();
         let mut di: This = null_mut();
         // SAFETY: the game's DirectInput8Create, through its import table.
@@ -478,7 +495,7 @@ mod game {
                         .map(|v| v.parse().unwrap_or(0))
                         .collect();
                     let input = export::<unsafe extern "system" fn(u32, *const i32, u32, u32) -> i32>(
-                        "rea_dinput.dll",
+                        &layer(),
                         c"rea_dinput_fake_input",
                     );
                     if let Some(input) = input {
@@ -492,7 +509,7 @@ mod game {
                 }
                 "unplug" | "plug" => {
                     let unplug = export::<unsafe extern "system" fn(u32, i32) -> i32>(
-                        "rea_dinput.dll",
+                        &layer(),
                         c"rea_dinput_fake_unplug",
                     );
                     if let Some(unplug) = unplug {
@@ -501,7 +518,7 @@ mod game {
                 }
                 "events" => {
                     let events = export::<unsafe extern "system" fn(*mut u8, u32) -> u32>(
-                        "rea_dinput.dll",
+                        &layer(),
                         c"rea_dinput_fake_events",
                     );
                     let mut buffer = vec![0u8; 1 << 16];

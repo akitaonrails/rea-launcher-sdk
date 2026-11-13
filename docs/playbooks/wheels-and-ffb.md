@@ -294,7 +294,17 @@ virtual wheel ("rea wheel", 1209:5245, the frozen layout of
   rea-launcher-close-hook -p rea-launcher-dinput --features layer-dlls
   --target i686-pc-windows-gnu`, DLLs in `target/<triple>/dll/`. With a
   launcher's `panic = "abort"` the layer's own panic guards can't work
-  and any panic ends the game (`launcher-check` rule `dll-unwind`).
+  and any panic ends the game (`launcher-check` rule `dll-unwind`; the
+  close hook has no guard, so the rule doesn't ask it).
+- **Games with an ASI loader that checks the exe** (SilentPatch, CMR3):
+  it refuses an exe whose import table changed, so ship the DLL renamed
+  `rea_dinput.asi` instead of `import_into` and leave the exe untouched.
+  The loader must run before the game's `DirectInput8Create`; the layer
+  patches the already-bound import from its `DllMain` either way.
+- **Strength** scales each effect; the wheel gets the game's own gain
+  (a driver may take a gain and ignore it). The wheel's autocentre
+  can't be scaled: the seeds turn it off in the car, the vendor software
+  sets it for menus.
 - **Testing.** `fake = wheel` / `wheel+pedals` in `rea_wheel.ini`
   (test-only) adds devices the layer opens, reads and gives force
   feedback to like real ones; the stand-in game drives them through the
