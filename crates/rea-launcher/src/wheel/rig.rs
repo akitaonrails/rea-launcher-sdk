@@ -112,6 +112,24 @@ pub fn reading(axes: [i32; 8], buttons: &[u8], count: usize) -> DeviceState {
     }
 }
 
+/// A `DIJOYSTATE2`'s size: what [`joystate2`] reads.
+pub const JOYSTATE2_SIZE: usize = 272;
+
+/// A `DIJOYSTATE2` as its bytes (both sides read it with
+/// `c_dfDIJoystick2`, so its layout is fixed): the eight axes of
+/// [`super::dinput::REAL_AXES`] at offsets 0..32 ([`reading`]), the first
+/// hat at 32, the first `buttons` buttons from 48. `None` for a buffer
+/// smaller than [`JOYSTATE2_SIZE`].
+pub fn joystate2(bytes: &[u8], buttons: usize) -> Option<(DeviceState, u32)> {
+    if bytes.len() < JOYSTATE2_SIZE {
+        return None;
+    }
+    let word =
+        |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    let axes = std::array::from_fn(|i| word(4 * i) as i32);
+    Some((reading(axes, &bytes[48..176], buttons.min(128)), word(32)))
+}
+
 /// The devices that drive the virtual wheel, as indices into the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rig {
@@ -398,6 +416,17 @@ mod tests {
         );
         assert_eq!(r.axes, vec![-32_768, 0, 0, 0, 0, 0, 5, 32_767]);
         assert_eq!(r.buttons, vec![false, true, false, false]);
+
+        let mut raw = vec![0u8; JOYSTATE2_SIZE];
+        for (i, v) in [-40_000i32, 1, 2, 3, 4, 5, 6, 70_000].iter().enumerate() {
+            raw[4 * i..4 * i + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        raw[32..36].copy_from_slice(&9_000u32.to_le_bytes());
+        raw[48 + 2] = 0x80;
+        let (state, pov) = joystate2(&raw, 3).unwrap();
+        assert_eq!(state.axes, vec![-32_768, 1, 2, 3, 4, 5, 6, 32_767]);
+        assert_eq!((state.buttons, pov), (vec![false, false, true], 9_000));
+        assert_eq!(joystate2(&raw[..100], 3), None);
     }
 
     #[test]

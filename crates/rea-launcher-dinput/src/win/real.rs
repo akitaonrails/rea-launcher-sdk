@@ -365,12 +365,13 @@ impl Real {
             self.retry_at = now + RETRY;
             return Read::Lost;
         }
-        let [s0, s1] = state.rglSlider;
-        let axes = [
-            state.lX, state.lY, state.lZ, state.lRx, state.lRy, state.lRz, s0, s1,
-        ];
-        let reading = rig::reading(axes, &state.rgbButtons, self.device.buttons);
-        let pov = state.rgdwPOV[0];
+        // SAFETY: a DIJOYSTATE2 is plain data; its bytes are read only.
+        let bytes = unsafe {
+            std::slice::from_raw_parts((&raw const state).cast::<u8>(), size_of::<DIJOYSTATE2>())
+        };
+        let Some((reading, pov)) = rig::joystate2(bytes, self.device.buttons) else {
+            return Read::Lost;
+        };
         if back {
             Read::Back(reading, pov)
         } else {

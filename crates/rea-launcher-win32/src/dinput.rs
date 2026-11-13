@@ -194,13 +194,19 @@ fn text(buffer: &[u16]) -> String {
     String::from_utf16_lossy(&buffer[..end]).trim().to_owned()
 }
 
-/// A `DIJOYSTATE2` as a [`DeviceState`] ([`rig::reading`]).
+/// A `DIJOYSTATE2` as a [`DeviceState`] ([`rig::joystate2`], the reading
+/// the in-game layer makes).
 fn reading(state: &DIJOYSTATE2, buttons: usize) -> DeviceState {
-    let [s0, s1] = state.rglSlider;
-    let axes = [
-        state.lX, state.lY, state.lZ, state.lRx, state.lRy, state.lRz, s0, s1,
-    ];
-    rig::reading(axes, &state.rgbButtons, buttons.min(128))
+    // SAFETY: a DIJOYSTATE2 is plain data; its bytes are read only.
+    let bytes = unsafe {
+        std::slice::from_raw_parts(
+            (state as *const DIJOYSTATE2).cast::<u8>(),
+            size_of::<DIJOYSTATE2>(),
+        )
+    };
+    rig::joystate2(bytes, buttons)
+        .map(|(state, _)| state)
+        .unwrap_or_default()
 }
 
 /// `c_dfDIJoystick2` without the velocity, acceleration and force axes:
