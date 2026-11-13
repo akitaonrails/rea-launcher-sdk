@@ -44,6 +44,7 @@
 //! assert_eq!(WheelProfile::<Button>::from_cfg(&saved), Some(profile));
 //! ```
 
+pub mod dinput;
 pub mod known;
 pub mod pad_map;
 pub mod wizard;
