@@ -47,6 +47,7 @@
 pub mod dinput;
 pub mod known;
 pub mod pad_map;
+pub mod rig;
 pub mod wizard;
 
 pub use pad_map::{PadInput, PadMap, PadSettings, PadState, read_pad};
