@@ -113,7 +113,7 @@ mod tests {
         let config = Config::read(Some("mode = off\nfake = wheel\n"), Some("on"));
         assert_eq!(
             (config.mode, config.fake),
-            (Mode::On, Some(fake::Fake::Wheel))
+            (Mode::On, fake::Fake::from_cfg("fake = wheel"))
         );
         // A broken file keeps the defaults it can't read.
         let config = Config::read(Some("mode = ???\n\u{0}garbage\nffb_strength = lots"), None);

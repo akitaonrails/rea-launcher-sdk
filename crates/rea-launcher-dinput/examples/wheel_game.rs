@@ -15,6 +15,13 @@
 //!   the constant force changed with `DIEP_NORESTART`;
 //! - `buffer:<n>`: buffered data of `n` events (unacquired around it);
 //! - `data`: GetDeviceData, as `data=<code>:<offset>=<value>,…`;
+//! - `update:<magnitude>`: the constant force changed again
+//!   (`DIEP_NORESTART`);
+//! - `incomplete`: a constant force made without parameters, started,
+//!   then given them;
+//! - `reset`: `DISFFC_RESET`, then every effect started again;
+//! - `autocenter:<0|1>`: `DIPROP_AUTOCENTER`;
+//! - `second`: a second virtual device made, read and released;
 //! - `events`: what reached the fake devices, as `fake <line>`;
 //! - `wait:<ms>`.
 
@@ -36,11 +43,12 @@ mod game {
         DI8DEVCLASS_GAMECTRL, DICONDITION, DICONSTANTFORCE, DIDATAFORMAT, DIDEVCAPS,
         DIDEVICEINSTANCEA, DIDEVICEOBJECTDATA, DIDEVICEOBJECTINSTANCEA, DIDF_ABSAXIS, DIDFT_AXIS,
         DIEB_NOTRIGGER, DIEDFL_ATTACHEDONLY, DIEFF_CARTESIAN, DIEFF_OBJECTOFFSETS, DIEFFECT,
-        DIENUM_CONTINUE, DIEP_NORESTART, DIEP_TYPESPECIFICPARAMS, DIJOYSTATE2, DIOBJECTDATAFORMAT,
-        DIPERIODIC, DIPH_BYID, DIPH_DEVICE, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE,
-        DISCL_EXCLUSIVE, DISCL_FOREGROUND, DirectInput8Create, GUID_Button, GUID_ConstantForce,
-        GUID_Damper, GUID_POV, GUID_RxAxis, GUID_RyAxis, GUID_RzAxis, GUID_Sine, GUID_Slider,
-        GUID_Spring, GUID_Square, GUID_XAxis, GUID_YAxis, GUID_ZAxis,
+        DIENUM_CONTINUE, DIEP_AXES, DIEP_DIRECTION, DIEP_DURATION, DIEP_NORESTART,
+        DIEP_TYPESPECIFICPARAMS, DIJOYSTATE2, DIOBJECTDATAFORMAT, DIPERIODIC, DIPH_BYID,
+        DIPH_DEVICE, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DISCL_EXCLUSIVE, DISCL_FOREGROUND,
+        DirectInput8Create, GUID_Button, GUID_ConstantForce, GUID_Damper, GUID_POV, GUID_RxAxis,
+        GUID_RyAxis, GUID_RzAxis, GUID_Sine, GUID_Slider, GUID_Spring, GUID_Square, GUID_XAxis,
+        GUID_YAxis, GUID_ZAxis,
     };
     use windows_sys::Win32::Foundation::{HMODULE, HWND};
     use windows_sys::Win32::System::LibraryLoader::{
@@ -53,6 +61,11 @@ mod game {
     use windows_sys::core::{BOOL, GUID, HRESULT};
 
     type This = *mut c_void;
+    type SetProperty = unsafe extern "system" fn(This, usize, *const DIPROPHEADER) -> HRESULT;
+    type CreateEffect =
+        unsafe extern "system" fn(This, *const GUID, *const DIEFFECT, *mut This, This) -> HRESULT;
+    type SetParameters = unsafe extern "system" fn(This, *const DIEFFECT, u32) -> HRESULT;
+    type Start = unsafe extern "system" fn(This, u32, u32) -> HRESULT;
 
     /// `IID_IDirectInput8A`.
     const IID_DIRECTINPUT8A: GUID = GUID::from_u128(0xbf798030_483a_4da2_aa99_5d64ed369700);
@@ -241,11 +254,12 @@ mod game {
         println!("done");
     }
 
-    /// The CMR sequence on the listed wheel, then the steps.
+    /// The CMR sequence on the listed wheel: the device made, set up and
+    /// acquired, each step printed.
     ///
     /// # Safety
     /// `di` is a live IDirectInput8A.
-    unsafe fn drive(di: This, wheel: &DIDEVICEINSTANCEA, window: HWND, steps: &[String]) {
+    unsafe fn open_device(di: This, wheel: &DIDEVICEINSTANCEA, window: HWND) -> Option<This> {
         type CreateDevice =
             unsafe extern "system" fn(This, *const GUID, *mut This, This) -> HRESULT;
         let mut device: This = null_mut();
@@ -256,7 +270,7 @@ mod game {
                 method::<CreateDevice>(di, 3)(di, &wheel.guidInstance, &mut device, null_mut());
             println!("device={code:#x}");
             if code < 0 {
-                return;
+                return None;
             }
             let mut info = DIDEVICEINSTANCEA {
                 dwSize: size_of::<DIDEVICEINSTANCEA>() as u32,
@@ -314,8 +328,6 @@ mod game {
                 (&raw mut axes).cast(),
                 DIDFT_AXIS,
             );
-            type SetProperty =
-                unsafe extern "system" fn(This, usize, *const DIPROPHEADER) -> HRESULT;
             let set_property = method::<SetProperty>(device, 6);
             let ranged = axes
                 .iter()
@@ -349,15 +361,48 @@ mod game {
             type GetProperty = unsafe extern "system" fn(This, usize, *mut DIPROPHEADER) -> HRESULT;
             let code = method::<GetProperty>(device, 5)(device, 7, &mut gain.diph);
             println!("ffgain={code:#x},{}", gain.dwData);
+            Some(device)
+        }
+    }
+
+    /// Unacquires and releases a device.
+    ///
+    /// # Safety
+    /// `device` is a live device of ours.
+    unsafe fn close(device: This) {
+        // SAFETY: the caller's contract.
+        unsafe {
+            method::<unsafe extern "system" fn(This) -> HRESULT>(device, 8)(device);
+            release(device);
+        }
+    }
+
+    /// The wheel opened, then the steps.
+    ///
+    /// # Safety
+    /// `di` is a live IDirectInput8A.
+    unsafe fn drive(di: This, wheel: &DIDEVICEINSTANCEA, window: HWND, steps: &[String]) {
+        // SAFETY: the caller's contract; devices and effects made here.
+        unsafe {
+            let Some(device) = open_device(di, wheel, window) else {
+                return;
+            };
+            let set_property = method::<SetProperty>(device, 6);
             let mut effects = Vec::new();
             for step in steps {
+                if step == "second" {
+                    if let Some(other) = open_device(di, wheel, window) {
+                        run_step(other, "read", set_property, &mut effects);
+                        close(other);
+                    }
+                    continue;
+                }
                 run_step(device, step, set_property, &mut effects);
             }
             for effect in effects {
                 release(effect);
             }
-            method::<unsafe extern "system" fn(This) -> HRESULT>(device, 8)(device);
-            release(device);
+            close(device);
         }
     }
 
@@ -478,6 +523,25 @@ mod game {
                     println!("data={code:#x}:{}", events.join(","));
                 }
                 "effects" => make_effects(device, set_property, effects),
+                "update" => update(effects, number(1) as i32),
+                "incomplete" => incomplete(device, effects),
+                "reset" => {
+                    let code = method::<unsafe extern "system" fn(This, u32) -> HRESULT>(
+                        device, 22,
+                    )(device, 1);
+                    let started: Vec<String> = effects
+                        .iter()
+                        .map(|&e| format!("{:#x}", method::<Start>(e, 7)(e, 1, 0)))
+                        .collect();
+                    println!("reset={code:#x}:{}", started.join(","));
+                }
+                "autocenter" => {
+                    let value = DIPROPDWORD {
+                        diph: dword_header(),
+                        dwData: number(1) as u32,
+                    };
+                    println!("autocenter={:#x}", set_property(device, 9, &value.diph));
+                }
                 "wait" => std::thread::sleep(std::time::Duration::from_millis(number(1) as u64)),
                 other => println!("unknown step {other}"),
             }
@@ -495,15 +559,6 @@ mod game {
         set_property: unsafe extern "system" fn(This, usize, *const DIPROPHEADER) -> HRESULT,
         effects: &mut Vec<This>,
     ) {
-        type CreateEffect = unsafe extern "system" fn(
-            This,
-            *const GUID,
-            *const DIEFFECT,
-            *mut This,
-            This,
-        ) -> HRESULT;
-        type SetParameters = unsafe extern "system" fn(This, *const DIEFFECT, u32) -> HRESULT;
-        type Start = unsafe extern "system" fn(This, u32, u32) -> HRESULT;
         let condition = |coefficient| DICONDITION {
             lOffset: 0,
             lPositiveCoefficient: coefficient,
@@ -523,7 +578,7 @@ mod game {
             dwMagnitude: 10_000,
             ..sine
         };
-        let mut constant = DICONSTANTFORCE { lMagnitude: 6_000 };
+        let constant = DICONSTANTFORCE { lMagnitude: 6_000 };
         let mut axes = [0u32, 4];
         let mut direction = [1i32, 0];
         let (axes_ptr, direction_ptr) = (axes.as_mut_ptr(), direction.as_mut_ptr());
@@ -592,16 +647,97 @@ mod game {
                     effects.push(effect);
                 }
             }
-            constant.lMagnitude = -8_000;
-            let update = params((&raw const constant).cast(), size_of::<DICONSTANTFORCE>());
-            if let Some(&last) = effects.last() {
-                let code = method::<SetParameters>(last, 6)(
-                    last,
-                    &update,
-                    DIEP_TYPESPECIFICPARAMS | DIEP_NORESTART,
-                );
-                println!("update={code:#x}");
+            update(effects, -8_000);
+        }
+    }
+
+    /// X and Y, cartesian along X, forever: CMR's effect parameters.
+    struct Params {
+        axes: [u32; 2],
+        direction: [i32; 2],
+        constant: DICONSTANTFORCE,
+    }
+
+    impl Params {
+        fn constant(magnitude: i32) -> Box<Params> {
+            Box::new(Params {
+                axes: [0, 4],
+                direction: [1, 0],
+                constant: DICONSTANTFORCE {
+                    lMagnitude: magnitude,
+                },
+            })
+        }
+
+        /// Valid while `self` lives.
+        fn effect(&mut self) -> DIEFFECT {
+            DIEFFECT {
+                dwSize: size_of::<DIEFFECT>() as u32,
+                dwFlags: DIEFF_CARTESIAN | DIEFF_OBJECTOFFSETS,
+                dwDuration: u32::MAX,
+                dwSamplePeriod: 0,
+                dwGain: 10_000,
+                dwTriggerButton: DIEB_NOTRIGGER,
+                dwTriggerRepeatInterval: 0,
+                cAxes: 2,
+                rgdwAxes: self.axes.as_mut_ptr(),
+                rglDirection: self.direction.as_mut_ptr(),
+                lpEnvelope: null_mut(),
+                cbTypeSpecificParams: size_of::<DICONSTANTFORCE>() as u32,
+                lpvTypeSpecificParams: (&raw mut self.constant).cast(),
+                dwStartDelay: 0,
             }
         }
+    }
+
+    /// The last effect (the constant force) changed in place.
+    ///
+    /// # Safety
+    /// `effects` are live effects of ours.
+    unsafe fn update(effects: &[This], magnitude: i32) {
+        let mut params = Params::constant(magnitude);
+        if let Some(&last) = effects.last() {
+            // SAFETY: the caller's contract; `params` lives across the call.
+            let code = unsafe {
+                method::<SetParameters>(last, 6)(
+                    last,
+                    &params.effect(),
+                    DIEP_TYPESPECIFICPARAMS | DIEP_NORESTART,
+                )
+            };
+            println!("update={code:#x}");
+        }
+    }
+
+    /// A constant force made without parameters, started, then given
+    /// them.
+    ///
+    /// # Safety
+    /// `device` is a live virtual wheel.
+    unsafe fn incomplete(device: This, effects: &mut Vec<This>) {
+        let mut effect: This = null_mut();
+        let mut params = Params::constant(7_000);
+        // SAFETY: the caller's contract; `params` lives across the calls.
+        unsafe {
+            let made = method::<CreateEffect>(device, 18)(
+                device,
+                &GUID_ConstantForce,
+                null(),
+                &mut effect,
+                null_mut(),
+            );
+            if effect.is_null() {
+                println!("incomplete={made:#x}");
+                return;
+            }
+            let started = method::<Start>(effect, 7)(effect, 1, 0);
+            let set = method::<SetParameters>(effect, 6)(
+                effect,
+                &params.effect(),
+                DIEP_AXES | DIEP_DIRECTION | DIEP_DURATION | DIEP_TYPESPECIFICPARAMS,
+            );
+            println!("incomplete={made:#x},{started:#x},{set:#x}");
+        }
+        effects.push(effect);
     }
 }

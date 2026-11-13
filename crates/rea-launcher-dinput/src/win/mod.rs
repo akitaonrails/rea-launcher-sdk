@@ -13,6 +13,7 @@ mod effect;
 mod fake;
 mod hook;
 mod real;
+mod rig;
 
 use std::path::PathBuf;
 use std::ptr::null_mut;

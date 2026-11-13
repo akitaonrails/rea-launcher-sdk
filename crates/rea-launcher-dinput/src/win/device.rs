@@ -1,16 +1,17 @@
 //! The virtual wheel: an `IDirectInputDevice8A` with the frozen layout of
 //! [`VIRTUAL`] whose state comes from the real wheel and pedals.
 //!
-//! All of its state is a [`Rig`] behind one mutex, shared with its
-//! effects. Game callbacks (`EnumObjects`, `EnumEffects`, …) run with the
-//! mutex released, so a callback may call the device again.
+//! Each device the game makes is a [`View`] (its data format, axis
+//! properties, buffer) over the one [`Rig`](super::rig::Rig) of its DirectInput (the real
+//! devices and effects). Locks are always taken view first, then rig.
+//! Game callbacks (`EnumObjects`, `EnumEffects`, …) run with both
+//! released, so a callback may call the device again.
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use rea_launcher::ffb::FfbSettings;
 use rea_launcher::wheel::dinput::{Axis, VIRTUAL};
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
     DI8DEVTYPE_DRIVING, DI8DEVTYPEDRIVING_DUALPEDALS, DIDATAFORMAT, DIDC_ATTACHED, DIDC_DEADBAND,
@@ -19,11 +20,10 @@ use windows_sys::Win32::Devices::HumanInterfaceDevice::{
     DIDEVICEOBJECTDATA, DIDEVICEOBJECTINSTANCEA, DIDEVTYPE_HID, DIEFFECT, DIEFFECTINFOA,
     DIEFFESCAPE, DIEFT_DEADBAND, DIEFT_FFATTACK, DIEFT_FFFADE, DIEFT_POSNEGCOEFFICIENTS,
     DIEFT_POSNEGSATURATION, DIEFT_SATURATION, DIEFT_STARTDELAY, DIENUM_STOP, DIEP_ALLPARAMS,
-    DIEP_ALLPARAMS_DX5, DIGDD_PEEK, DIGFFS_ACTUATORSON, DIGFFS_EMPTY, DIGFFS_POWERON,
-    DIGFFS_STOPPED, DIOBJECTDATAFORMAT, DIPH_BYID, DIPH_BYOFFSET, DIPH_BYUSAGE, DIPH_DEVICE,
-    DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DIPROPSTRING, DISCL_BACKGROUND, DISCL_EXCLUSIVE,
-    DISCL_FOREGROUND, DISCL_NONEXCLUSIVE, DISFFC_RESET, DISFFC_STOPALL,
-    LPDIENUMCREATEDEFFECTOBJECTSCALLBACK, LPDIENUMDEVICEOBJECTSCALLBACKA, LPDIENUMEFFECTSCALLBACKA,
+    DIEP_ALLPARAMS_DX5, DIGDD_PEEK, DIOBJECTDATAFORMAT, DIPH_BYID, DIPH_BYOFFSET, DIPH_BYUSAGE,
+    DIPH_DEVICE, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DIPROPSTRING, DISCL_BACKGROUND,
+    DISCL_EXCLUSIVE, DISCL_FOREGROUND, DISCL_NONEXCLUSIVE, LPDIENUMCREATEDEFFECTOBJECTSCALLBACK,
+    LPDIENUMDEVICEOBJECTSCALLBACKA, LPDIENUMEFFECTSCALLBACKA,
 };
 use windows_sys::Win32::Foundation::{HANDLE, HINSTANCE, HWND};
 use windows_sys::Win32::System::SystemInformation::GetTickCount;
@@ -32,13 +32,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor};
 use windows_sys::core::{GUID, HRESULT};
 
 use super::com::{DeviceVtbl, IID_DEVICE8A, IID_UNKNOWN, Object, This, UnknownVtbl, query};
-use super::effect::{self, Effects};
-use super::real::{PROP_AUTOCENTER, PROP_FFGAIN, Read, Real, guid_kind, guid_ptr};
+use super::effect;
+use super::real::{guid_kind, guid_ptr};
+use super::rig::Shared;
 use super::{ansi, guard, hr, lock, log};
-use crate::devices::Merge;
 use crate::effect::{Effect, Family, Kind};
 use crate::format::{Entry, Layout, Object as Part, Values};
-use crate::state::{AxisProps, FULL, Reading};
+use crate::state::{AxisProps, FULL};
 
 /// The virtual wheel's instance GUID: fixed, so a game that saves it
 /// finds the wheel again.
@@ -100,9 +100,6 @@ mod prop {
     pub const VIDPID: usize = 24;
 }
 
-/// How often effects that play forever are checked on the wheel.
-const KEEP_ALIVE: Duration = Duration::from_millis(250);
-
 /// What a game read with buffered data (`DIPROP_BUFFERSIZE`).
 #[derive(Default)]
 struct Buffer {
@@ -133,53 +130,33 @@ impl Buffer {
     }
 }
 
-/// Everything the virtual wheel is: the real devices, the game's
-/// settings of it, its effects.
-pub(super) struct Rig {
-    pub wheel: Option<Real>,
-    pub pedals: Option<Real>,
-    /// `None` without a wheel: the wheel reads neutral.
-    merge: Option<Merge>,
-    pub ffb: FfbSettings,
-    pub effects: Effects,
+/// One virtual device the game made: its own settings of the wheel,
+/// over the rig it shares.
+pub(super) struct View {
+    rig: Shared,
     layout: Option<Layout>,
     props: [AxisProps; 4],
     buffer: Buffer,
-    autocenter: u32,
-    gain: u32,
-    window: usize,
-    cooperated: bool,
     acquired: bool,
     event: usize,
     values: Option<Values>,
-    keep_alive_at: Instant,
 }
 
-impl Rig {
-    pub fn new(
-        wheel: Option<Real>,
-        pedals: Option<Real>,
-        merge: Option<Merge>,
-        ffb: FfbSettings,
-    ) -> Rig {
-        Rig {
-            wheel,
-            pedals,
-            merge,
-            ffb,
-            effects: Effects::default(),
+impl View {
+    fn new(rig: Shared) -> View {
+        View {
+            rig,
             layout: None,
             props: [AxisProps::default(); 4],
             buffer: Buffer::default(),
-            autocenter: 1,
-            gain: FULL,
-            window: 0,
-            cooperated: false,
             acquired: false,
             event: 0,
             values: None,
-            keep_alive_at: Instant::now(),
         }
+    }
+
+    pub fn rig(&self) -> Shared {
+        Arc::clone(&self.rig)
     }
 
     /// An axis named in an effect: by object ID or by its offset in the
@@ -223,29 +200,7 @@ impl Rig {
 
     /// Reads the real devices into the virtual wheel's values.
     fn update(&mut self, now: Instant) {
-        let wheel = self.wheel.as_mut().map(|w| w.read(now));
-        let pedals = self.pedals.as_mut().map(|p| p.read(now));
-        let back = matches!(wheel, Some(Read::Back(..)));
-        let wheel = match wheel {
-            Some(Read::State(s, pov) | Read::Back(s, pov)) => Some((s, pov)),
-            _ => None,
-        };
-        let pedals = match pedals {
-            Some(Read::State(s, _) | Read::Back(s, _)) => Some(s),
-            _ => None,
-        };
-        if back {
-            self.wheel_back();
-        }
-        let reading = match &mut self.merge {
-            Some(merge) => merge.reading(
-                now,
-                wheel.as_ref().map(|(s, pov)| (s, *pov)),
-                pedals.as_ref(),
-            ),
-            None => Reading::NEUTRAL,
-        };
-        let values = reading.values(&self.props);
+        let values = lock(&self.rig).read(now).values(&self.props);
         if let (Some(old), Some(layout)) = (self.values, &self.layout)
             && old != values
         {
@@ -258,32 +213,6 @@ impl Rig {
             }
         }
         self.values = Some(values);
-        if now >= self.keep_alive_at {
-            self.effects.keep_alive();
-            self.keep_alive_at = now + KEEP_ALIVE;
-        }
-    }
-
-    /// The wheel was acquired (again): its device settings and the
-    /// game's effects back on it.
-    fn wheel_back(&mut self) {
-        let Some(wheel) = self.wheel.as_mut() else {
-            return;
-        };
-        if wheel.exclusive() {
-            wheel.set_dword(PROP_AUTOCENTER, self.autocenter);
-            wheel.set_dword(PROP_FFGAIN, self.gain);
-        }
-        let ffb = self.ffb;
-        self.effects.revive(self.wheel.as_ref(), &ffb);
-    }
-
-    fn cooperate(&mut self) {
-        let window = self.window as HWND;
-        for real in self.wheel.iter_mut().chain(self.pedals.iter_mut()) {
-            real.cooperate(window);
-        }
-        self.cooperated = true;
     }
 
     fn acquire(&mut self) -> HRESULT {
@@ -293,17 +222,9 @@ impl Rig {
         if self.acquired {
             return hr::FALSE;
         }
-        if !self.cooperated {
-            self.cooperate();
-        }
+        lock(&self.rig).acquire();
         self.acquired = true;
         self.values = None;
-        if let Some(pedals) = self.pedals.as_mut() {
-            pedals.acquire();
-        }
-        if self.wheel.as_mut().is_some_and(Real::acquire) {
-            self.wheel_back();
-        }
         self.update(Instant::now());
         hr::OK
     }
@@ -313,9 +234,7 @@ impl Rig {
             return hr::FALSE;
         }
         self.acquired = false;
-        for real in self.wheel.iter_mut().chain(self.pedals.iter_mut()) {
-            real.unacquire();
-        }
+        lock(&self.rig).unacquire();
         hr::OK
     }
 
@@ -394,8 +313,8 @@ impl Rig {
             prop::GRANULARITY => dword(1),
             prop::AXISMODE | prop::CALIBRATIONMODE => dword(0),
             prop::BUFFERSIZE => dword(self.buffer.size),
-            prop::FFGAIN => dword(self.gain),
-            prop::AUTOCENTER => dword(self.autocenter),
+            prop::FFGAIN => dword(lock(&self.rig).gain()),
+            prop::AUTOCENTER => dword(lock(&self.rig).autocenter()),
             prop::VIDPID => dword((u32::from(VIRTUAL.pid) << 16) | u32::from(VIRTUAL.vid)),
             prop::PRODUCTNAME | prop::INSTANCENAME => {
                 if h.dwSize != size_of::<DIPROPSTRING>() as u32 {
@@ -477,16 +396,16 @@ impl Rig {
             prop::FFGAIN | prop::AUTOCENTER if target.is_some() => hr::INVALIDPARAM,
             prop::FFGAIN => match dword() {
                 Ok(v) if v <= FULL => {
-                    self.gain = v;
-                    self.pass_to_wheel(PROP_FFGAIN, v)
+                    lock(&self.rig).set_gain(v);
+                    hr::OK
                 }
                 Ok(_) => hr::INVALIDPARAM,
                 Err(code) => code,
             },
             prop::AUTOCENTER => match dword() {
                 Ok(v @ (0 | 1)) => {
-                    self.autocenter = v;
-                    self.pass_to_wheel(PROP_AUTOCENTER, v)
+                    lock(&self.rig).set_autocenter(v);
+                    hr::OK
                 }
                 Ok(_) => hr::INVALIDPARAM,
                 Err(code) => code,
@@ -511,18 +430,6 @@ impl Rig {
             }
             Err(code) => code,
         }
-    }
-
-    /// A device property passed to the wheel; the game is told it worked
-    /// either way (a wheel without force feedback has nothing to set).
-    fn pass_to_wheel(&mut self, id: usize, value: u32) -> HRESULT {
-        if let Some(wheel) = self.wheel.as_mut().filter(|w| w.exclusive()) {
-            let code = wheel.set_dword(id, value);
-            if !hr::ok(code) {
-                log!("the wheel refused property {id} = {value} ({code:#x})");
-            }
-        }
-        hr::OK
     }
 
     /// The game's `DIDATAFORMAT`.
@@ -597,19 +504,19 @@ impl Rig {
     }
 }
 
-/// The device object: its rig.
+/// The device object: its view.
 pub(super) struct VirtualDevice {
-    rig: Arc<Mutex<Rig>>,
+    view: Arc<Mutex<View>>,
 }
 
 type DeviceObject = Object<DeviceVtbl, VirtualDevice>;
 
-/// A new virtual wheel for the game.
-pub(super) fn create(rig: Rig) -> This {
+/// A new virtual wheel for the game, on `rig`.
+pub(super) fn create(rig: Shared) -> This {
     DeviceObject::create(
         &VTBL,
         VirtualDevice {
-            rig: Arc::new(Mutex::new(rig)),
+            view: Arc::new(Mutex::new(View::new(rig))),
         },
     )
 }
@@ -660,13 +567,13 @@ unsafe fn device<'a>(this: This) -> &'a VirtualDevice {
     unsafe { &DeviceObject::get(this).value }
 }
 
-/// Runs `f` on the device's rig, inside [`guard`].
+/// Runs `f` on the device's view, inside [`guard`].
 ///
 /// # Safety
 /// As [`device`].
-unsafe fn with<R>(this: This, failed: R, f: impl FnOnce(&mut Rig) -> R) -> R {
+unsafe fn with<R>(this: This, failed: R, f: impl FnOnce(&mut View) -> R) -> R {
     // SAFETY: the caller's contract.
-    guard(failed, || f(&mut lock(&unsafe { device(this) }.rig)))
+    guard(failed, || f(&mut lock(&unsafe { device(this) }.view)))
 }
 
 /// Copies `full` into the game's structure of `size` bytes (an older
@@ -709,25 +616,29 @@ unsafe extern "system" fn release(this: This) -> u32 {
 unsafe extern "system" fn get_capabilities(this: This, caps: *mut DIDEVCAPS) -> HRESULT {
     // SAFETY: a call on our object; `caps` is the game's or null.
     unsafe {
-        with(this, hr::GENERIC, |_| {
+        with(this, hr::GENERIC, |view| {
             let Some(size) = caps.as_ref().map(|c| c.dwSize) else {
                 return hr::INVALIDPARAM;
             };
             if size != size_of::<DIDEVCAPS>() as u32 && size != CAPS_DX3_SIZE {
                 return hr::INVALIDPARAM;
             }
-            let full = DIDEVCAPS {
-                dwSize: size,
-                dwFlags: DIDC_ATTACHED
-                    | DIDC_POLLEDDEVICE
-                    | DIDC_FORCEFEEDBACK
+            // Force feedback only through a wheel that takes it.
+            let ffb = if lock(&view.rig).has_ffb() {
+                DIDC_FORCEFEEDBACK
                     | DIDC_FFATTACK
                     | DIDC_FFFADE
                     | DIDC_SATURATION
                     | DIDC_POSNEGCOEFFICIENTS
                     | DIDC_POSNEGSATURATION
                     | DIDC_DEADBAND
-                    | DIDC_STARTDELAY,
+                    | DIDC_STARTDELAY
+            } else {
+                0
+            };
+            let full = DIDEVCAPS {
+                dwSize: size,
+                dwFlags: DIDC_ATTACHED | DIDC_POLLEDDEVICE | ffb,
                 dwDevType: DEV_TYPE,
                 dwAxes: 4,
                 dwButtons: VIRTUAL.buttons as u32,
@@ -752,11 +663,11 @@ unsafe extern "system" fn enum_objects(
 ) -> HRESULT {
     // SAFETY: a call on our object.
     let objects = unsafe {
-        with(this, None, |rig| {
+        with(this, None, |view| {
             Some(
                 Part::all()
                     .filter(|p| p.in_filter(filter))
-                    .map(|p| rig.object_instance(p))
+                    .map(|p| view.object_instance(p))
                     .collect::<Vec<_>>(),
             )
         })
@@ -783,8 +694,8 @@ unsafe extern "system" fn get_property(
 ) -> HRESULT {
     // SAFETY: a call on our object; the property as the game passes it.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
-            rig.get_property(id as usize, header)
+        with(this, hr::GENERIC, |view| {
+            view.get_property(id as usize, header)
         })
     }
 }
@@ -796,8 +707,8 @@ unsafe extern "system" fn set_property(
 ) -> HRESULT {
     // SAFETY: a call on our object; the property as the game passes it.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
-            rig.set_property(id as usize, header)
+        with(this, hr::GENERIC, |view| {
+            view.set_property(id as usize, header)
         })
     }
 }
@@ -805,8 +716,8 @@ unsafe extern "system" fn set_property(
 unsafe extern "system" fn acquire(this: This) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
-            let code = rig.acquire();
+        with(this, hr::GENERIC, |view| {
+            let code = view.acquire();
             log!("Acquire: {code:#x}");
             code
         })
@@ -815,24 +726,24 @@ unsafe extern "system" fn acquire(this: This) -> HRESULT {
 
 unsafe extern "system" fn unacquire(this: This) -> HRESULT {
     // SAFETY: a call on our object.
-    unsafe { with(this, hr::GENERIC, Rig::unacquire) }
+    unsafe { with(this, hr::GENERIC, View::unacquire) }
 }
 
 unsafe extern "system" fn get_device_state(this: This, size: u32, data: *mut c_void) -> HRESULT {
     // SAFETY: a call on our object; `data` holds `size` bytes.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
-            if !rig.acquired {
+        with(this, hr::GENERIC, |view| {
+            if !view.acquired {
                 return hr::NOTACQUIRED;
             }
-            let Some(layout) = &rig.layout else {
+            let Some(layout) = &view.layout else {
                 return hr::INVALIDPARAM;
             };
             if data.is_null() || size != layout.size {
                 return hr::INVALIDPARAM;
             }
-            rig.update(Instant::now());
-            let (Some(layout), Some(values)) = (&rig.layout, &rig.values) else {
+            view.update(Instant::now());
+            let (Some(layout), Some(values)) = (&view.layout, &view.values) else {
                 return hr::GENERIC;
             };
             layout.write(
@@ -854,11 +765,11 @@ unsafe extern "system" fn get_device_data(
     // SAFETY: a call on our object; `data` holds `*count` entries of
     // `object_size` bytes, or is null.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
-            if rig.buffer.size == 0 {
+        with(this, hr::GENERIC, |view| {
+            if view.buffer.size == 0 {
                 return hr::NOTBUFFERED;
             }
-            if !rig.acquired {
+            if !view.acquired {
                 return hr::NOTACQUIRED;
             }
             let fits = object_size == size_of::<DIDEVICEOBJECTDATA>() as u32
@@ -869,10 +780,10 @@ unsafe extern "system" fn get_device_data(
             if !fits {
                 return hr::INVALIDPARAM;
             }
-            rig.update(Instant::now());
-            let take = (*wanted as usize).min(rig.buffer.events.len());
+            view.update(Instant::now());
+            let take = (*wanted as usize).min(view.buffer.events.len());
             if !data.is_null() {
-                for (i, event) in rig.buffer.events.iter().take(take).enumerate() {
+                for (i, event) in view.buffer.events.iter().take(take).enumerate() {
                     let dst = data.cast::<u8>().add(i * object_size as usize);
                     std::ptr::copy_nonoverlapping(
                         (event as *const DIDEVICEOBJECTDATA).cast::<u8>(),
@@ -882,10 +793,10 @@ unsafe extern "system" fn get_device_data(
                 }
             }
             if flags & DIGDD_PEEK == 0 {
-                rig.buffer.events.drain(..take);
+                view.buffer.events.drain(..take);
             }
             *wanted = take as u32;
-            if std::mem::take(&mut rig.buffer.overflow) {
+            if std::mem::take(&mut view.buffer.overflow) {
                 hr::FALSE
             } else {
                 hr::OK
@@ -896,17 +807,17 @@ unsafe extern "system" fn get_device_data(
 
 unsafe extern "system" fn set_data_format(this: This, format: *const DIDATAFORMAT) -> HRESULT {
     // SAFETY: a call on our object; the game's format.
-    unsafe { with(this, hr::GENERIC, |rig| rig.set_data_format(format)) }
+    unsafe { with(this, hr::GENERIC, |view| view.set_data_format(format)) }
 }
 
 unsafe extern "system" fn set_event_notification(this: This, event: HANDLE) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
-            if rig.acquired {
+        with(this, hr::GENERIC, |view| {
+            if view.acquired {
                 return hr::ACQUIRED;
             }
-            rig.event = event as usize;
+            view.event = event as usize;
             hr::OK
         })
     }
@@ -919,8 +830,8 @@ unsafe extern "system" fn set_cooperative_level(this: This, window: HWND, flags:
     }
     // SAFETY: a call on our object; a window query on the game's handle.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
-            if rig.acquired {
+        with(this, hr::GENERIC, |view| {
+            if view.acquired {
                 return hr::ACQUIRED;
             }
             let root = if window.is_null() {
@@ -928,9 +839,8 @@ unsafe extern "system" fn set_cooperative_level(this: This, window: HWND, flags:
             } else {
                 GetAncestor(window, GA_ROOT)
             };
-            rig.window = if root.is_null() { window } else { root } as usize;
             log!("SetCooperativeLevel {flags:#x}");
-            rig.cooperate();
+            lock(&view.rig).set_window(if root.is_null() { window } else { root });
             hr::OK
         })
     }
@@ -944,16 +854,16 @@ unsafe extern "system" fn get_object_info(
 ) -> HRESULT {
     // SAFETY: a call on our object; `info` is the game's or null.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
+        with(this, hr::GENERIC, |view| {
             let Some(size) = info.as_ref().map(|i| i.dwSize) else {
                 return hr::INVALIDPARAM;
             };
             if size != size_of::<DIDEVICEOBJECTINSTANCEA>() as u32 && size != OBJECT_DX3_SIZE {
                 return hr::INVALIDPARAM;
             }
-            match rig.target(how, obj) {
+            match view.target(how, obj) {
                 Ok(Some(part)) => {
-                    copy_sized(&rig.object_instance(part), info, size);
+                    copy_sized(&view.object_instance(part), info, size);
                     hr::OK
                 }
                 Ok(None) => hr::INVALIDPARAM,
@@ -1006,7 +916,7 @@ unsafe extern "system" fn create_effect(
                 return hr::DEVICENOTREG;
             };
             let device = device(this);
-            let mut rig = lock(&device.rig);
+            let view = lock(&device.view);
             let mut game = Effect::new(kind);
             if !params.is_null() {
                 let all = if (*params).dwSize >= size_of::<DIEFFECT>() as u32 {
@@ -1014,13 +924,14 @@ unsafe extern "system" fn create_effect(
                 } else {
                     DIEP_ALLPARAMS_DX5
                 };
-                game = match effect::read(&game, params, all, |by_id, v| rig.axis_named(by_id, v)) {
+                game = match effect::read(&game, params, all, |by_id, v| view.axis_named(by_id, v))
+                {
                     Ok(game) => game,
                     Err(code) => return code,
                 };
             }
             log!("CreateEffect {}", game.describe());
-            *out = effect::create(&device.rig, &mut rig, game);
+            *out = effect::create(&device.view, &mut lock(&view.rig), game);
             hr::OK
         })
     }
@@ -1120,16 +1031,11 @@ unsafe extern "system" fn get_effect_info(
 unsafe extern "system" fn get_force_feedback_state(this: This, state: *mut u32) -> HRESULT {
     // SAFETY: a call on our object; `state` is the game's or null.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
+        with(this, hr::GENERIC, |view| {
             let Some(state) = state.as_mut() else {
                 return hr::INVALIDPARAM;
             };
-            *state = rig
-                .wheel
-                .as_ref()
-                .filter(|w| w.exclusive())
-                .and_then(Real::ffb_state)
-                .unwrap_or(DIGFFS_EMPTY | DIGFFS_STOPPED | DIGFFS_ACTUATORSON | DIGFFS_POWERON);
+            *state = lock(&view.rig).ffb_state();
             hr::OK
         })
     }
@@ -1138,18 +1044,12 @@ unsafe extern "system" fn get_force_feedback_state(this: This, state: *mut u32) 
 unsafe extern "system" fn send_force_feedback_command(this: This, command: u32) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
+        with(this, hr::GENERIC, |view| {
             if !matches!(command, 1 | 2 | 4 | 8 | 0x10 | 0x20) {
                 return hr::INVALIDPARAM;
             }
-            if let Some(wheel) = rig.wheel.as_ref().filter(|w| w.exclusive()) {
-                wheel.command(command);
-            }
-            if command & (DISFFC_RESET | DISFFC_STOPALL) != 0 {
-                rig.effects.stop_all(command == DISFFC_RESET);
-            }
             log!("SendForceFeedbackCommand {command:#x}");
-            hr::OK
+            lock(&view.rig).command(command)
         })
     }
 }
@@ -1164,7 +1064,11 @@ unsafe extern "system" fn enum_created_effect_objects(
         return hr::INVALIDPARAM;
     };
     // SAFETY: a call on our object.
-    let objects = unsafe { with(this, Vec::new(), |rig| rig.effects.objects()) };
+    let objects = unsafe {
+        with(this, Vec::new(), |view| {
+            lock(&view.rig).effects().0.objects()
+        })
+    };
     guard(hr::GENERIC, || {
         for object in objects {
             // SAFETY: the game's callback with one of its effects, which
@@ -1184,11 +1088,11 @@ unsafe extern "system" fn escape(_: This, _: *mut DIEFFESCAPE) -> HRESULT {
 unsafe extern "system" fn poll(this: This) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
-        with(this, hr::GENERIC, |rig| {
-            if !rig.acquired {
+        with(this, hr::GENERIC, |view| {
+            if !view.acquired {
                 return hr::NOTACQUIRED;
             }
-            rig.update(Instant::now());
+            view.update(Instant::now());
             hr::OK
         })
     }

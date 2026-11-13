@@ -23,8 +23,9 @@ use windows_sys::Win32::Foundation::HINSTANCE;
 use windows_sys::core::{GUID, HRESULT};
 
 use super::com::{EffectVtbl, IID_EFFECT, IID_UNKNOWN, Object, This, query};
-use super::device::Rig;
+use super::device::View;
 use super::real::{Real, RealEffect};
+use super::rig::Rig;
 use super::{guard, hr, lock, log};
 use crate::effect::{Condition, Coordinates, Effect, Envelope, Family, Kind, Params};
 
@@ -409,6 +410,14 @@ fn real_flags(flags: u32) -> u32 {
 /// `INFINITE`, for durations and iterations.
 const INFINITE: u32 = u32::MAX;
 
+/// Every parameter a real effect is sent again with.
+const ALL_PARAMS: u32 = DIEP_DURATION
+    | DIEP_SAMPLEPERIOD
+    | DIEP_GAIN
+    | DIEP_STARTDELAY
+    | DIEP_ENVELOPE
+    | DIEP_TYPESPECIFICPARAMS;
+
 /// One effect the game made.
 struct Slot {
     id: u64,
@@ -428,9 +437,12 @@ impl Slot {
         !self.game.axes.is_empty() && self.game.params != Params::None
     }
 
-    /// Makes the real effect when there is none yet and it can be made.
+    /// Makes the real effect when there is none yet and it can be made
+    /// (a wheel held exclusively, a complete effect), and starts it when
+    /// the game has it playing: an effect started before it was complete,
+    /// or after a reset, plays once it can.
     fn ensure_real(&mut self, wheel: Option<&Real>, ffb: &FfbSettings) {
-        let Some(wheel) = wheel.filter(|w| w.device.ffb) else {
+        let Some(wheel) = wheel.filter(|w| w.device.ffb && w.exclusive()) else {
             return;
         };
         if self.real.is_some() || self.failed || !self.complete() {
@@ -440,6 +452,9 @@ impl Slot {
         match wheel.create_effect(&made) {
             Ok(real) => {
                 log!("effect {}: made on the wheel: {}", self.id, made.describe());
+                if let Some(iterations) = self.playing {
+                    real.start(iterations, 0);
+                }
                 self.real = Some(real);
             }
             Err(code) => {
@@ -459,6 +474,9 @@ impl Slot {
 pub(super) struct Effects {
     slots: Vec<Slot>,
     next: u64,
+    /// The wheel's driver refused a `DIEP_NORESTART` update: it isn't
+    /// asked again (every frame in CMR3).
+    no_restart_refused: bool,
 }
 
 impl Effects {
@@ -508,30 +526,34 @@ impl Effects {
         wheel: Option<&Real>,
         ffb: &FfbSettings,
     ) -> HRESULT {
-        let Some(slot) = self.slot(id) else {
+        let Some(i) = self.slots.iter().position(|s| s.id == id) else {
             return hr::NOTFOUND;
         };
+        let slot = &mut self.slots[i];
         slot.game = game;
         if flags & DIEP_START != 0 {
             slot.playing = Some(1);
         }
         let Some(real) = &slot.real else {
-            // A real effect made now has every parameter already: only
-            // the start is left to pass on.
+            // Made now, with every parameter, and started if playing.
             slot.ensure_real(wheel, ffb);
-            if flags & DIEP_START != 0
-                && let Some(real) = &slot.real
-            {
-                real.start(1, 0);
-            }
             return hr::OK;
         };
         let made = slot.game.for_wheel(ffb);
-        let flags = real_flags(flags);
+        let mut flags = real_flags(flags);
+        if self.no_restart_refused {
+            flags &= !DIEP_NORESTART;
+        }
         let mut code = real.set(&made, flags);
         if !hr::ok(code) && flags & DIEP_NORESTART != 0 {
             // Some drivers refuse to update a playing effect in place.
             code = real.set(&made, flags & !DIEP_NORESTART);
+            if hr::ok(code) {
+                log!(
+                    "the wheel refuses DIEP_NORESTART updates: they restart the effect from now on"
+                );
+                self.no_restart_refused = true;
+            }
         }
         if !hr::ok(code) {
             log!(
@@ -542,16 +564,26 @@ impl Effects {
         hr::OK
     }
 
-    pub fn start(&mut self, id: u64, iterations: u32, flags: u32) -> HRESULT {
+    pub fn start(
+        &mut self,
+        id: u64,
+        iterations: u32,
+        flags: u32,
+        wheel: Option<&Real>,
+        ffb: &FfbSettings,
+    ) -> HRESULT {
         let Some(slot) = self.slot(id) else {
             return hr::NOTFOUND;
         };
         slot.playing = Some(iterations);
-        if let Some(real) = &slot.real {
-            let code = real.start(iterations, flags);
-            if !hr::ok(code) {
-                log!("effect {id}: the wheel didn't start it ({code:#x})");
+        match &slot.real {
+            Some(real) => {
+                let code = real.start(iterations, flags);
+                if !hr::ok(code) {
+                    log!("effect {id}: the wheel didn't start it ({code:#x})");
+                }
             }
+            None => slot.ensure_real(wheel, ffb),
         }
         hr::OK
     }
@@ -616,6 +648,26 @@ impl Effects {
         }
     }
 
+    /// Another wheel drives: the effects are made on it when it is
+    /// acquired ([`Effects::revive`]).
+    pub fn forget_wheel(&mut self) {
+        for slot in &mut self.slots {
+            slot.real = None;
+            slot.failed = false;
+        }
+        self.no_restart_refused = false;
+    }
+
+    /// Every real effect's parameters sent again (the strength they are
+    /// made at changed).
+    pub fn refresh(&self, ffb: &FfbSettings) {
+        for slot in &self.slots {
+            if let Some(real) = &slot.real {
+                real.set(&slot.game.for_wheel(ffb), ALL_PARAMS);
+            }
+        }
+    }
+
     /// After the wheel was (re-)acquired: every effect made, downloaded
     /// and, if the game had it playing, started again. Drivers drop a
     /// device's effects when it is lost or unacquired; the game doesn't
@@ -625,23 +677,14 @@ impl Effects {
             slot.failed = false;
             match &slot.real {
                 Some(real) => {
-                    let made = slot.game.for_wheel(ffb);
-                    real.set(
-                        &made,
-                        DIEP_DURATION
-                            | DIEP_SAMPLEPERIOD
-                            | DIEP_GAIN
-                            | DIEP_STARTDELAY
-                            | DIEP_ENVELOPE
-                            | DIEP_TYPESPECIFICPARAMS,
-                    );
+                    real.set(&slot.game.for_wheel(ffb), ALL_PARAMS);
                     real.download();
+                    if let Some(iterations) = slot.playing {
+                        real.start(iterations, 0);
+                        log!("effect {}: restarted on the wheel", slot.id);
+                    }
                 }
                 None => slot.ensure_real(wheel, ffb),
-            }
-            if let (Some(iterations), Some(real)) = (slot.playing, &slot.real) {
-                real.start(iterations, 0);
-                log!("effect {}: restarted on the wheel", slot.id);
             }
         }
     }
@@ -661,28 +704,30 @@ impl Effects {
     }
 }
 
-/// A game's effect object: the rig it lives on and its slot there.
+/// A game's effect object: the virtual device that made it (whose data
+/// format names its axes) and its slot on the rig.
 pub(super) struct GameEffect {
-    rig: Arc<Mutex<Rig>>,
+    view: Arc<Mutex<View>>,
     id: u64,
     kind: Kind,
 }
 
 type EffectObject = Object<EffectVtbl, GameEffect>;
 
-/// A new effect object for the game, its slot made with `game`.
-pub(super) fn create(rig: &Arc<Mutex<Rig>>, locked: &mut Rig, game: Effect) -> This {
+/// A new effect object for the game, made by `view`, its slot on `rig`
+/// made with `game`.
+pub(super) fn create(view: &Arc<Mutex<View>>, rig: &mut Rig, game: Effect) -> This {
     let kind = game.kind;
     let object = EffectObject::create(
         &VTBL,
         GameEffect {
-            rig: Arc::clone(rig),
+            view: Arc::clone(view),
             id: 0,
             kind,
         },
     );
-    let wheel = locked.wheel.as_ref();
-    let id = locked.effects.add(object, game, wheel, &locked.ffb);
+    let (effects, wheel, ffb) = rig.effects();
+    let id = effects.add(object, game, wheel, &ffb);
     // SAFETY: the object was just made and nobody else has it yet.
     unsafe { (*object.cast::<EffectObject>()).value.id = id };
     object
@@ -706,16 +751,19 @@ static VTBL: EffectVtbl = EffectVtbl {
     escape,
 };
 
-/// Runs `f` on the effect's rig, inside [`guard`].
+/// Runs `f` on the effect's device and rig (locked in that order, as
+/// everywhere), inside [`guard`].
 ///
 /// # Safety
 /// `this` is one of this module's effect objects.
-unsafe fn with<R>(this: This, failed: R, f: impl FnOnce(&GameEffect, &mut Rig) -> R) -> R {
+unsafe fn with<R>(this: This, failed: R, f: impl FnOnce(&GameEffect, &View, &mut Rig) -> R) -> R {
     guard(failed, || {
         // SAFETY: the caller's contract.
         let effect = unsafe { &EffectObject::get(this).value };
-        let mut rig = lock(&effect.rig);
-        f(effect, &mut rig)
+        let view = lock(&effect.view);
+        let rig = view.rig();
+        let mut rig = lock(&rig);
+        f(effect, &view, &mut rig)
     })
 }
 
@@ -739,14 +787,15 @@ unsafe extern "system" fn release(this: This) -> u32 {
     guard(1, || {
         // SAFETY: a call on our object; read before the last release
         // frees it.
-        let (rig, id) = unsafe {
+        let (view, id) = unsafe {
             let value = &EffectObject::get(this).value;
-            (Arc::clone(&value.rig), value.id)
+            (Arc::clone(&value.view), value.id)
         };
         // SAFETY: a call on our object, which isn't used afterwards.
         let left = unsafe { EffectObject::release(this) };
         if left == 0 {
-            lock(&rig).effects.remove(id);
+            let rig = lock(&view).rig();
+            lock(&rig).effects().0.remove(id);
         }
         left
     })
@@ -759,7 +808,7 @@ unsafe extern "system" fn initialize(_: This, _: HINSTANCE, _: u32, _: *const GU
 unsafe extern "system" fn get_effect_guid(this: This, out: *mut GUID) -> HRESULT {
     // SAFETY: a call on our object; `out` is the game's GUID or null.
     unsafe {
-        with(this, hr::GENERIC, |effect, _| match out.as_mut() {
+        with(this, hr::GENERIC, |effect, _, _| match out.as_mut() {
             Some(out) => {
                 *out = guid_of(effect.kind);
                 hr::OK
@@ -772,11 +821,11 @@ unsafe extern "system" fn get_effect_guid(this: This, out: *mut GUID) -> HRESULT
 unsafe extern "system" fn get_parameters(this: This, p: *mut DIEFFECT, flags: u32) -> HRESULT {
     // SAFETY: a call on our object; `p` is the game's DIEFFECT.
     unsafe {
-        with(this, hr::GENERIC, |effect, rig| {
-            let Some(game) = rig.effects.game(effect.id) else {
+        with(this, hr::GENERIC, |effect, view, rig| {
+            let Some(game) = rig.effects().0.game(effect.id) else {
                 return hr::NOTFOUND;
             };
-            write(game, p, flags, |by_id, axis| rig.axis_value(by_id, axis))
+            write(game, p, flags, |by_id, axis| view.axis_value(by_id, axis))
         })
     }
 }
@@ -784,17 +833,15 @@ unsafe extern "system" fn get_parameters(this: This, p: *mut DIEFFECT, flags: u3
 unsafe extern "system" fn set_parameters(this: This, p: *const DIEFFECT, flags: u32) -> HRESULT {
     // SAFETY: a call on our object; `p` is the game's DIEFFECT.
     unsafe {
-        with(this, hr::GENERIC, |effect, rig| {
-            let Some(game) = rig.effects.game(effect.id) else {
+        with(this, hr::GENERIC, |effect, view, rig| {
+            let (effects, wheel, ffb) = rig.effects();
+            let Some(game) = effects.game(effect.id) else {
                 return hr::NOTFOUND;
             };
-            let game = match read(game, p, flags, |by_id, v| rig.axis_named(by_id, v)) {
-                Ok(game) => game,
-                Err(code) => return code,
-            };
-            let ffb = rig.ffb;
-            let Rig { effects, wheel, .. } = rig;
-            effects.set(effect.id, game, flags, wheel.as_ref(), &ffb)
+            match read(game, p, flags, |by_id, v| view.axis_named(by_id, v)) {
+                Ok(game) => effects.set(effect.id, game, flags, wheel, &ffb),
+                Err(code) => code,
+            }
         })
     }
 }
@@ -802,23 +849,28 @@ unsafe extern "system" fn set_parameters(this: This, p: *const DIEFFECT, flags: 
 unsafe extern "system" fn start(this: This, iterations: u32, flags: u32) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
-        with(this, hr::GENERIC, |effect, rig| {
-            rig.effects.start(effect.id, iterations, flags)
+        with(this, hr::GENERIC, |effect, _, rig| {
+            let (effects, wheel, ffb) = rig.effects();
+            effects.start(effect.id, iterations, flags, wheel, &ffb)
         })
     }
 }
 
 unsafe extern "system" fn stop(this: This) -> HRESULT {
     // SAFETY: a call on our object.
-    unsafe { with(this, hr::GENERIC, |effect, rig| rig.effects.stop(effect.id)) }
+    unsafe {
+        with(this, hr::GENERIC, |effect, _, rig| {
+            rig.effects().0.stop(effect.id)
+        })
+    }
 }
 
 unsafe extern "system" fn get_effect_status(this: This, out: *mut u32) -> HRESULT {
     // SAFETY: a call on our object; `out` is the game's or null.
     unsafe {
-        with(this, hr::GENERIC, |effect, rig| match out.as_mut() {
+        with(this, hr::GENERIC, |effect, _, rig| match out.as_mut() {
             Some(out) => {
-                *out = rig.effects.status(effect.id);
+                *out = rig.effects().0.status(effect.id);
                 hr::OK
             }
             None => hr::INVALIDPARAM,
@@ -829,10 +881,9 @@ unsafe extern "system" fn get_effect_status(this: This, out: *mut u32) -> HRESUL
 unsafe extern "system" fn download(this: This) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
-        with(this, hr::GENERIC, |effect, rig| {
-            let ffb = rig.ffb;
-            let Rig { effects, wheel, .. } = rig;
-            effects.download(effect.id, wheel.as_ref(), &ffb)
+        with(this, hr::GENERIC, |effect, _, rig| {
+            let (effects, wheel, ffb) = rig.effects();
+            effects.download(effect.id, wheel, &ffb)
         })
     }
 }
@@ -840,8 +891,8 @@ unsafe extern "system" fn download(this: This) -> HRESULT {
 unsafe extern "system" fn unload(this: This) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
-        with(this, hr::GENERIC, |effect, rig| {
-            rig.effects.unload(effect.id)
+        with(this, hr::GENERIC, |effect, _, rig| {
+            rig.effects().0.unload(effect.id)
         })
     }
 }

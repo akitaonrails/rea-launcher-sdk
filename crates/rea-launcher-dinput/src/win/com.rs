@@ -179,6 +179,18 @@ impl<V> Com<V> {
     }
 }
 
+impl<V> Clone for Com<V> {
+    /// Another reference to the same object.
+    fn clone(&self) -> Self {
+        // SAFETY: a live object; the new reference is the clone's.
+        unsafe { (self.unknown().add_ref)(self.raw()) };
+        Com {
+            ptr: self.ptr,
+            _vtbl: PhantomData,
+        }
+    }
+}
+
 impl<V> Drop for Com<V> {
     fn drop(&mut self) {
         // SAFETY: this reference was ours to release.

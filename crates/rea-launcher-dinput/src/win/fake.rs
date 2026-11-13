@@ -12,8 +12,8 @@ use rea_launcher::wheel::dinput::Axis;
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
     DIDATAFORMAT, DIDC_ATTACHED, DIDC_FORCEFEEDBACK, DIDEVCAPS, DIDEVICEINSTANCEA,
     DIDEVICEOBJECTDATA, DIDEVICEOBJECTINSTANCEA, DIEFFECT, DIEFFECTINFOA, DIEFFESCAPE,
-    DIEGES_PLAYING, DIEP_ALLPARAMS, DIGFFS_ACTUATORSON, DIGFFS_POWERON, DIGFFS_STOPPED,
-    DIJOYSTATE2, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DISCL_EXCLUSIVE,
+    DIEGES_PLAYING, DIEP_ALLPARAMS, DIEP_NORESTART, DIGFFS_ACTUATORSON, DIGFFS_POWERON,
+    DIGFFS_STOPPED, DIJOYSTATE2, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DISCL_EXCLUSIVE,
     LPDIENUMCREATEDEFFECTOBJECTSCALLBACK, LPDIENUMDEVICEOBJECTSCALLBACKA, LPDIENUMEFFECTSCALLBACKA,
 };
 use windows_sys::Win32::Foundation::{HANDLE, HINSTANCE, HWND};
@@ -26,7 +26,7 @@ use super::com::{
 use super::real::{Attached, PROP_AUTOCENTER, PROP_FFGAIN, PROP_RANGE};
 use super::{effect, guard, hr, lock};
 use crate::effect::Effect;
-use crate::fake::Fake;
+use crate::fake::{Fake, Quirks};
 use crate::format::{JOYSTATE2_SIZE, Object as Part};
 
 /// One fake device's state.
@@ -36,6 +36,8 @@ struct State {
     buttons: u32,
     pov: u32,
     acquired: bool,
+    /// The layer asked for exclusive access.
+    exclusive: bool,
     unplugged: bool,
     /// Counts unplugs: an effect started before the last one stopped.
     epoch: u32,
@@ -44,7 +46,16 @@ struct State {
 /// The fake devices and the calls that reached them.
 struct Fakes {
     devices: Vec<State>,
+    /// The wheel's (device 0's).
+    quirks: Quirks,
     events: Vec<String>,
+}
+
+impl Fakes {
+    /// Device `i`'s driver has `quirk`.
+    fn has(&self, i: usize, quirk: impl Fn(&Quirks) -> bool) -> bool {
+        i == 0 && quirk(&self.quirks)
+    }
 }
 
 static FAKES: Mutex<Option<Fakes>> = Mutex::new(None);
@@ -53,35 +64,40 @@ fn record(fakes: &mut Fakes, device: usize, text: String) {
     fakes.events.push(format!("{device}: {text}"));
 }
 
-/// Adds the fake devices; their `Attached` entries.
-pub(super) fn install(kind: Fake) -> Vec<Attached> {
-    let specs = kind.devices();
-    let attached = specs
+/// The fake devices attached now (made the first time; unplugged ones
+/// are not attached).
+pub(super) fn attached(kind: Fake) -> Vec<Attached> {
+    let mut fakes = lock(&FAKES);
+    let fakes = fakes.get_or_insert_with(|| Fakes {
+        devices: kind
+            .devices()
+            .into_iter()
+            .enumerate()
+            .map(|(i, spec)| State {
+                axes: spec.rest,
+                spec,
+                buttons: 0,
+                pov: u32::MAX,
+                acquired: false,
+                exclusive: false,
+                unplugged: i == 0 && kind.quirks.unplugged,
+                epoch: 0,
+            })
+            .collect(),
+        quirks: kind.quirks,
+        events: Vec::new(),
+    });
+    fakes
+        .devices
         .iter()
         .enumerate()
-        .map(|(i, spec)| Attached {
-            device: spec.device.clone(),
+        .filter(|(_, d)| !d.unplugged)
+        .map(|(i, d)| Attached {
+            device: d.spec.device.clone(),
             instance: GUID::from_u128(0x7265612d_6661_6b65_0000_000000000001 + i as u128),
             fake: Some(i),
         })
-        .collect();
-    let devices = specs
-        .into_iter()
-        .map(|spec| State {
-            axes: spec.rest,
-            spec,
-            buttons: 0,
-            pov: u32::MAX,
-            acquired: false,
-            unplugged: false,
-            epoch: 0,
-        })
-        .collect();
-    *lock(&FAKES) = Some(Fakes {
-        devices,
-        events: Vec::new(),
-    });
-    attached
+        .collect()
 }
 
 /// A new object for fake device `index`.
@@ -273,12 +289,20 @@ unsafe extern "system" fn set_property(
     // SAFETY: a call on our object; the layer's property structure.
     unsafe {
         with(index(this), hr::GENERIC, |fakes, i| {
+            let device_wide = matches!(id as usize, PROP_AUTOCENTER | PROP_FFGAIN);
+            if device_wide && fakes.devices[i].acquired && fakes.has(i, |q| q.locked_props) {
+                return hr::ACQUIRED;
+            }
             let text = match id as usize {
                 PROP_RANGE => {
                     let range = &*header.cast::<DIPROPRANGE>();
                     format!("range {} {}", range.lMin, range.lMax)
                 }
                 PROP_AUTOCENTER => format!("autocenter {}", (*header.cast::<DIPROPDWORD>()).dwData),
+                PROP_FFGAIN if fakes.has(i, |q| q.no_gain) => {
+                    record(fakes, i, "refused gain".into());
+                    return hr::UNSUPPORTED;
+                }
                 PROP_FFGAIN => format!("gain {}", (*header.cast::<DIPROPDWORD>()).dwData),
                 _ => return hr::UNSUPPORTED,
             };
@@ -291,9 +315,14 @@ unsafe extern "system" fn set_property(
 unsafe extern "system" fn acquire(this: This) -> HRESULT {
     // SAFETY: a call on our object.
     with(unsafe { index(this) }, hr::GENERIC, |fakes, i| {
+        const OTHER_APP_HAS_PRIORITY: HRESULT = 0x8007_0005_u32 as i32;
+        let busy = fakes.has(i, |q| q.busy) && fakes.devices[i].exclusive;
         let d = &mut fakes.devices[i];
         if d.unplugged {
             return hr::INPUTLOST;
+        }
+        if busy {
+            return OTHER_APP_HAS_PRIORITY;
         }
         d.acquired = true;
         record(fakes, i, "acquire".into());
@@ -349,7 +378,7 @@ unsafe extern "system" fn set_data_format(this: This, format: *const DIDATAFORMA
     unsafe {
         with(index(this), hr::GENERIC, |fakes, i| {
             let df = &*format;
-            if df.dwDataSize != JOYSTATE2_SIZE {
+            if df.dwDataSize != JOYSTATE2_SIZE || fakes.has(i, |q| q.broken) {
                 return hr::INVALIDPARAM;
             }
             record(fakes, i, format!("format {} objects", df.dwNumObjs));
@@ -362,6 +391,7 @@ unsafe extern "system" fn set_cooperative_level(this: This, _: HWND, flags: u32)
     // SAFETY: a call on our object.
     with(unsafe { index(this) }, hr::GENERIC, |fakes, i| {
         let exclusive = flags & DISCL_EXCLUSIVE != 0;
+        fakes.devices[i].exclusive = exclusive;
         record(
             fakes,
             i,
@@ -540,13 +570,19 @@ unsafe extern "system" fn effect_set_parameters(
         let e = fake_effect(this);
         let mut current = lock(&e.effect);
         match effect::read(&current, params, flags, joystate2_axis) {
-            Ok(made) => {
+            Ok(made) => with(e.device, hr::GENERIC, |fakes, i| {
+                if flags & DIEP_NORESTART != 0 && fakes.has(i, |q| q.no_restart) {
+                    record(
+                        fakes,
+                        i,
+                        format!("refused set {flags:#x} {}", made.kind.name()),
+                    );
+                    return hr::GENERIC;
+                }
+                record(fakes, i, format!("set {flags:#x} {}", made.describe()));
                 *current = made;
-                with(e.device, hr::GENERIC, |fakes, i| {
-                    record(fakes, i, format!("set {flags:#x} {}", current.describe()));
-                    hr::OK
-                })
-            }
+                hr::OK
+            }),
             Err(code) => code,
         }
     }

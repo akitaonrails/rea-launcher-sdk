@@ -4,39 +4,37 @@
 //! had.
 
 use std::ffi::c_void;
-use std::ptr::null_mut;
+use std::sync::{Arc, Mutex};
 
-use rea_launcher::wheel::rig::Device;
+use rea_launcher::wheel::rig;
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
-    DI8DEVCLASS_ALL, DI8DEVCLASS_GAMECTRL, DI8DEVTYPE_DRIVING, DIDEVICEINSTANCEA, DIENUM_CONTINUE,
-    DIENUM_STOP, LPDIENUMDEVICESCALLBACKA,
+    DI8DEVCLASS_ALL, DI8DEVCLASS_GAMECTRL, DI8DEVTYPE_DRIVING, DIDEVICEINSTANCEA,
+    DIEDFL_FORCEFEEDBACK, DIENUM_CONTINUE, DIENUM_STOP, LPDIENUMDEVICESCALLBACKA,
 };
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::core::{BOOL, GUID, HRESULT};
 
 use super::com::{
-    Com, DeviceVtbl, DirectInputVtbl, IID_DIRECTINPUT8A, IID_UNKNOWN, Object, This, UnknownVtbl,
-    same,
+    Com, DirectInputVtbl, IID_DIRECTINPUT8A, IID_UNKNOWN, Object, This, UnknownVtbl, same,
 };
-use super::device::{self, INSTANCE, Rig};
-use super::real::{self, Attached, Real};
-use super::{config, fake, guard, guid_text, hr, log};
-use crate::devices::{self, Merge, Plan};
+use super::device::{self, INSTANCE};
+use super::rig::{Rig, Shared, Source};
+use super::{config, guard, guid_text, hr, lock, log};
 use rea_launcher::wheel::dinput::Mode;
 
-/// The wrapper's data: the game's DirectInput and what was found when it
-/// was made.
+/// The wrapper's data: the game's DirectInput and the rig the virtual
+/// wheel is made of (one for every virtual device it makes).
 pub(super) struct Wrapper {
     inner: Com<DirectInputVtbl>,
-    attached: Vec<Attached>,
-    plan: Plan,
+    rig: Shared,
 }
 
 type Wrapped = Object<DirectInputVtbl, Wrapper>;
 
 /// The wrapper for `inner`, the `IDirectInput8A` the game asked for;
-/// `None` (the game keeps `inner`) when the layer is off or (`auto`)
-/// there is no wheel. The wrapper takes a reference of its own.
+/// `None` (the game keeps `inner`) when the layer is off, (`auto`) there
+/// is no wheel, or the wheel can't be opened. The wrapper takes a
+/// reference of its own.
 ///
 /// # Safety
 /// `inner` is a live `IDirectInput8A`.
@@ -48,13 +46,9 @@ pub(super) unsafe fn wrap(inner: This) -> Option<This> {
     }
     // SAFETY: the caller's contract.
     let inner = unsafe { Com::<DirectInputVtbl>::add_ref(inner) }?;
-    // SAFETY: a live DirectInput.
-    let mut attached = unsafe { real::attached(&inner) };
-    if let Some(kind) = config.fake {
-        attached.extend(fake::install(kind));
-    }
-    let devices: Vec<Device> = attached.iter().map(|a| a.device.clone()).collect();
-    for d in &devices {
+    let source = Source::new(inner.clone());
+    let attached = source.attached();
+    for d in attached.iter().map(|a| &a.device) {
         log!(
             "found {} ({:04x}:{:04x}) {} {:?}, {} axes, {} buttons{}",
             d.id.name,
@@ -67,90 +61,24 @@ pub(super) unsafe fn wrap(inner: This) -> Option<This> {
             if d.ffb { ", force feedback" } else { "" }
         );
     }
-    let plan = devices::plan(
-        &devices,
-        config.mode,
-        &config.setup,
-        config.profile.as_ref(),
-    );
-    if !plan.show {
-        log!("auto and no wheel: the game gets its DirectInput untouched");
+    let Some(opened) = source.open_plan(&attached, config.mode) else {
+        log!("no virtual wheel: the game gets its DirectInput untouched");
         return None;
-    }
+    };
     log!(
         "virtual wheel from {} and {}; hidden: {:?}",
-        plan.wheel
+        opened
+            .wheel
             .as_ref()
-            .map_or("no wheel", |d| d.id.name.as_str()),
-        plan.pedals
+            .map_or("no wheel yet", |w| w.device.id.name.as_str()),
+        opened
+            .pedals
             .as_ref()
-            .map_or("the wheel's pedals", |d| d.id.name.as_str()),
-        plan.hidden
+            .map_or("the wheel's pedals", |p| p.device.id.name.as_str()),
+        opened.hidden
     );
-    Some(Wrapped::create(
-        &VTBL,
-        Wrapper {
-            inner,
-            attached,
-            plan,
-        },
-    ))
-}
-
-impl Wrapper {
-    /// Opens the attached device `wanted` for the virtual wheel.
-    fn open(&self, wanted: Option<&Device>) -> Option<Real> {
-        let attached = self
-            .attached
-            .iter()
-            .find(|a| Some(&a.device.id.guid) == wanted.map(|d| &d.id.guid))?;
-        let com = match attached.fake {
-            Some(index) => fake::open(index)?,
-            None => {
-                let mut ptr = null_mut();
-                // SAFETY: a live DirectInput; the out pointer takes one
-                // reference, which `Com` releases.
-                unsafe {
-                    let code = (self.inner.vtbl().create_device)(
-                        self.inner.raw(),
-                        &attached.instance,
-                        &mut ptr,
-                        null_mut(),
-                    );
-                    if !hr::ok(code) {
-                        log!("{}: not opened ({code:#x})", attached.device.id.name);
-                        return None;
-                    }
-                    Com::<DeviceVtbl>::from_raw(ptr)?
-                }
-            }
-        };
-        Real::open(com, attached.device.clone())
-    }
-
-    /// A new virtual wheel on the planned devices.
-    fn virtual_wheel(&self) -> This {
-        let config = config();
-        let wheel = self.open(self.plan.wheel.as_ref());
-        let pedals = self.open(self.plan.pedals.as_ref());
-        let merge = wheel.as_ref().map(|w| {
-            Merge::new(
-                config.setup.clone(),
-                config.profile.clone(),
-                w.device.clone(),
-                pedals.as_ref().map(|p| p.device.clone()),
-            )
-        });
-        device::create(Rig::new(wheel, pedals, merge, config.setup.ffb))
-    }
-
-    fn hides(&self, guid: &GUID) -> bool {
-        let text = guid_text(guid);
-        self.plan
-            .hidden
-            .iter()
-            .any(|h| h.eq_ignore_ascii_case(&text))
-    }
+    let rig = Arc::new(Mutex::new(Rig::new(source, opened)));
+    Some(Wrapped::create(&VTBL, Wrapper { inner, rig }))
 }
 
 fn is_virtual(guid: &GUID) -> bool {
@@ -237,17 +165,17 @@ unsafe extern "system" fn create_device(
                 return hr::INVALIDPARAM;
             }
             log!("CreateDevice: the virtual wheel");
-            *out = w.virtual_wheel();
+            *out = device::create(Arc::clone(&w.rig));
             hr::OK
         }
     })
 }
 
 /// The game's callback and what to leave out, for [`each_device`].
-struct Listing<'a> {
+struct Listing {
     callback: unsafe extern "system" fn(*mut DIDEVICEINSTANCEA, *mut c_void) -> BOOL,
     context: *mut c_void,
-    wrapper: &'a Wrapper,
+    hidden: Vec<String>,
 }
 
 unsafe extern "system" fn each_device(
@@ -259,10 +187,11 @@ unsafe extern "system" fn each_device(
         // the inner call; `instance` is DirectInput's.
         unsafe {
             let listing = &*listing.cast::<Listing>();
-            if instance
-                .as_ref()
-                .is_some_and(|i| listing.wrapper.hides(&i.guidInstance))
-            {
+            let hidden = |i: &DIDEVICEINSTANCEA| {
+                let guid = guid_text(&i.guidInstance);
+                listing.hidden.iter().any(|h| rig::same_guid(h, &guid))
+            };
+            if instance.as_ref().is_some_and(hidden) {
                 return DIENUM_CONTINUE as BOOL;
             }
             (listing.callback)(instance, listing.context)
@@ -283,10 +212,15 @@ unsafe extern "system" fn enum_devices(
     guard(hr::GENERIC, || {
         // SAFETY: a call on our object.
         let w = unsafe { wrapper(this) };
-        if matches!(
+        let (ffb, hidden) = {
+            let rig = lock(&w.rig);
+            (rig.has_ffb(), rig.hidden().to_vec())
+        };
+        let listed = matches!(
             kind,
             DI8DEVCLASS_ALL | DI8DEVCLASS_GAMECTRL | DI8DEVTYPE_DRIVING
-        ) {
+        ) && (ffb || flags & DIEDFL_FORCEFEEDBACK == 0);
+        if listed {
             let mut info = device::instance();
             // SAFETY: the game's callback with a structure that lives
             // across the call.
@@ -297,7 +231,7 @@ unsafe extern "system" fn enum_devices(
         let mut listing = Listing {
             callback,
             context,
-            wrapper: w,
+            hidden,
         };
         // SAFETY: the game's DirectInput with our filter in front of its
         // callback; `listing` outlives the call.

@@ -224,8 +224,12 @@ pub(super) enum Read {
 pub(super) struct Real {
     com: Com<DeviceVtbl>,
     pub device: Device,
+    window: usize,
     exclusive: bool,
     lost: bool,
+    /// Acquired again outside [`Real::read`] (a property that needed it):
+    /// the next reading says [`Read::Back`].
+    regained: bool,
     retry_at: Instant,
 }
 
@@ -256,8 +260,10 @@ impl Real {
         Some(Real {
             com,
             device,
+            window: 0,
             exclusive: false,
             lost: true,
+            regained: false,
             retry_at: Instant::now(),
         })
     }
@@ -265,24 +271,12 @@ impl Real {
     /// Exclusive and in the background on `hwnd` (the game's window) for
     /// force feedback, else shared in the background.
     pub fn cooperate(&mut self, hwnd: HWND) {
-        let v = self.com.vtbl();
-        // SAFETY: a live device; DirectInput checks the window.
-        unsafe {
-            (v.unacquire)(self.com.raw());
-            self.exclusive = self.device.ffb
-                && !hwnd.is_null()
-                && hr::ok((v.set_cooperative_level)(
-                    self.com.raw(),
-                    hwnd,
-                    DISCL_EXCLUSIVE | DISCL_BACKGROUND,
-                ));
-            if !self.exclusive {
-                (v.set_cooperative_level)(
-                    self.com.raw(),
-                    hwnd,
-                    DISCL_NONEXCLUSIVE | DISCL_BACKGROUND,
-                );
-            }
+        // SAFETY: a live device.
+        unsafe { (self.com.vtbl().unacquire)(self.com.raw()) };
+        self.window = hwnd as usize;
+        self.exclusive = self.device.ffb && !hwnd.is_null() && self.set_level(true);
+        if !self.exclusive {
+            self.set_level(false);
         }
         self.lost = true;
         log!(
@@ -296,9 +290,40 @@ impl Real {
         );
     }
 
+    /// The cooperative level on the game's window, in the background.
+    fn set_level(&self, exclusive: bool) -> bool {
+        let flags = (if exclusive {
+            DISCL_EXCLUSIVE
+        } else {
+            DISCL_NONEXCLUSIVE
+        }) | DISCL_BACKGROUND;
+        // SAFETY: a live device; DirectInput checks the window.
+        hr::ok(unsafe {
+            (self.com.vtbl().set_cooperative_level)(self.com.raw(), self.window as HWND, flags)
+        })
+    }
+
+    /// Acquires the device. When another program holds the wheel
+    /// exclusively it is acquired shared instead: it steers, without force
+    /// feedback.
     pub fn acquire(&mut self) -> bool {
-        // SAFETY: a live device.
-        let code = unsafe { (self.com.vtbl().acquire)(self.com.raw()) };
+        let try_acquire = |real: &Real| {
+            // SAFETY: a live device.
+            unsafe { (real.com.vtbl().acquire)(real.com.raw()) }
+        };
+        let mut code = try_acquire(self);
+        if !hr::ok(code) && self.exclusive && self.set_level(false) {
+            code = try_acquire(self);
+            if hr::ok(code) {
+                self.exclusive = false;
+                log!(
+                    "{}: taken by another program: shared, no force feedback",
+                    self.device.id.name
+                );
+            } else {
+                self.set_level(true);
+            }
+        }
         self.lost = !hr::ok(code);
         self.retry_at = Instant::now() + RETRY;
         if self.lost {
@@ -316,7 +341,7 @@ impl Real {
     /// Polls and reads the device; a lost one is acquired again at most
     /// every [`RETRY`].
     pub fn read(&mut self, now: Instant) -> Read {
-        let mut back = false;
+        let mut back = std::mem::take(&mut self.regained);
         if self.lost {
             if now < self.retry_at || !self.acquire() {
                 return Read::Lost;
@@ -368,9 +393,15 @@ impl Real {
         if code == hr::ACQUIRED {
             self.unacquire();
             code = set(self);
-            self.acquire();
+            self.regained = self.acquire();
         }
         code
+    }
+
+    /// Its settings and effects are back on it: a re-acquire for a
+    /// property since then is no news.
+    pub fn settled(&mut self) {
+        self.regained = false;
     }
 
     pub fn exclusive(&self) -> bool {
