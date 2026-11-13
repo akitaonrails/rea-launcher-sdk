@@ -14,6 +14,8 @@
 //! - [`unpack`]: the progress window while a game's installer is unpacked
 //!   (`rea_launcher::installer`).
 //! - [`spec`]: window rows from the core option table, with a parity check.
+//! - [`wheel`]: the Wheel tab of a DirectInput game (`rea_wheel.ini`):
+//!   devices, live check, steering, pedal calibration, force feedback.
 //! - `testing` (feature `testing`): headless GUI tests through AccessKit.
 //!
 //! `eframe` and `egui` are re-exported, so a launcher needs no matching
@@ -33,5 +35,6 @@ pub mod spec;
 pub mod testing;
 pub mod theme;
 pub mod unpack;
+pub mod wheel;
 pub mod widgets;
 pub mod window;
