@@ -189,7 +189,6 @@ impl Drop for Rescan {
 /// The real devices, the force feedback state the game set on the
 /// virtual wheel, and its effects.
 pub(super) struct Rig {
-    source: Source,
     /// Looking for a wheel (`on` without one).
     rescan: Option<Rescan>,
     wheel: Option<Real>,
@@ -210,10 +209,12 @@ pub(super) struct Rig {
 }
 
 impl Rig {
+    /// The rig of `opened`; without a wheel it keeps looking for one
+    /// through `source`.
     pub fn new(source: Source, opened: Opened) -> Rig {
+        let rescan = opened.wheel.is_none().then(|| Rescan::start(source.inner));
         let mut rig = Rig {
-            source,
-            rescan: None,
+            rescan,
             wheel: None,
             pedals: None,
             merge: None,
@@ -228,9 +229,6 @@ impl Rig {
             keep_alive_at: Instant::now(),
         };
         rig.take(opened);
-        if rig.wheel.is_none() {
-            rig.rescan = Some(Rescan::start(rig.source.inner.clone()));
-        }
         rig
     }
 
