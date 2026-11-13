@@ -27,7 +27,7 @@ made that copy the reference.
 | `pe` | PE32/PE32+ headers and sections, VA ↔ file offset |
 | `display` | Monitor choice, landscape sizes, Steam Deck, the largest 16:9 size |
 | `pad` | XInput state parsing and settings-window navigation by edges; `PadNav::with_repeat` for list menus |
-| `wheel` | Wheels, pedals and pads as racing controls: known wheels, `classify`, spare interfaces, `pick_wheel`, steering lock, curves, pedals, `WheelProfile<B>` (`wheel.ini`), the setup `wizard`, `pad_map`; `dinput` (the in-game DirectInput layer's `rea_wheel.ini`) and `rig` (the devices behind its virtual wheel: `pick`, `profile`, `virtual_controls`, `shows_virtual_wheel`, `calibrate`, `save`, `WheelDevices`) (docs/playbooks/wheels-and-ffb.md) |
+| `wheel` | Wheels, pedals and pads as racing controls: known wheels, `classify`, spare interfaces, `pick_wheel`, steering lock, curves, pedals, `WheelProfile<B>` (`wheel.ini`), the setup `wizard`, `pad_map`; `dinput` (the in-game DirectInput layer's `rea_wheel.ini`, `HEADER`; `dinput::options`: the wheel settings as launcher options, `OPTIONS`, `Setup::apply`/`value`/`to_launcher_cfg`) and `rig` (the devices behind its virtual wheel: `pick`, `profile`, `virtual_controls`, `shows_virtual_wheel`, `calibrate`, `save`, `WheelDevices`) (docs/playbooks/wheels-and-ffb.md) |
 | `ffb` | Synthetic force feedback from a normalised `CarState` (`SyntheticFfb`, `Tuning::ARCADE`), the menu's `test_pattern` |
 | `log` | `launcher.log` with a size cap; opt-in `per_run` (previous run kept as `.old`) and `timestamps` |
 | `args` | Windows command-line quoting |

@@ -19,6 +19,15 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   `calibrate` (a pedal-wizard run into the profile), `save` (the
   `rea_wheel.ini` text), `guid_text` (instance GUIDs as the file keeps
   them), the `WheelDevices` trait and a `Fixed` stand-in for tests.
+- `rea_launcher::wheel::dinput::options`: every `Setup` field as a
+  launcher option (`OPTIONS`: `wheel`, `wheel_device`, `wheel_pedals`,
+  `wheel_lock`, `wheel_deadzone`, `wheel_curve`, `wheel_invert_throttle`,
+  `wheel_invert_brake`, `wheel_ffb`, `wheel_ffb_invert`, `wheel_log`),
+  `Setup::apply(key, Value) -> bool`, `Setup::value(key)`,
+  `Setup::to_launcher_cfg(text)`; the launcher's own `Setup` is the
+  default. `dinput::HEADER`, the comment a new `rea_wheel.ini` starts with.
+- `rea_launcher_win32::dinput::list()`: a one-shot listing on the calling
+  thread, for the launch decision.
 - `rea_launcher_win32::dinput::DirectInput`: `WheelDevices` through
   DirectInput 8 on a worker thread (lists, live readings in the
   `REAL_AXES` order at `REAL_RANGE`, a 2-second hot-plug rescan, the
@@ -26,8 +35,9 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 - `rea_launcher_ui::wheel::WheelTab`: the Wheel tab of a DirectInput
   game's settings window (wheel support, wheel and pedal pickers, live
   check, steering lock, deadzone, curve, pedal inversion and calibration,
-  force-feedback strength, direction and test); `save(existing)` returns
-  the new `rea_wheel.ini`.
+  force-feedback strength, direction and test). `new(setup, calibration)`;
+  the launcher saves `setup` with its options and `calibration_text` on
+  its own; every control is a `dinput::options` row for the parity test.
 
 ## [0.8.2] - 2026-11-12
 
