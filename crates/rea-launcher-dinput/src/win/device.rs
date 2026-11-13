@@ -1066,7 +1066,7 @@ unsafe extern "system" fn enum_created_effect_objects(
     // SAFETY: a call on our object.
     let objects = unsafe {
         with(this, Vec::new(), |view| {
-            lock(&view.rig).effects().0.objects()
+            lock(&view.rig).effects_mut().objects()
         })
     };
     guard(hr::GENERIC, || {

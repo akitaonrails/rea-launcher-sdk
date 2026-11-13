@@ -726,7 +726,7 @@ pub(super) fn create(view: &Arc<Mutex<View>>, rig: &mut Rig, game: Effect) -> Th
             kind,
         },
     );
-    let (effects, wheel, ffb) = rig.effects();
+    let (effects, wheel, ffb) = rig.effects_with_wheel();
     let id = effects.add(object, game, wheel, &ffb);
     // SAFETY: the object was just made and nobody else has it yet.
     unsafe { (*object.cast::<EffectObject>()).value.id = id };
@@ -795,7 +795,7 @@ unsafe extern "system" fn release(this: This) -> u32 {
         let left = unsafe { EffectObject::release(this) };
         if left == 0 {
             let rig = lock(&view).rig();
-            lock(&rig).effects().0.remove(id);
+            lock(&rig).effects_mut().remove(id);
         }
         left
     })
@@ -822,7 +822,7 @@ unsafe extern "system" fn get_parameters(this: This, p: *mut DIEFFECT, flags: u3
     // SAFETY: a call on our object; `p` is the game's DIEFFECT.
     unsafe {
         with(this, hr::GENERIC, |effect, view, rig| {
-            let Some(game) = rig.effects().0.game(effect.id) else {
+            let Some(game) = rig.effects_mut().game(effect.id) else {
                 return hr::NOTFOUND;
             };
             write(game, p, flags, |by_id, axis| view.axis_value(by_id, axis))
@@ -834,7 +834,7 @@ unsafe extern "system" fn set_parameters(this: This, p: *const DIEFFECT, flags: 
     // SAFETY: a call on our object; `p` is the game's DIEFFECT.
     unsafe {
         with(this, hr::GENERIC, |effect, view, rig| {
-            let (effects, wheel, ffb) = rig.effects();
+            let (effects, wheel, ffb) = rig.effects_with_wheel();
             let Some(game) = effects.game(effect.id) else {
                 return hr::NOTFOUND;
             };
@@ -850,7 +850,7 @@ unsafe extern "system" fn start(this: This, iterations: u32, flags: u32) -> HRES
     // SAFETY: a call on our object.
     unsafe {
         with(this, hr::GENERIC, |effect, _, rig| {
-            let (effects, wheel, ffb) = rig.effects();
+            let (effects, wheel, ffb) = rig.effects_with_wheel();
             effects.start(effect.id, iterations, flags, wheel, &ffb)
         })
     }
@@ -860,7 +860,7 @@ unsafe extern "system" fn stop(this: This) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
         with(this, hr::GENERIC, |effect, _, rig| {
-            rig.effects().0.stop(effect.id)
+            rig.effects_mut().stop(effect.id)
         })
     }
 }
@@ -870,7 +870,7 @@ unsafe extern "system" fn get_effect_status(this: This, out: *mut u32) -> HRESUL
     unsafe {
         with(this, hr::GENERIC, |effect, _, rig| match out.as_mut() {
             Some(out) => {
-                *out = rig.effects().0.status(effect.id);
+                *out = rig.effects_mut().status(effect.id);
                 hr::OK
             }
             None => hr::INVALIDPARAM,
@@ -882,7 +882,7 @@ unsafe extern "system" fn download(this: This) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
         with(this, hr::GENERIC, |effect, _, rig| {
-            let (effects, wheel, ffb) = rig.effects();
+            let (effects, wheel, ffb) = rig.effects_with_wheel();
             effects.download(effect.id, wheel, &ffb)
         })
     }
@@ -892,7 +892,7 @@ unsafe extern "system" fn unload(this: This) -> HRESULT {
     // SAFETY: a call on our object.
     unsafe {
         with(this, hr::GENERIC, |effect, _, rig| {
-            rig.effects().0.unload(effect.id)
+            rig.effects_mut().unload(effect.id)
         })
     }
 }

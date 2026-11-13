@@ -209,8 +209,12 @@ impl Rig {
         }
     }
 
+    pub fn effects_mut(&mut self) -> &mut Effects {
+        &mut self.effects
+    }
+
     /// The effects, with the wheel and settings they are made for.
-    pub fn effects(&mut self) -> (&mut Effects, Option<&Real>, FfbSettings) {
+    pub fn effects_with_wheel(&mut self) -> (&mut Effects, Option<&Real>, FfbSettings) {
         let ffb = self.effect_ffb();
         (&mut self.effects, self.wheel.as_ref(), ffb)
     }
@@ -321,7 +325,7 @@ impl Rig {
         };
         wheel.set_dword(PROP_AUTOCENTER, self.autocenter);
         self.push_gain();
-        let (effects, wheel, ffb) = self.effects();
+        let (effects, wheel, ffb) = self.effects_with_wheel();
         effects.revive(wheel, &ffb);
         if let Some(wheel) = self.wheel.as_mut() {
             wheel.settled();
@@ -347,8 +351,8 @@ impl Rig {
         };
         if carries != self.gain_carries_strength {
             self.gain_carries_strength = carries;
-            let (effects, _, ffb) = self.effects();
-            effects.refresh(&ffb);
+            let ffb = self.effect_ffb();
+            self.effects.refresh(&ffb);
         }
     }
 
