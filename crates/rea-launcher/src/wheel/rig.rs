@@ -27,7 +27,7 @@
 //! assert_eq!((controls.steer, controls.accel), (0.0, 0.0));
 //! ```
 
-use super::dinput::{NoButtons, Profile, Setup};
+use super::dinput::{Mode, NoButtons, Profile, Setup};
 use super::wizard::Captures;
 use super::{
     Controls, DeviceId, DeviceState, Kind, PedalAxis, Source, WheelCandidate, find_aux, pick_wheel,
@@ -160,6 +160,19 @@ pub fn virtual_controls(
     controls
 }
 
+/// Whether the in-game layer shows the game the virtual wheel, for these
+/// attached devices: never when `Off`, always when `On`, and when `Auto`
+/// only with a wheel to drive it ([`pick`]: a wheel, or the device picked
+/// by hand). The launcher asks before it starts the game (to seed the
+/// game's controls only then); the layer asks as the game starts.
+pub fn shows_virtual_wheel(setup: &Setup, devices: &[Device]) -> bool {
+    match setup.mode {
+        Mode::Off => false,
+        Mode::On => true,
+        Mode::Auto => pick(devices, setup, None).is_some(),
+    }
+}
+
 /// Takes what the pedal wizard captured into `profile`, `order` being the
 /// devices it watched (the wheel first, as [`super::wizard`] wants), and
 /// points `setup.pedals` at the pedals' device (empty: on the wheel), so
@@ -248,7 +261,6 @@ impl WheelDevices for Fixed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wheel::dinput::Mode;
     use crate::wheel::wizard::{Status, Step, Wizard};
     use crate::wheel::{SteeringLock, apply_lock, known};
 
@@ -344,6 +356,22 @@ mod tests {
             1,
             "unplugged: automatic"
         );
+    }
+
+    #[test]
+    fn the_virtual_wheel_shows_by_mode_and_by_what_is_attached() {
+        let devices = rig();
+        let pad_only = &devices[..1];
+        let mut setup = Setup::default();
+        assert!(shows_virtual_wheel(&setup, &devices));
+        assert!(!shows_virtual_wheel(&setup, pad_only));
+        assert!(!shows_virtual_wheel(&setup, &[]));
+        setup.wheel.device = "{pad}".into();
+        assert!(shows_virtual_wheel(&setup, pad_only), "picked by hand");
+        setup.mode = Mode::On;
+        assert!(shows_virtual_wheel(&setup, &[]));
+        setup.mode = Mode::Off;
+        assert!(!shows_virtual_wheel(&setup, &devices));
     }
 
     #[test]
