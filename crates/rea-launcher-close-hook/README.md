@@ -39,35 +39,24 @@ leaves the game alone; check it in the launcher with the same parser
 
 ## Ship and enable it
 
-**Build the in-game DLLs** (`rea_dinput.dll`, `rea_close_hook.dll`) from
-the launcher's workspace:
+**Build the DLL** from the launcher's workspace:
 
-1. Depend on the DLL crates with `default-features = false`. Their `dll`
-   feature holds each DLL's `DllMain` and exports; an exe that links both
-   crates with it on fails (`duplicate symbol: _DllMain@12`).
-2. Give the launcher a feature that turns it on for the DLLs it ships:
-   `layer-dlls = ["rea-launcher-close-hook/dll", "rea-launcher-dinput/dll"]`
-   (Cargo refuses `--features rea-launcher-dinput/dll` for a package
-   outside the workspace).
-3. Add a profile for them to the workspace's `Cargo.toml`:
-
-   ```toml
-   [profile.dll]
-   inherits = "release"
-   panic = "unwind"
-   ```
-
-   A launcher's release profile has `panic = "abort"`: in a DLL inside
-   the game that turns any panic into the game ending. Built to unwind,
-   the DLL catches its own panics and answers that one call with an
-   error. `launcher-check` (rule `dll-unwind`) checks the profile and the
-   build.
-4. Build them with it, for the game's architecture:
-   `cargo build --profile dll --lib -p <launcher> -p rea-launcher-close-hook -p rea-launcher-dinput --features layer-dlls --target i686-pc-windows-gnu`
+1. Depend on this crate with `default-features = false`. Its `dll`
+   feature holds the DLL's `DllMain` and exports; an exe that links it
+   and the wheel layer (`rea-launcher-dinput`) with it on fails
+   (`duplicate symbol: _DllMain@12`).
+2. Give the launcher a feature that turns it on (Cargo refuses
+   `--features rea-launcher-close-hook/dll` for a package outside the
+   workspace): `layer-dlls = ["rea-launcher-close-hook/dll"]`, plus
+   `"rea-launcher-dinput/dll"` when it ships the wheel layer too.
+3. Build it for the game's architecture:
+   `cargo build --release --lib -p <launcher> -p rea-launcher-close-hook --features layer-dlls --target i686-pc-windows-gnu`
    (`--lib` keeps the launcher's exe out of this build; in the reusable
-   workflow, the `extra-build` input). The DLLs land in
-   `target/i686-pc-windows-gnu/dll/`; ship them next to the launcher and
-   add them to the package allowlist.
+   workflow, the `extra-build` input). A launcher that ships the wheel
+   layer builds both with that crate's `--profile dll` instead (its
+   README); the hook has no panic guard of its own, so the profile
+   changes nothing for it. Ship `rea_close_hook.dll` next to the launcher
+   and add it to the package allowlist.
 
 Then enable it:
 

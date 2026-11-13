@@ -283,6 +283,9 @@ fresh; dll_dep; printf '\n[profile.dll]\ninherits = "release"\npanic = "abort"\n
 expect "a [profile.dll] that still aborts" warn dll-unwind
 fresh; dll_dep; dll_profile; dll_build "$DLL_BUILD"
 run "$L"; printf '%s\n' "$out" | grep -q 'dll-unwind' && bad "unwinding DLLs: $out" || ok "in-game DLLs built with an unwinding [profile.dll] pass"
+fresh; printf 'rea-launcher-close-hook = { git = "https://github.com/akitaonrails/rea-launcher-sdk", tag = "v0.4.0", default-features = false }\n' >> "$L/Cargo.toml"
+dll_build 'cargo build --release --lib -p fx-launcher -p rea-launcher-close-hook --features layer-dlls'
+run "$L"; printf '%s\n' "$out" | grep -q 'dll-unwind' && bad "close hook only: $out" || ok "the close hook alone needs no unwinding profile (it has no panic guard)"
 
 # --- innoextract: pinned and credited --------------------------------------------------------------
 inno_code() { # a launcher that runs the bundled innoextract

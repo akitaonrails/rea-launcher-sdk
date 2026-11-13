@@ -183,9 +183,10 @@ the launcher's workspace:
 
    A launcher's release profile has `panic = "abort"`: in a DLL inside
    the game that turns any panic into the game ending. Built to unwind,
-   the DLL catches its own panics and answers that one call with an
-   error. `launcher-check` (rule `dll-unwind`) checks the profile and the
-   build.
+   the wheel layer catches its own panics and answers that one call with
+   an error. `launcher-check` (rule `dll-unwind`) checks the profile and
+   the build. (The close hook has no panic guard: the profile changes
+   nothing for it, but building both in one command is fine.)
 4. Build them with it, for the game's architecture:
    `cargo build --profile dll --lib -p <launcher> -p rea-launcher-close-hook -p rea-launcher-dinput --features layer-dlls --target i686-pc-windows-gnu`
    (`--lib` keeps the launcher's exe out of this build; in the reusable
