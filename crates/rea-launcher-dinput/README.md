@@ -43,17 +43,23 @@ tab uses, so the tab's live check is what the game gets. Real devices
 are read as the launcher reads them: `c_dfDIJoystick2`, axes in
 `dinput::REAL_AXES` order at `REAL_RANGE`.
 
-The layer acquires the real devices itself: the wheel exclusive and in
-the background on the game's window (force feedback needs exclusive
-access), else shared; pedals shared. A device that is lost (unplugged,
-taken by another program) reads neutral and is acquired again every
-500 ms.
+The wheel and pedals are opened once, when the game creates
+DirectInput, and shared by every virtual device it makes from it and by
+their effects. The layer acquires them itself: the wheel exclusive and
+in the background on the game's window (force feedback needs exclusive
+access), pedals shared. A wheel another program holds exclusively is
+acquired shared: it steers, without force feedback. A lost wheel
+(unplugged) steers centred while separate pedals still drive, and is
+acquired again every 500 ms. With `mode = on` and no wheel at the
+start, the devices are listed again every 2 s until one is plugged in.
 
-**Off** without a settings file, with `mode = off`, or (`auto`) without a
-wheel attached when the game starts: the game gets its DirectInput
-untouched, the same object it would have had. A broken file keeps the
-defaults it can't read. A panic inside the layer becomes an error code
-for that one call, never a crash in the game.
+**Off** without a settings file, with `mode = off`, (`auto`) without a
+wheel attached when the game starts, or when the picked wheel can't be
+opened: the game gets its DirectInput untouched, the same object it
+would have had, and nothing is hidden. A broken file keeps the defaults
+it can't read. A panic inside the layer becomes an error code for that
+one call, never a crash in the game — **when the DLL is built to
+unwind** (`--profile dll`, see "Ship and enable it").
 
 ## Settings: `rea_wheel.ini`
 
@@ -125,17 +131,27 @@ periodic ones, spring, damper, inertia, friction; no custom force). A
 game's effect becomes a one-axis effect on the wheel's X:
 
 - its force is the share of its direction along X (cartesian, polar or
-  spherical; CMR uses X and Y), times `ffb_strength`, flipped by
-  `ffb_invert` (a periodic effect flips its phase);
-- a condition (spring, damper…) takes X's own condition, coefficients
-  and saturations scaled; the centre offset stays;
-- envelope levels scale too; trigger buttons are not passed on.
+  spherical; CMR uses X and Y), flipped by `ffb_invert` (a periodic
+  effect flips its phase);
+- a condition (spring, damper…) takes X's own condition; `ffb_invert`
+  mirrors it (centre negated, its two sides swapped) and never makes a
+  coefficient negative, which would drive the wheel to full lock;
+- trigger buttons are not passed on.
 
-`SetParameters` goes to the real effect; one the driver refuses with
-`DIEP_NORESTART` is sent again without it (an old MOMO report).
-`DIPROP_FFGAIN` and `DIPROP_AUTOCENTER` answer, and are passed to the
-wheel (CMR04 makes no effects when the gain can't be read).
-`SendForceFeedbackCommand` is passed on.
+**Strength:** the wheel's `DIPROP_FFGAIN` is the game's gain ×
+`ffb_strength`, so the wheel's own autocentre spring is at the player's
+strength too, and effects go as the game made them. A wheel that
+refuses the gain gets the strength in each effect instead (magnitudes,
+coefficients, saturations and envelope levels).
+
+The virtual wheel claims force feedback (capabilities,
+`DIEDFL_FORCEFEEDBACK`) only when its wheel takes it. `SetParameters`
+goes to the real effect; when the driver refuses a `DIEP_NORESTART`
+update (an old MOMO report) it is sent again without it, and from then
+on without asking. An effect started before it was complete, or after
+`DISFFC_RESET`, is made and plays once it can. `DIPROP_FFGAIN` and
+`DIPROP_AUTOCENTER` answer (CMR04 makes no effects when the gain can't
+be read). `SendForceFeedbackCommand` is passed on.
 
 **Kept alive:** when the wheel is acquired again (the game's own
 re-acquire, or after it was lost) its autocentre and gain are set again
@@ -218,6 +234,10 @@ real-game run loaded both, and Alt+F4 still worked.
   that the layer opens, reads and gives force feedback to like real
   ones; the game moves them and reads what reached them through the
   DLL's `rea_dinput_fake_*` exports (they do nothing without the key).
+  Words after the set give the fake wheel a driver's quirks:
+  `unplugged` (not there at the start), `busy` (held by another
+  program), `nogain`, `norestart`, `broken` (can't be opened),
+  `lockedprops` (autocentre and gain only while unacquired).
   `examples/dinput8.rs` is a `dinput8.dll` stand-in in Xidi's place: the
   layer chains in front of it.
 
@@ -231,11 +251,21 @@ need the hardware pass (phase 3 of the wheel plan).
 
 - `IDirectInput8A` only (the CMR games): a game asking for the wide
   interface, or creating DirectInput by another path, gets it untouched.
-- The devices are chosen when the game creates DirectInput; a wheel
-  plugged in later is used only if it was there then (a replug of the
-  same wheel is fine).
+- The devices are chosen when the game creates DirectInput; a different
+  wheel plugged in later is used only with `mode = on` and no wheel at
+  the start (a replug of the same wheel is fine).
+- A spring's centre and stiffness are the real wheel's, over its whole
+  rotation: the steering lock narrows only what the game reads, so a
+  spring feels as on the wheel's own range, not the locked one.
+- Alt-tab: the wheel is held exclusive in the background, so effects
+  keep playing while the game is behind another window until the game
+  unacquires the virtual wheel (whether the CMR games do on focus loss
+  is not verified). The game's foreground flag is not
+  followed: acquiring the real wheel in the foreground would make every
+  focus change drop and revive its effects.
+- Twin collections: the wheel's same-model devices without force
+  feedback are hidden, so a second wheel of the same model without force
+  feedback is hidden too.
 - The CMR games read 256 steps of steering; that stays.
-- With `classify`, pedals from a wheel vendor on their own USB
-  (Fanatec) count as a wheel: `pick_wheel` prefers one with force
-  feedback, so the base wins, but with `auto` and only such pedals
-  attached the virtual wheel is shown.
+- Xidi lists its virtual pad (IDs 0000:0000) even with no XInput pad
+  connected; it is a pad, never picked, and stays in the game's list.
