@@ -32,7 +32,7 @@ pub mod format;
 pub mod log;
 pub mod state;
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "dll"))]
 mod win;
 
 pub use devices::MODE_ENV;

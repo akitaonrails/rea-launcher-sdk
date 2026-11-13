@@ -39,6 +39,14 @@ leaves the game alone; check it in the launcher with the same parser
 
 ## Ship and enable it
 
+**Depending on it from a launcher.** The launcher links this crate only
+for `import_into` and its constants, so it turns the `dll` feature off:
+`rea-launcher-close-hook = { …, default-features = false }`. The feature carries the
+DLL's `DllMain` and exports; with it on, a launcher that also links the
+in-game wheel layer (`rea-launcher-dinput`) fails to link (`duplicate symbol: _DllMain@12`). Build the DLL
+itself with the feature on (`cargo build --release -p rea-launcher-close-hook
+--features rea-launcher-close-hook/dll --target i686-pc-windows-gnu`).
+
 1. Build it for the game's architecture (`cargo build --release -p
    rea-launcher-close-hook --target i686-pc-windows-gnu`) and ship
    `rea_close_hook.dll` next to the launcher (add it to the package

@@ -147,6 +147,14 @@ docs/playbooks/wheels-and-ffb.md).
 
 ## Ship and enable it
 
+**Depending on it from a launcher.** The launcher links this crate only
+for `import_into` and its constants, so it turns the `dll` feature off:
+`rea-launcher-dinput = { …, default-features = false }`. The feature carries the
+DLL's `DllMain` and exports; with it on, a launcher that also links the
+close hook (`rea-launcher-close-hook`) fails to link (`duplicate symbol: _DllMain@12`). Build the DLL
+itself with the feature on (`cargo build --release -p rea-launcher-dinput
+--features rea-launcher-dinput/dll --target i686-pc-windows-gnu`).
+
 1. Build it for the game (`cargo build --release -p rea-launcher-dinput
    --target i686-pc-windows-gnu`; in the reusable workflow, the
    `extra-build` input) and ship `rea_dinput.dll` next to the launcher

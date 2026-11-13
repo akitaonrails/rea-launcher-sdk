@@ -333,9 +333,9 @@ fn parse_strategy(value: &str) -> Result<Strategy, ConfigError> {
 
 pub mod registry;
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "dll"))]
 mod hook;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "dll"))]
 mod registry_hook;
 
 #[cfg(test)]

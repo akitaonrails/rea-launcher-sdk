@@ -13,6 +13,14 @@ name = "rea_dinput"
 # and the tests the pure pieces.
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["dll"]
+# The DLL's own entry points: DllMain and its exports. A launcher that links
+# this crate only for `import_into` turns it off (`default-features =
+# false`), since two such crates in one exe would each bring a DllMain, and
+# builds the DLL itself with `--features rea-launcher-dinput/dll`.
+dll = []
+
 [dependencies]
 rea-launcher.workspace = true
 

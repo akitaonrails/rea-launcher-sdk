@@ -55,6 +55,15 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   the launcher saves `setup` with its options and `calibration_text` on
   its own; every control is a `dinput::options` row for the parity test.
 
+### Changed
+
+- `rea-launcher-close-hook` and `rea-launcher-dinput` have a default
+  `dll` feature that holds the DLL's `DllMain` and exports. A launcher
+  that links either for `import_into` sets `default-features = false`
+  (required when it links both: two `DllMain`s don't link) and builds the
+  DLL with `--features <crate>/dll`. Launchers that keep the defaults see
+  no change.
+
 ## [0.8.2] - 2026-11-12
 
 ### Fixed
