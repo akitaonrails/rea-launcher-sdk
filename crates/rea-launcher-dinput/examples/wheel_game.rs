@@ -13,6 +13,8 @@
 //!   it back;
 //! - `effects`: autocentre off, the five effects made and started, then
 //!   the constant force changed with `DIEP_NORESTART`;
+//! - `buffer:<n>`: buffered data of `n` events (unacquired around it);
+//! - `data`: GetDeviceData, as `data=<code>:<offset>=<value>,…`;
 //! - `events`: what reached the fake devices, as `fake <line>`;
 //! - `wait:<ms>`.
 
@@ -32,13 +34,13 @@ mod game {
     use rea_dinput::format::{self, Guid};
     use windows_sys::Win32::Devices::HumanInterfaceDevice::{
         DI8DEVCLASS_GAMECTRL, DICONDITION, DICONSTANTFORCE, DIDATAFORMAT, DIDEVCAPS,
-        DIDEVICEINSTANCEA, DIDEVICEOBJECTINSTANCEA, DIDF_ABSAXIS, DIDFT_AXIS, DIEB_NOTRIGGER,
-        DIEDFL_ATTACHEDONLY, DIEFF_CARTESIAN, DIEFF_OBJECTOFFSETS, DIEFFECT, DIENUM_CONTINUE,
-        DIEP_NORESTART, DIEP_TYPESPECIFICPARAMS, DIJOYSTATE2, DIOBJECTDATAFORMAT, DIPERIODIC,
-        DIPH_BYID, DIPH_DEVICE, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE, DISCL_EXCLUSIVE,
-        DISCL_FOREGROUND, DirectInput8Create, GUID_Button, GUID_ConstantForce, GUID_Damper,
-        GUID_POV, GUID_RxAxis, GUID_RyAxis, GUID_RzAxis, GUID_Sine, GUID_Slider, GUID_Spring,
-        GUID_Square, GUID_XAxis, GUID_YAxis, GUID_ZAxis,
+        DIDEVICEINSTANCEA, DIDEVICEOBJECTDATA, DIDEVICEOBJECTINSTANCEA, DIDF_ABSAXIS, DIDFT_AXIS,
+        DIEB_NOTRIGGER, DIEDFL_ATTACHEDONLY, DIEFF_CARTESIAN, DIEFF_OBJECTOFFSETS, DIEFFECT,
+        DIENUM_CONTINUE, DIEP_NORESTART, DIEP_TYPESPECIFICPARAMS, DIJOYSTATE2, DIOBJECTDATAFORMAT,
+        DIPERIODIC, DIPH_BYID, DIPH_DEVICE, DIPROPDWORD, DIPROPHEADER, DIPROPRANGE,
+        DISCL_EXCLUSIVE, DISCL_FOREGROUND, DirectInput8Create, GUID_Button, GUID_ConstantForce,
+        GUID_Damper, GUID_POV, GUID_RxAxis, GUID_RyAxis, GUID_RzAxis, GUID_Sine, GUID_Slider,
+        GUID_Spring, GUID_Square, GUID_XAxis, GUID_YAxis, GUID_ZAxis,
     };
     use windows_sys::Win32::Foundation::{HMODULE, HWND};
     use windows_sys::Win32::System::LibraryLoader::{
@@ -440,6 +442,40 @@ mod game {
                     for line in String::from_utf8_lossy(&buffer[..len as usize]).lines() {
                         println!("fake {line}");
                     }
+                }
+                "buffer" => {
+                    let acquire = method::<unsafe extern "system" fn(This) -> HRESULT>(device, 7);
+                    method::<unsafe extern "system" fn(This) -> HRESULT>(device, 8)(device);
+                    let size = DIPROPDWORD {
+                        diph: dword_header(),
+                        dwData: number(1) as u32,
+                    };
+                    println!("buffer={:#x}", set_property(device, 1, &size.diph));
+                    acquire(device);
+                }
+                "data" => {
+                    let mut data: [DIDEVICEOBJECTDATA; 16] = std::mem::zeroed();
+                    let mut count = data.len() as u32;
+                    type GetData = unsafe extern "system" fn(
+                        This,
+                        u32,
+                        *mut DIDEVICEOBJECTDATA,
+                        *mut u32,
+                        u32,
+                    ) -> HRESULT;
+                    let code = method::<GetData>(device, 10)(
+                        device,
+                        size_of::<DIDEVICEOBJECTDATA>() as u32,
+                        data.as_mut_ptr(),
+                        &mut count,
+                        0,
+                    );
+                    let read = if code < 0 { 0 } else { count as usize };
+                    let events: Vec<String> = data[..read]
+                        .iter()
+                        .map(|d| format!("{}={}", d.dwOfs, d.dwData))
+                        .collect();
+                    println!("data={code:#x}:{}", events.join(","));
                 }
                 "effects" => make_effects(device, set_property, effects),
                 "wait" => std::thread::sleep(std::time::Duration::from_millis(number(1) as u64)),

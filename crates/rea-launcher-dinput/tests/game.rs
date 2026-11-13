@@ -193,6 +193,30 @@ fn steering_and_pedals_reach_the_game_after_the_lock() {
 }
 
 #[test]
+fn buffered_data_reports_what_changed() {
+    let r = run(
+        "buffered",
+        Some(FAKE_WHEEL),
+        false,
+        &[],
+        &[
+            "data",
+            "buffer:8",
+            "data",
+            "input:0:8192,32767,32767,0,0,0,0,0:1:-1",
+            "data",
+            "data",
+        ],
+    );
+    let data = r.all("data");
+    // DIERR_NOTBUFFERED before a buffer size is set.
+    assert_eq!(data[0], "0x80040207:", "{:?}", r.lines);
+    assert_eq!(r.value("buffer"), Some("0x0"));
+    // Steering (lX at 0) full right, button 0 (at 48) down; then nothing.
+    assert_eq!(data[1..], ["0x0:", "0x0:0=255,48=128", "0x0:"]);
+}
+
+#[test]
 fn separate_pedals_merge_into_the_one_wheel() {
     let ini = format!(
         "mode = auto\nfake = wheel+pedals\npedals = {}\n",
