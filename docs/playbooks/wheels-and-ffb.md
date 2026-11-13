@@ -14,6 +14,7 @@ code is in the SDK:
 | Known wheels, `classify`, spare interfaces, `pick_wheel`, `find_aux`, steering lock, curves, pedals, `WheelProfile<B>`, the wizard, pad maps | `rea_launcher::wheel` (pure) |
 | Synthetic force feedback from a `CarState`, the test pattern | `rea_launcher::ffb` (pure) |
 | Key repeat for list menus | `rea_launcher::pad::PadNav::with_repeat` |
+| DirectInput games: the devices behind the virtual wheel, the launcher's Wheel tab | `rea_launcher::wheel::rig`, `rea_launcher_win32::dinput`, `rea_launcher_ui::wheel` |
 | SDL devices, haptics, rumble; rescans; retries | `rea_launcher_native::sdl` (feature `sdl`), `rea_launcher_native::policy` |
 
 The launcher brings the game knowledge: its buttons (`impl Control`), the
@@ -196,3 +197,45 @@ launcher. What still helps:
 - **Wine/Proton FFB:** which winebus path carries it (SDL or hidraw) is
   game- and wheel-specific; record it in `RUNTIME_NOTES.md`.
   `wine::SDL_ONLY` has not been verified with a wheel.
+
+## DirectInput games: the launcher's side
+
+For CMR3, CMR04 and CMR2005 an in-game layer shows the game one virtual
+wheel made from the player's wheel and pedals (`rea_wheel.ini`, the
+contract in `rea_launcher::wheel::dinput`). This part is what the
+launcher does; the layer itself has its own part.
+
+- **One set of rules on both sides.** `wheel::rig` decides which wheel
+  and pedals drive (`pick`: `pick_wheel` among the wheels and the device
+  picked by hand, the pedals picked by hand, else the calibrated `aux_*`
+  device, else on the wheel), how they are read (`profile`: the saved
+  calibration for that wheel model, else a guess from where the axes
+  rest), what the game gets (`virtual_controls`: `Profile::read` with the
+  lock, then `shape` with the deadzone and curve) and whether the layer
+  shows the wheel at all (`shows_virtual_wheel`). The tab's live check
+  and the layer call the same functions, so the check is the game.
+- **Reading devices.** `rea_launcher_win32::dinput::DirectInput` lists
+  `DI8DEVCLASS_GAMECTRL` devices (spare HID interfaces left out), keys
+  each by its instance GUID (`rig::guid_text`, lower case with braces)
+  and reads `DIJOYSTATE2`'s eight axes in `dinput::REAL_AXES` order with
+  `DIPROP_RANGE` = `REAL_RANGE`, non-exclusive, in the background, on a
+  worker thread: the window only copies results. The kind comes from
+  `classify` with `DI8DEVTYPE_DRIVING` as the wheel type and
+  `DI8DEVTYPE_GAMEPAD` as a pad; USB ids from `guidProduct` ("PIDVID").
+- **Hot-plug.** While the tab reads devices the worker rescans every 2 s;
+  "Look for devices again" rescans now. Devices still attached stay open.
+- **Force-feedback test.** `ffb::test_pattern` as a constant force on X,
+  from the west (positive pushes right, as the SDL path), at the player's
+  strength and direction. Exclusive access needs a top-level window: the
+  worker makes a hidden one of its own, so the launcher passes no window
+  handle. Autocentre is turned off for the test and back on after.
+- **Calibration.** The tab runs the SDK wizard (accelerator, brake) over
+  the wheel and every other non-pad device, then `rig::calibrate` saves
+  the profile and points `pedals` at the device the pedals were found on.
+- **Wine** has no wheel in tests: the module's tests run under
+  `scripts/wine-test` with zero devices (list, a refused test, a clean
+  stop); the tab's tests use `rig::Fixed`.
+- **Unverified on hardware:** the force direction through DirectInput
+  (taken from SDL's DirectInput backend), exclusive background access on
+  every driver, and whether Wine's instance GUIDs stay the same across
+  replugging. Phase 3 of the wheel plan checks them.

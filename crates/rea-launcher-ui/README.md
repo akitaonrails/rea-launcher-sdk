@@ -11,6 +11,7 @@ look with each game's colours, art and tabs left to the launcher.
 | `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_row_with(…, RowOptions { disabled, steps, notes, sizes })` (`steps`: chips for a `Range`, the `unset_label` chip first, `step_choices`; `notes`: per-value notes by cfg text, shown for the chosen value in place of the description; `sizes: Some(SizeChips { screen })`: a `Size` row as chips — `Screen W×H`, `COMMON_SIZES` 1080p/1440p/4K, a saved other size, Custom with a field — `size_choices`) / `spec_path_row(…, pick)` (an `unset_label` option adds an "As the game" chip): one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
 | `download` | `download_row(ui, &Download { label, size, state })` → `Option<DownloadAction>` (Start / Cancel / Remove); `DownloadState` (Missing{partial}, Connecting, Downloading{done,total,rate}, Verifying, Unpacking, Installed, Failed(msg)), `DownloadState::from_phase(Option<&Phase>, installed, partial)` + `with_rate`; `describe`, `size_text`, `time_left` |
 | `unpack` | The progress window while a game's installer is unpacked: `Unpacking::new(game, installer, total)` (`fraction`, `status`, `summary`; `.with_credit("Photo: name, CC BY 2.0")` shows the photo's credit small in the strip), `draw_unpack`, `show(&Palette, &Metrics, Window { title, fit, hero_jpeg, photo_width }, state, &mut dyn UnpackJob, buttons) -> UnpackOutcome` ("Stop unpacking", Escape, the pad's B or closing the window cancel the job); `pad_cancels` (docs/playbooks/installers.md) |
+| `wheel` | `WheelTab::open(text)` / `draw(ui, &mut dyn WheelDevices)` / `save(existing)` / `calibrating()`: the Wheel tab of a DirectInput game (below) |
 | `testing` (feature) | `harness(&Palette, &Metrics, state, ui)`, `harness_sized(…, size, …)`, `click_in_view(&mut ui, role, label)` (below the fold: `scroll_to_me`, `run()`, query again, `click`, `run()` — a plain click there is silently lost) on `egui_kittest`, `checked`/`disabled`/`description`/`value`, re-exported `Queryable` |
 | `report` | A native (Linux) launcher's messages: `native_audience(Mode, Native) -> NativeAudience` (`Terminal` / `Window` / `LogOnly`; `Native::here()` reads stdin/stderr `IsTerminal` and `DISPLAY`/`WAYLAND_DISPLAY`), `Message { title, text, link: Option<Link { label, url }>, details }`, `fatal(&Palette, &Metrics, &Message, Mode) -> NativeAudience` (prints to stderr, then the window when the audience is `Window`), `show`/`show_with` (the window alone, pad navigation included), `message_ui` + `MessageState` + `Action` for drawing it inside another window or a test |
 | `pad` | `inject` and `key_for`, plus `Nav`/`PadNav` re-exported from `rea_launcher::pad` (edge detection on XInput button masks; the bits are `rea_launcher::pad::DPAD_UP` …). `inject`: d-pad → Tab/Shift+Tab/arrows, A → Space; Start, LB/RB and B come back to the launcher ; Linux: `pad::joystick::Joysticks` (`new()`, `buttons()` → the XInput mask from every `/dev/input/js*` pad, read without blocking, rescanned every 2 s; `with_scan` for fake devices in tests) |
@@ -129,6 +130,40 @@ match download_row(ui, &row) {
 }
 if state.running() { ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)); }
 ```
+
+## The Wheel tab (DirectInput games)
+
+For a game the in-game wheel layer serves (CMR3, CMR04, CMR2005): the
+tab edits `rea_wheel.ini` (`rea_launcher::wheel::dinput::FILE`, next to
+the layer's DLL). Glue in the window:
+
+```rust,ignore
+use rea_launcher::wheel::rig::WheelDevices;
+use rea_launcher_ui::wheel::WheelTab;
+
+// in the window's state, at start
+let wheel = WheelTab::open(std::fs::read_to_string(&ini).ok().as_deref());
+let devices: Box<dyn WheelDevices> = Box::new(rea_launcher_win32::dinput::DirectInput::start());
+// the tab
+Tab::Wheel => widgets::tab_body(ui, Tab::Wheel, |ui| self.wheel.draw(ui, &mut *self.devices)),
+// on Play (after the window's own settings)
+let existing = std::fs::read_to_string(&ini).unwrap_or_default();
+rea_launcher::fsx::write_atomic(&ini, self.wheel.save(&existing))?;
+```
+
+Top to bottom: **Wheel support** (Auto / On / Off; Off shows nothing
+else), **Wheel** and **Pedals** (Automatic or a device; a pick that is
+unplugged stays chosen as "Not connected"), **Live check** (steering,
+throttle and brake meters from `rig::virtual_controls`, what the game
+gets), **Steering** (lock, deadzone, curve), **Pedals** (inversion, where
+each pedal is read, **Calibrate pedals**: the SDK wizard, then the
+calibration is saved), **Force feedback** (strength, Reverse the force,
+**Test force feedback**), and the log switch. Empty states say what to do:
+no controller, no wheel among them, the picked wheel or pedals unplugged.
+Every control is a chip row, switch or button reached in order by Tab and
+the pad's d-pad; meters are AccessKit meters whose value is their text.
+A launcher's GUI tests drive it with `rig::Fixed` in place of
+DirectInput.
 
 ## Accessibility and GUI tests
 

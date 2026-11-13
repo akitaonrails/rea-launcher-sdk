@@ -433,11 +433,7 @@ fn row(ui: &mut Ui, label: &str, note: &str, control: impl FnOnce(&mut Ui) -> Re
         ui.vertical(|ui| {
             let response = control(ui);
             widgets::name_control(&response, Some(label), Some(note));
-            ui.add(egui::Label::new(
-                RichText::new(note)
-                    .font(body(size::NOTE))
-                    .color(theme::palette(ui.ctx()).muted),
-            ));
+            widgets::note(ui, note);
         });
     });
     ui.add_space(8.0);

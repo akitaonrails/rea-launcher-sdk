@@ -460,30 +460,45 @@ struct Test {
     magnitude: i32,
 }
 
-/// The constant force's parameters for `magnitude` (−10000..=10000; a
-/// positive one pushes right: the force comes from the west, as
-/// `rea_launcher_native`'s SDL effects say it). Valid while the borrowed
-/// arrays live.
-fn constant_effect(
-    axes: &mut [u32; 1],
-    direction: &mut [i32; 1],
-    force: &mut DICONSTANTFORCE,
-) -> DIEFFECT {
-    DIEFFECT {
-        dwSize: size_of::<DIEFFECT>() as u32,
-        dwFlags: DIEFF_CARTESIAN | DIEFF_OBJECTOFFSETS,
-        dwDuration: INFINITE,
-        dwSamplePeriod: 0,
-        dwGain: DI_FFNOMINALMAX,
-        dwTriggerButton: DIEB_NOTRIGGER,
-        dwTriggerRepeatInterval: 0,
-        cAxes: 1,
-        rgdwAxes: axes.as_mut_ptr(),
-        rglDirection: direction.as_mut_ptr(),
-        lpEnvelope: null_mut(),
-        cbTypeSpecificParams: size_of::<DICONSTANTFORCE>() as u32,
-        lpvTypeSpecificParams: (force as *mut DICONSTANTFORCE).cast(),
-        dwStartDelay: 0,
+/// A constant force on the X axis, from the west: a positive magnitude
+/// (up to 10000) pushes right, as `rea_launcher_native`'s SDL effects
+/// do. Owns what [`ConstantForce::effect`]'s pointers point to.
+struct ConstantForce {
+    axes: [u32; 1],
+    direction: [i32; 1],
+    force: DICONSTANTFORCE,
+}
+
+impl ConstantForce {
+    fn new(magnitude: i32) -> ConstantForce {
+        ConstantForce {
+            axes: [offset_of!(DIJOYSTATE2, lX) as u32],
+            direction: [-1],
+            force: DICONSTANTFORCE {
+                lMagnitude: magnitude,
+            },
+        }
+    }
+
+    /// The effect's parameters, valid while `self` is neither moved nor
+    /// dropped.
+    fn effect(&mut self) -> DIEFFECT {
+        DIEFFECT {
+            dwSize: size_of::<DIEFFECT>() as u32,
+            dwFlags: DIEFF_CARTESIAN | DIEFF_OBJECTOFFSETS,
+            dwDuration: INFINITE,
+            dwSamplePeriod: 0,
+            dwGain: DI_FFNOMINALMAX,
+            dwTriggerButton: DIEB_NOTRIGGER,
+            dwTriggerRepeatInterval: 0,
+            cAxes: 1,
+            rgdwAxes: self.axes.as_mut_ptr(),
+            rglDirection: self.direction.as_mut_ptr(),
+            lpEnvelope: null_mut(),
+            cbTypeSpecificParams: size_of::<DICONSTANTFORCE>() as u32,
+            lpvTypeSpecificParams: (&raw mut self.force).cast(),
+            dwStartDelay: 0,
+        }
     }
 }
 
@@ -638,9 +653,8 @@ impl Session {
             diph: header::<DIPROPDWORD>(),
             dwData: DIPROPAUTOCENTER_OFF,
         };
-        let (mut axes, mut direction) = ([offset_of!(DIJOYSTATE2, lX) as u32], [-1]);
-        let mut force = DICONSTANTFORCE { lMagnitude: 0 };
-        let effect = constant_effect(&mut axes, &mut direction, &mut force);
+        let mut force = ConstantForce::new(0);
+        let effect = force.effect();
         let mut ptr = null_mut();
         // SAFETY: a live device and the worker's own top-level window; the
         // effect's arrays live across CreateEffect, which copies them; the
@@ -690,11 +704,8 @@ impl Session {
             return true;
         };
         if magnitude != test.magnitude {
-            let (mut axes, mut direction) = ([offset_of!(DIJOYSTATE2, lX) as u32], [-1]);
-            let mut force = DICONSTANTFORCE {
-                lMagnitude: magnitude,
-            };
-            let effect = constant_effect(&mut axes, &mut direction, &mut force);
+            let mut force = ConstantForce::new(magnitude);
+            let effect = force.effect();
             // SAFETY: a live effect; the parameters live across the call.
             unsafe {
                 (test.effect.vtbl().set_parameters)(

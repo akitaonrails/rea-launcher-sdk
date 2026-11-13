@@ -7,6 +7,28 @@ must act on is a bullet in its release's `### Migration` section (first in
 the release), saying what to do and how to verify it; `sdk-bump` and the
 `sdk-update` pull requests copy that section.
 
+## [Unreleased]
+
+### Added
+
+- `rea_launcher::wheel::rig`: the devices behind the DirectInput virtual
+  wheel, shared by the launcher's Wheel tab and the in-game layer —
+  `pick` (wheel and pedals), `profile` (saved or guessed calibration),
+  `virtual_controls` (what the game gets: `Profile::read`, then the
+  deadzone and curve), `shows_virtual_wheel` (whether the layer shows it),
+  `calibrate` (a pedal-wizard run into the profile), `save` (the
+  `rea_wheel.ini` text), `guid_text` (instance GUIDs as the file keeps
+  them), the `WheelDevices` trait and a `Fixed` stand-in for tests.
+- `rea_launcher_win32::dinput::DirectInput`: `WheelDevices` through
+  DirectInput 8 on a worker thread (lists, live readings in the
+  `REAL_AXES` order at `REAL_RANGE`, a 2-second hot-plug rescan, the
+  force-feedback test pattern); works with no device under Wine.
+- `rea_launcher_ui::wheel::WheelTab`: the Wheel tab of a DirectInput
+  game's settings window (wheel support, wheel and pedal pickers, live
+  check, steering lock, deadzone, curve, pedal inversion and calibration,
+  force-feedback strength, direction and test); `save(existing)` returns
+  the new `rea_wheel.ini`.
+
 ## [0.8.2] - 2026-11-12
 
 ### Fixed
