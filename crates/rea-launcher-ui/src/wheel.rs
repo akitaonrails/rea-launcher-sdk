@@ -22,16 +22,19 @@ use eframe::egui::{
     self, CornerRadius, Rect, Response, RichText, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo,
     vec2,
 };
-use rea_launcher::wheel::dinput::{Mode, NoButtons, Profile, REAL_AXES, Setup};
+use rea_launcher::cfg::spec::OptionSpec;
+use rea_launcher::wheel::dinput::options::{
+    WHEEL, WHEEL_CURVE, WHEEL_DEADZONE, WHEEL_DEVICE, WHEEL_FFB, WHEEL_FFB_INVERT,
+    WHEEL_INVERT_BRAKE, WHEEL_INVERT_THROTTLE, WHEEL_LOCK, WHEEL_PEDALS,
+};
+use rea_launcher::wheel::dinput::{HEADER, Mode, NoButtons, Profile, REAL_AXES, Setup};
 use rea_launcher::wheel::rig::{self, Device, FfbTest, Rig, WheelDevices};
 use rea_launcher::wheel::wizard::{Status, Step, Wizard};
 use rea_launcher::wheel::{DeviceId, DeviceState, Kind, PedalAxis, Source, SteeringLock};
 
+use crate::spec::mark_rendered;
 use crate::theme::{self, body, size};
 use crate::widgets;
-
-/// The comment a new `rea_wheel.ini` starts with.
-pub const HEADER: &str = "rea_wheel.ini - the wheel settings, written by the launcher";
 
 /// How often the tab redraws while it is shown (the live check).
 pub const REDRAW: Duration = Duration::from_millis(33);
@@ -63,22 +66,23 @@ struct Calibration {
 }
 
 impl WheelTab {
-    /// The tab for `rea_wheel.ini`'s text (`None`: no file yet).
-    pub fn open(text: Option<&str>) -> WheelTab {
-        let text = text.unwrap_or_default();
+    /// The tab over `setup` (from `launcher.cfg`, starting from the
+    /// launcher's own defaults) and the calibration file's text (`None`:
+    /// no file yet).
+    pub fn new(setup: Setup, calibration: Option<&str>) -> WheelTab {
         WheelTab {
-            setup: Setup::from_cfg(text),
-            profile: Profile::from_cfg(text),
+            setup,
+            profile: calibration.and_then(Profile::from_cfg),
             calibration: None,
             calibrated: None,
         }
     }
 
-    /// The new `rea_wheel.ini`: `existing` (the file as it is now, "" for
-    /// none) with the tab's settings and calibration, every other line
-    /// kept.
-    pub fn save(&self, existing: &str) -> String {
-        rig::save(existing, &self.setup, self.profile.as_ref(), HEADER)
+    /// The calibration file's new text: `existing` (the file as it is
+    /// now, "" for none) with the calibration, every other line kept;
+    /// `None` while there is no calibration to save.
+    pub fn calibration_text(&self, existing: &str) -> Option<String> {
+        self.profile.as_ref().map(|p| p.to_cfg(existing, HEADER))
     }
 
     /// Whether the pedal wizard is running (the launcher may hold Play).
@@ -106,13 +110,6 @@ impl WheelTab {
         self.pedal_rows(ui, &list, rig, in_use);
         section(ui, "Force feedback");
         self.ffb_rows(ui, &list, rig, devices);
-        ui.add_space(10.0);
-        widgets::toggle(
-            ui,
-            &mut self.setup.log,
-            "Keep a log for bug reports (rea_wheel.log)",
-            None,
-        );
     }
 
     fn mode_row(&mut self, ui: &mut Ui) {
@@ -124,7 +121,7 @@ impl WheelTab {
             Mode::Off => "The game sees your controllers as they are, without these settings.",
         };
         let options = [(Mode::Auto, "Auto"), (Mode::On, "On"), (Mode::Off, "Off")];
-        row(ui, "Wheel support", note, |ui| {
+        row(ui, &WHEEL, note, |ui| {
             widgets::chips(ui, &options, &mut self.setup.mode, None)
         });
     }
@@ -166,7 +163,7 @@ impl WheelTab {
         if !chosen.is_empty() && !chosen_here {
             wheels.push((chosen, "Not connected".to_owned()));
         }
-        row(ui, "Wheel", &wheel_note, |ui| {
+        row(ui, &WHEEL_DEVICE, &wheel_note, |ui| {
             widgets::chips(ui, &wheels, &mut self.setup.wheel.device, None)
         });
 
@@ -186,7 +183,7 @@ impl WheelTab {
         if !picked.is_empty() && !pedals.iter().any(|(g, _)| *g == picked) {
             pedals.push((picked, "Not connected".to_owned()));
         }
-        row(ui, "Pedals", &pedal_note, |ui| {
+        row(ui, &WHEEL_PEDALS, &pedal_note, |ui| {
             widgets::chips(ui, &pedals, &mut self.setup.pedals, None)
         });
         ui.horizontal(|ui| {
@@ -218,28 +215,22 @@ impl WheelTab {
             .iter()
             .map(|&l| (l, l.label()))
             .collect();
-        row(
-            ui,
-            "Steering lock",
-            "How far you turn the wheel for full lock in the game. Full is the wheel's whole rotation.",
-            |ui| widgets::chips(ui, &locks, &mut self.setup.wheel.lock, None),
-        );
+        row(ui, &WHEEL_LOCK, WHEEL_LOCK.description, |ui| {
+            widgets::chips(ui, &locks, &mut self.setup.wheel.lock, None)
+        });
         let deadzones = steps(&DEADZONES, self.setup.deadzone, |v| match v {
             0 => "None".to_owned(),
             v => format!("{v} %"),
         });
-        row(
-            ui,
-            "Deadzone",
-            "A small band in the centre that does nothing, for a wheel that drifts.",
-            |ui| widgets::chips(ui, &deadzones, &mut self.setup.deadzone, None),
-        );
+        row(ui, &WHEEL_DEADZONE, WHEEL_DEADZONE.description, |ui| {
+            widgets::chips(ui, &deadzones, &mut self.setup.deadzone, None)
+        });
         let curves = steps(&CURVES, self.setup.linearity, |v| {
             rea_launcher::wheel::linearity_label(v).to_owned()
         });
         row(
             ui,
-            "Curve",
+            &WHEEL_CURVE,
             "Linear steers as much as you turn; the others soften small turns near the centre.",
             |ui| widgets::chips(ui, &curves, &mut self.setup.linearity, None),
         );
@@ -252,13 +243,12 @@ impl WheelTab {
         rig: Option<Rig>,
         in_use: Option<Profile>,
     ) {
-        widgets::toggle(
+        switch(
             ui,
+            &WHEEL_INVERT_THROTTLE,
             &mut self.setup.wheel.invert_accel,
-            "Invert throttle",
-            None,
         );
-        widgets::toggle(ui, &mut self.setup.wheel.invert_brake, "Invert brake", None);
+        switch(ui, &WHEEL_INVERT_BRAKE, &mut self.setup.wheel.invert_brake);
         if let Some(profile) = &in_use {
             let device = |src: Source| match (src, &profile.aux) {
                 (Source::Aux, Some(aux)) => aux.name.clone(),
@@ -376,14 +366,11 @@ impl WheelTab {
             0 => "Off".to_owned(),
             v => format!("{v} %"),
         });
-        row(
-            ui,
-            "Strength",
-            "How hard the wheel pushes back in the game. Go lower on a direct-drive wheel.",
-            |ui| widgets::chips(ui, &strengths, &mut self.setup.ffb.strength, None),
-        );
-        widgets::toggle(ui, &mut self.setup.ffb.invert, "Reverse the force", None);
-        widgets::note(ui, "Only for a wheel that pulls the wrong way.");
+        row(ui, &WHEEL_FFB, WHEEL_FFB.description, |ui| {
+            widgets::chips(ui, &strengths, &mut self.setup.ffb.strength, None)
+        });
+        switch(ui, &WHEEL_FFB_INVERT, &mut self.setup.ffb.invert);
+        widgets::note(ui, WHEEL_FFB_INVERT.description);
         let wheel = rig.map(|r| &list[r.wheel]).filter(|w| w.ffb);
         let Some(wheel) = wheel else {
             widgets::note(ui, "The test needs a wheel with force feedback.");
@@ -407,7 +394,7 @@ impl WheelTab {
             FfbTest::Done => {
                 widgets::note(
                     ui,
-                    "Did it push left first? If it went right, turn on Reverse the force.",
+                    "Did it push left first? If it went right, turn on Reverse force feedback.",
                 );
             }
             FfbTest::Failed(why) => {
@@ -424,19 +411,28 @@ fn section(ui: &mut Ui, text: &str) {
     ui.add_space(4.0);
 }
 
-/// A labelled row: the field on the left; the control and `note` under it
-/// on the right. The control is named by the label and described by the
-/// note.
-fn row(ui: &mut Ui, label: &str, note: &str, control: impl FnOnce(&mut Ui) -> Response) {
+/// An option's row: its label on the left; the control and `note` under
+/// it on the right. The control is named by the label and described by
+/// the note, and the key counts as shown for the parity test.
+fn row(ui: &mut Ui, spec: &OptionSpec, note: &str, control: impl FnOnce(&mut Ui) -> Response) {
+    mark_rendered(ui.ctx(), spec.key);
     ui.horizontal_top(|ui| {
-        widgets::field(ui, label);
+        widgets::field(ui, spec.label);
         ui.vertical(|ui| {
             let response = control(ui);
-            widgets::name_control(&response, Some(label), Some(note));
+            widgets::name_control(&response, Some(spec.label), Some(note));
             widgets::note(ui, note);
         });
     });
     ui.add_space(8.0);
+}
+
+/// An on/off option: a switch named by its label and described by its
+/// description; the key counts as shown for the parity test.
+fn switch(ui: &mut Ui, spec: &OptionSpec, on: &mut bool) {
+    mark_rendered(ui.ctx(), spec.key);
+    let response = widgets::toggle(ui, on, spec.label, None);
+    widgets::name_control(&response, None, Some(spec.description));
 }
 
 /// What the wizard asks for now, in ink.
@@ -576,7 +572,9 @@ mod tests {
     use super::*;
     use crate::testing::{self, Harness, NodeT, Queryable};
     use crate::theme::{Metrics, Palette};
+    use rea_launcher::cfg::spec;
     use rea_launcher::ffb::FfbSettings;
+    use rea_launcher::wheel::dinput::options::OPTIONS;
     use rea_launcher::wheel::rig::Fixed;
 
     type State = (WheelTab, Fixed);
@@ -623,7 +621,22 @@ mod tests {
         )
     }
 
-    fn open(devices: Vec<Device>, text: &str) -> Harness<'static, State> {
+    /// The setup a `launcher.cfg` holds, over the SDK's defaults.
+    fn setup_of(launcher_cfg: &str) -> Setup {
+        let mut setup = Setup::default();
+        let problems = spec::parse_file(launcher_cfg, "launcher.cfg", &OPTIONS, |key, value| {
+            setup.apply(key, value);
+            Ok(())
+        });
+        assert_eq!(problems, Vec::<String>::new());
+        setup
+    }
+
+    fn open(devices: Vec<Device>, launcher_cfg: &str) -> Harness<'static, State> {
+        open_tab(devices, WheelTab::new(setup_of(launcher_cfg), None))
+    }
+
+    fn open_tab(devices: Vec<Device>, tab: WheelTab) -> Harness<'static, State> {
         let fixed = Fixed {
             devices,
             ..Fixed::default()
@@ -633,7 +646,7 @@ mod tests {
             &Palette::default(),
             &Metrics::DEFAULT,
             vec2(880.0, 1800.0),
-            (WheelTab::open(Some(text)), fixed),
+            (tab, fixed),
             |ui, (tab, devices)| tab.draw(ui, devices),
         )
     }
@@ -647,24 +660,44 @@ mod tests {
     }
 
     fn saved(ui: &Harness<'_, State>) -> String {
-        ui.state().0.save("")
+        ui.state().0.setup.to_launcher_cfg("")
     }
 
     #[test]
     fn every_control_changes_the_saved_file() {
         let mut ui = open(vec![pad(), csl(), pedals()], "");
         let clicks: [(Role, &str, usize, &str); 11] = [
-            (Role::RadioButton, "On", 0, "mode = on"),
-            (Role::RadioButton, "Sprint pedals", 0, "device = {pedals}"),
-            (Role::RadioButton, "Automatic", 0, "device = \n"),
-            (Role::RadioButton, "Sprint pedals", 1, "pedals = {pedals}"),
-            (Role::RadioButton, "540°", 0, "lock = 540"),
-            (Role::RadioButton, "4 %", 0, "deadzone = 4"),
-            (Role::RadioButton, "Mild", 0, "linearity = 40"),
-            (Role::Switch, "Invert throttle", 0, "invert_accel = on"),
-            (Role::Switch, "Invert brake", 0, "invert_brake = on"),
-            (Role::RadioButton, "75 %", 0, "ffb_strength = 75"),
-            (Role::Switch, "Reverse the force", 0, "ffb_invert = on"),
+            (Role::RadioButton, "On", 0, "wheel = on"),
+            (
+                Role::RadioButton,
+                "Sprint pedals",
+                0,
+                "wheel_device = {pedals}",
+            ),
+            (Role::RadioButton, "Automatic", 0, "wheel_device = \n"),
+            (
+                Role::RadioButton,
+                "Sprint pedals",
+                1,
+                "wheel_pedals = {pedals}",
+            ),
+            (Role::RadioButton, "540°", 0, "wheel_lock = 540"),
+            (Role::RadioButton, "4 %", 0, "wheel_deadzone = 4"),
+            (Role::RadioButton, "Mild", 0, "wheel_curve = 40"),
+            (
+                Role::Switch,
+                "Invert throttle",
+                0,
+                "wheel_invert_throttle = on",
+            ),
+            (Role::Switch, "Invert brake", 0, "wheel_invert_brake = on"),
+            (Role::RadioButton, "75 %", 0, "wheel_ffb = 75"),
+            (
+                Role::Switch,
+                "Reverse force feedback",
+                0,
+                "wheel_ffb_invert = on",
+            ),
         ];
         for (role, label, nth, line) in clicks {
             click(&mut ui, role, label, nth);
@@ -674,18 +707,9 @@ mod tests {
                 saved(&ui)
             );
         }
-        click(
-            &mut ui,
-            Role::Switch,
-            "Keep a log for bug reports (rea_wheel.log)",
-            0,
-        );
-        let text = saved(&ui);
-        assert!(text.contains("log = on"));
-        assert!(text.starts_with(&format!("# {HEADER}\n")));
-        assert_eq!(Setup::from_cfg(&text), ui.state().0.setup);
+        assert_eq!(setup_of(&saved(&ui)), ui.state().0.setup);
         click(&mut ui, Role::RadioButton, "Off", 0);
-        assert!(saved(&ui).contains("mode = off"));
+        assert!(saved(&ui).contains("wheel = off"));
         assert!(
             ui.query_by_label("Steering lock").is_none(),
             "Off shows wheel support only"
@@ -693,16 +717,38 @@ mod tests {
     }
 
     #[test]
-    fn the_file_round_trips_and_keeps_other_lines() {
-        let existing = "# mine\nmode = on\nlock = 900\nfuture_key = 7\n";
-        let ui = open(vec![csl()], existing);
-        let text = ui.state().0.save(existing);
-        assert!(text.starts_with("# mine\n") && text.contains("future_key = 7"));
-        assert_eq!(Setup::from_cfg(&text), Setup::from_cfg(existing));
-        assert!(
-            !text.contains("wheel_vid"),
-            "no calibration, nothing guessed saved"
+    fn the_window_shows_every_wheel_option() {
+        let ui = open(vec![csl()], "");
+        spec::assert_parity(&OPTIONS, &crate::spec::rendered_keys(&ui.ctx));
+    }
+
+    #[test]
+    fn the_launchers_default_lock_is_kept() {
+        let mut setup = Setup::default();
+        setup.wheel.lock = SteeringLock::Degrees(540);
+        let ui = open_tab(vec![csl()], WheelTab::new(setup, None));
+        assert!(testing::checked(
+            &ui.get_by_role_and_label(Role::RadioButton, "540°")
+        ));
+    }
+
+    #[test]
+    fn the_calibration_round_trips_and_keeps_other_lines() {
+        let devices = [csl()];
+        let rig = rig::pick(&devices, &Setup::default(), None).unwrap();
+        let profile = rig::profile(None, &devices, rig);
+        let existing = profile.to_cfg("# mine\nfuture_key = 7\n", "");
+        let tab = WheelTab::new(Setup::default(), Some(&existing));
+        assert_eq!(tab.profile.as_ref(), Some(&profile));
+        assert_eq!(tab.calibration_text(&existing), Some(existing.clone()));
+        let none = WheelTab::new(Setup::default(), None);
+        assert_eq!(
+            none.calibration_text("# mine\n"),
+            None,
+            "nothing guessed is saved"
         );
+        let fresh = tab.calibration_text("").unwrap();
+        assert!(fresh.starts_with(&format!("# {HEADER}\n")));
     }
 
     #[test]
@@ -713,11 +759,14 @@ mod tests {
         ui.get_by_label("Calibrating the pedals needs a wheel.");
         ui.get_by_label("The test needs a wheel with force feedback.");
 
-        let ui = open(vec![pad()], "mode = on\n");
+        let ui = open(vec![pad()], "wheel = on\n");
         ui.get_by_label_contains("None of your controllers is a wheel");
         ui.get_by_label_contains("centred wheel until one is plugged in");
 
-        let ui = open(vec![csl()], "device = {gone}\npedals = {gone too}\n");
+        let ui = open(
+            vec![csl()],
+            "wheel_device = {gone}\nwheel_pedals = {gone too}\n",
+        );
         ui.get_by_label_contains("The wheel you picked isn't connected. Using FANATEC CSL DD");
         ui.get_by_label_contains("The pedals you picked aren't connected");
         assert_eq!(
@@ -733,10 +782,10 @@ mod tests {
         let mut wheel = csl();
         wheel.state.axes[0] = 4_000;
         wheel.state.axes[1] = 0;
-        let text = "deadzone = 4\nlinearity = 40\n";
+        let text = "wheel_deadzone = 4\nwheel_curve = 40\n";
         let ui = open(vec![wheel.clone()], text);
         ui.get_by_label_contains("Using FANATEC CSL DD, 1080° lock to lock");
-        let setup = Setup::from_cfg(text);
+        let setup = setup_of(text);
         let devices = [wheel];
         let rig = rig::pick(&devices, &setup, None).unwrap();
         let profile = rig::profile(None, &devices, rig);
@@ -770,7 +819,7 @@ mod tests {
         let (tab, _) = ui.state();
         assert!(!tab.calibrating());
         assert_eq!(tab.setup.pedals, "{pedals}");
-        let text = tab.save("");
+        let text = tab.calibration_text("").unwrap();
         assert!(text.contains("aux_guid = {pedals}") && text.contains("gas_device = aux"));
         assert!(text.contains("gas_axis = 1") && text.contains("brake_axis = 0"));
         ui.get_by_label("Throttle: axis Y on Sprint pedals");
@@ -792,7 +841,10 @@ mod tests {
 
     #[test]
     fn the_force_feedback_test_goes_to_the_wheel_in_use() {
-        let mut ui = open(vec![pad(), csl()], "ffb_strength = 25\nffb_invert = on\n");
+        let mut ui = open(
+            vec![pad(), csl()],
+            "wheel_ffb = 25\nwheel_ffb_invert = on\n",
+        );
         click(&mut ui, Role::Button, "Test force feedback", 0);
         let expected = FfbSettings {
             strength: 25,
@@ -834,10 +886,9 @@ mod tests {
             "Invert throttle",
             "Invert brake",
             "Calibrate pedals",
-            "Strength",
-            "Reverse the force",
+            "FFB strength",
+            "Reverse force feedback",
             "Test force feedback",
-            "Keep a log for bug reports (rea_wheel.log)",
         ];
         assert_eq!(seen, expected);
     }

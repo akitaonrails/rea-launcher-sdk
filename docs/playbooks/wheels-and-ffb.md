@@ -229,6 +229,14 @@ launcher does; the layer itself has its own part.
   strength and direction. Exclusive access needs a top-level window: the
   worker makes a hidden one of its own, so the launcher passes no window
   handle. Autocentre is turned off for the test and back on after.
+- **Options and files.** The settings are launcher options
+  (`wheel::dinput::options`: window, flag and `launcher.cfg` key alike),
+  starting from the launcher's own `Setup` (the CMR rally games default to
+  540°). The calibration lives in a `rea_wheel.ini` in the launcher's
+  config folder. At each start the launcher decides with
+  `rig::shows_virtual_wheel` over `dinput::list()` (one-shot, no worker)
+  and writes the layer's `rea_wheel.ini` next to its DLL with
+  `rig::save("", &setup, profile, HEADER)`.
 - **Calibration.** The tab runs the SDK wizard (accelerator, brake) over
   the wheel and every other non-pad device, then `rig::calibrate` saves
   the profile and points `pedals` at the device the pedals were found on.

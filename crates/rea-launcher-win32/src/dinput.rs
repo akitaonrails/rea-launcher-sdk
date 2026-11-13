@@ -741,6 +741,20 @@ impl Drop for Session {
     }
 }
 
+/// The game controllers attached now, listed once on the calling thread
+/// with a first reading each, for a decision before the game starts
+/// (`rea_launcher::wheel::rig::shows_virtual_wheel`); empty when
+/// DirectInput isn't available. It waits only on DirectInput's own
+/// enumeration, not on [`DirectInput`]'s worker.
+pub fn list() -> Vec<Device> {
+    Session::new()
+        .map(|mut session| {
+            session.scan();
+            session.listed()
+        })
+        .unwrap_or_default()
+}
+
 // ---------------------------------------------------------------- worker
 
 /// What the worker and the window share.
@@ -944,6 +958,18 @@ mod tests {
             test_magnitude(Duration::from_millis(100), &inverted),
             Some(6_000)
         );
+    }
+
+    /// The one-shot list works with whatever is attached (nothing in
+    /// wine-test), every device with every axis.
+    #[test]
+    fn a_one_shot_list_needs_no_worker() {
+        let started = Instant::now();
+        for d in list() {
+            assert_eq!(d.state.axes.len(), REAL_AXES.len(), "{}", d.id.name);
+            assert_eq!(d.initial, d.state);
+        }
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     /// Wine has no wheel: the list must still come (empty, or Wine's own

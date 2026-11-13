@@ -29,8 +29,13 @@ use super::{Control, Keys, SteeringLock, WheelProfile, WheelSettings, with_heade
 use crate::cfg;
 use crate::ffb::FfbSettings;
 
+pub mod options;
+
 /// The layer's settings file, next to its DLL in the game's folder.
 pub const FILE: &str = "rea_wheel.ini";
+
+/// The comment a new [`FILE`] starts with.
+pub const HEADER: &str = "rea_wheel.ini - the wheel settings, written by the launcher";
 
 /// When the layer shows the game the virtual wheel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
