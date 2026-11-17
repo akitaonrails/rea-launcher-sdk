@@ -13,8 +13,9 @@
 # is $CARGO_TARGET_DIR when set. SDL2 comes through pins.sh (checked by
 # SHA-256, `.part` downloads, mirrors, the pin cache, REA_NO_FETCH) from
 # sdl2.pins beside this script, or $SDL2_PINS. The Windows build needs
-# MinGW-w64 and LLD; lld is passed here because this variable replaces
-# .cargo/config.toml's rustflags. Prints each built file's path.
+# MinGW-w64 and LLD; lld is passed here because CARGO_ENCODED_RUSTFLAGS
+# (one flag per field, so a folder with spaces stays one argument)
+# replaces .cargo/config.toml's rustflags. Prints each built file's path.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd -P)
 . "$HERE/pins.sh"
@@ -70,8 +71,10 @@ windows)
   [ $# -ge 1 ] || usage
   command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 || die "x86_64-w64-mingw32-gcc not found (MinGW-w64)"
   sdl=$(fetch_sdl2)/lib
-  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="-C link-arg=-fuse-ld=lld -L $sdl"
-  export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS
+  # with --target, these reach only the Windows build, not build scripts
+  CARGO_ENCODED_RUSTFLAGS=$(printf '%s\037' -C link-arg=-fuse-ld=lld -L "$sdl")
+  CARGO_ENCODED_RUSTFLAGS=${CARGO_ENCODED_RUSTFLAGS%?}
+  export CARGO_ENCODED_RUSTFLAGS
   # shellcheck disable=SC2086 # package names checked above
   cargo build --release --locked $pkgs --target "$TRIPLE" --manifest-path "$root/Cargo.toml"
   for p; do echo "build-launcher: $target_dir/$TRIPLE/release/$p.exe"; done

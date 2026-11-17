@@ -16,7 +16,7 @@ mkdir -p "$T/bin" "$T/up/SDL2-2.32.10/x86_64-w64-mingw32/bin" "$T/up/SDL2-2.32.1
 cat > "$T/bin/cargo" <<SH
 #!/bin/sh
 echo "\$*" > "$T/cargo.args"
-echo "\${CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS:-}" > "$T/cargo.flags"
+printf '%s\\n' "\${CARGO_ENCODED_RUSTFLAGS:-}" | tr '\\037' '\\n' > "$T/cargo.flags"
 SH
 printf '#!/bin/sh\n' > "$T/bin/x86_64-w64-mingw32-gcc"
 chmod +x "$T/bin/cargo" "$T/bin/x86_64-w64-mingw32-gcc"
@@ -25,7 +25,7 @@ tar czf "$T/up/SDL2-devel-2.32.10-mingw.tar.gz" -C "$T/up" SDL2-2.32.10
 sum=$(sha256sum "$T/up/SDL2-devel-2.32.10-mingw.tar.gz" | cut -d' ' -f1)
 echo "sdl2-mingw file://$T/up/SDL2-devel-2.32.10-mingw.tar.gz $sum" > "$T/sdl2.pins"
 export PATH="$T/bin:$PATH" SDL2_PINS="$T/sdl2.pins" REA_NO_FETCH=1 PIN_CACHE=''
-unset CARGO_TARGET_DIR CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS
+unset CARGO_TARGET_DIR CARGO_ENCODED_RUSTFLAGS
 
 out=$(sh "$BUILD" --root "$T/repo" linux initiald-launcher 2>&1) || bad "linux build: $out"
 has "linux: release build of the package" "build --release --locked -p initiald-launcher --manifest-path $T/repo/Cargo.toml" "$T/cargo.args"
@@ -33,7 +33,14 @@ has "linux: release build of the package" "build --release --locked -p initiald-
 
 out=$(cd "$T/repo" && CARGO_TARGET_DIR=$T/tgt sh "$BUILD" windows wangan-launcher wangan-io 2>&1) || bad "windows build: $out"
 has "windows: both packages for x86_64" "-p wangan-launcher -p wangan-io --target x86_64-pc-windows-gnu" "$T/cargo.args"
-has "windows: lld and SDL2's import library" "-C link-arg=-fuse-ld=lld -L $T/repo/dist/sdl2/SDL2-2.32.10/x86_64-w64-mingw32/lib" "$T/cargo.flags"
+printf '%s\n' -C link-arg=-fuse-ld=lld -L "$T/repo/dist/sdl2/SDL2-2.32.10/x86_64-w64-mingw32/lib" > "$T/want.flags"
+cmp -s "$T/want.flags" "$T/cargo.flags" && ok "windows: lld and SDL2's import library" || bad "windows: lld and SDL2's import library: $(cat "$T/cargo.flags")"
+
+# A workspace whose path has a space: SDL2's folder stays one argument.
+mkdir -p "$T/my repo"
+sh "$BUILD" --root "$T/my repo" windows x >/dev/null 2>&1 || bad "a path with a space builds"
+printf '%s\n' -C link-arg=-fuse-ld=lld -L "$T/my repo/dist/sdl2/SDL2-2.32.10/x86_64-w64-mingw32/lib" > "$T/want.flags"
+cmp -s "$T/want.flags" "$T/cargo.flags" && ok "a path with a space is one argument" || bad "a path with a space is one argument: $(cat "$T/cargo.flags")"
 [ "$(cat "$T/repo/dist/sdl2/SDL2.dll" 2>/dev/null)" = dll ] && ok "windows: SDL2.dll in dist/sdl2" || bad "windows: SDL2.dll in dist/sdl2"
 case $out in *"build-launcher: $T/tgt/x86_64-pc-windows-gnu/release/wangan-io.exe"*) ok "windows: prints each exe under CARGO_TARGET_DIR" ;; *) bad "windows: prints each exe: $out" ;; esac
 
