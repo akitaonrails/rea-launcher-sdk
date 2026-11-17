@@ -178,6 +178,11 @@ impl PadNav {
         }
     }
 
+    /// The buttons down at the last update.
+    pub(crate) fn held(&self) -> u16 {
+        self.held
+    }
+
     /// The steps pressed since the last call (and, with repeat, the held
     /// directions due again now).
     pub fn update(&mut self, now: u16) -> Vec<Nav> {

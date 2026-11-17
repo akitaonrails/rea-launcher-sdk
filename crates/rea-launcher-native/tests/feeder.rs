@@ -175,6 +175,8 @@ fn dropping_the_service_ends_its_thread_while_senders_live() {
     let service = InputService::start(PadMap::<Button>::default(), None);
     let kept = service.sender();
     std::thread::sleep(Duration::from_millis(100));
+    // no pad here (or SDL held by another test): no menu buttons down
+    assert_eq!(service.snapshot().nav, 0);
     let (done, dropped) = mpsc::channel();
     std::thread::spawn(move || {
         drop(service);

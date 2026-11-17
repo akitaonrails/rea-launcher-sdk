@@ -163,6 +163,10 @@ pub struct Snapshot {
     pub controls: Controls,
     pub feeding: bool,
     pub error: Option<String>,
+    /// The menu buttons down on any device, in XInput bits
+    /// ([`rea_launcher::pad`]; a wheel's d-pad too), for the hub's pad
+    /// navigation: `hub::Input::from_pad(&mut pad_nav, snapshot.nav)`.
+    pub nav: u16,
 }
 
 /// The input thread.
@@ -341,6 +345,7 @@ fn run<B: Control>(
             controls,
             feeding: false,
             error: None,
+            nav: list.iter().fold(0, |bits, d| bits | d.nav_bits()),
         };
         let frame = Frame {
             controls,

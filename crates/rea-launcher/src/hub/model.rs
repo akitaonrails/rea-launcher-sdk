@@ -4,7 +4,7 @@
 //! draws this and acts on the [`Effect`]s it returns.
 
 use crate::catalog::Support;
-use crate::pad::Nav;
+use crate::pad::{self, Nav, PadNav};
 
 /// One menu input, from the pad, the keyboard or a click.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,19 @@ impl Input {
             Nav::PreviousTab => Input::PreviousTab,
             Nav::NextTab => Input::NextTab,
         }
+    }
+
+    /// The hub's inputs for the pad's menu buttons now (XInput bits, the
+    /// feeder's `Snapshot::nav`): `nav`'s steps, and Y as
+    /// [`Input::Settings`], each once per press. What a launcher's
+    /// `HubBackend::pad` returns.
+    pub fn from_pad(nav: &mut PadNav, bits: u16) -> Vec<Input> {
+        let settings = bits & pad::Y != 0 && nav.held() & pad::Y == 0;
+        let mut inputs: Vec<Input> = nav.update(bits).into_iter().map(Input::from_nav).collect();
+        if settings {
+            inputs.push(Input::Settings);
+        }
+        inputs
     }
 }
 
@@ -476,6 +489,26 @@ impl TileState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pads_buttons_become_hub_inputs_once_per_press() {
+        use crate::pad::{self, PadNav};
+        let mut nav = PadNav::default();
+        assert_eq!(
+            Input::from_pad(&mut nav, pad::DPAD_DOWN | pad::Y),
+            [Input::Down, Input::Settings]
+        );
+        assert!(
+            Input::from_pad(&mut nav, pad::DPAD_DOWN | pad::Y).is_empty(),
+            "held"
+        );
+        assert_eq!(Input::from_pad(&mut nav, pad::A), [Input::Press]);
+        assert_eq!(
+            Input::from_pad(&mut nav, pad::START | pad::Y),
+            [Input::Start, Input::Settings]
+        );
+        assert!(Input::from_pad(&mut nav, 0).is_empty());
+    }
 
     const GAMES: usize = 11;
     const KEYS: [&str; 3] = ["render", "output", "deadzone"];
