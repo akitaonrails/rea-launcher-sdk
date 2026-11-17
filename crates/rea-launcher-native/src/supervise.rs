@@ -90,7 +90,8 @@ pub struct Options<'a> {
     /// How long a stopping game gets to save and quit.
     pub grace: Duration,
     /// The game's input when it is not the leader's stdin (Dolphin's
-    /// pipe); `None` uses the leader's stdin, if it was piped.
+    /// pipe); `None` uses the leader's stdin, if it was piped. A piped
+    /// stdin the sink replaces is held open until the stop.
     pub sink: Option<Box<dyn Write + Send>>,
 }
 
@@ -143,7 +144,13 @@ pub fn run(
     }
     let lines = Lines::read(pipes.stdout, pipes.stderr, feed.outputs());
     let stdin = pipes.stdin.map(|s| Box::new(s) as Box<dyn Write + Send>);
-    feed.attach(opts.sink.or(stdin));
+    // with a sink of its own, the leader's piped input is held until the
+    // feed lets go (a closed input tells a loader to quit)
+    let (sink, mut held) = match opts.sink {
+        Some(sink) => (Some(sink), stdin),
+        None => (stdin, None),
+    };
+    feed.attach(sink);
 
     let see = |watcher: &mut dyn Watcher| lines.drain(&opts.log, watcher);
     let mut ended = Ended::Itself;
@@ -163,6 +170,7 @@ pub fn run(
             }
             ended = why;
             feed.detach();
+            held.take();
             watcher.ask_to_stop(&group);
             let deadline = Instant::now() + opts.grace;
             while Instant::now() < deadline && group.exited()?.is_none() && watcher.saving(&group) {
@@ -178,6 +186,7 @@ pub fn run(
     let ran = start.elapsed();
     if ended == Ended::Itself {
         feed.detach();
+        held.take();
     }
     group.terminate();
     if ended == Ended::Itself && watcher.saves_after_exit() {

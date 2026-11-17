@@ -123,6 +123,32 @@ fn without_a_feed_the_input_stays_open_until_the_stop() {
 }
 
 #[test]
+fn with_its_own_sink_the_leaders_piped_input_still_stays_open_until_the_stop() {
+    // Dolphin's pipe is the input; the loader in front still quits when
+    // its own stdin closes
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "trap '' TERM; read line; echo \"input closed $?\""])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let tag = format!("{}-sink", std::process::id());
+    let group = Group::spawn(&mut cmd, &Tag::new("REA_NATIVE_TEST_RUN", tag)).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    later(&stop, Duration::from_millis(500));
+    let text = Text::default();
+    let opts = Options {
+        stop: &stop,
+        log: Arc::new(Mutex::new(text.clone())),
+        grace: LONG,
+        sink: Some(Box::new(Text::default())),
+    };
+    let out = supervise::run(group, &mut Hold::default(), &mut (), opts).unwrap();
+    let log = text.get();
+    assert_eq!(out.ended, Ended::Stopped, "{log}");
+    assert!(log.contains("input closed 1"), "{log}");
+}
+
+#[test]
 fn a_game_that_ignores_the_stop_is_killed_after_the_grace() {
     use std::os::unix::process::ExitStatusExt;
     let stop = Arc::new(AtomicBool::new(false));
