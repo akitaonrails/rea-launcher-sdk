@@ -147,7 +147,6 @@ pub fn run(
 
     let see = |watcher: &mut dyn Watcher| lines.drain(&opts.log, watcher);
     let mut ended = Ended::Itself;
-    let mut detached = false;
     let status = loop {
         see(watcher);
         if let Some(st) = group.exited()? {
@@ -164,7 +163,6 @@ pub fn run(
             }
             ended = why;
             feed.detach();
-            detached = true;
             watcher.ask_to_stop(&group);
             let deadline = Instant::now() + opts.grace;
             while Instant::now() < deadline && group.exited()?.is_none() && watcher.saving(&group) {
@@ -178,7 +176,7 @@ pub fn run(
         std::thread::sleep(POLL);
     };
     let ran = start.elapsed();
-    if !detached {
+    if ended == Ended::Itself {
         feed.detach();
     }
     group.terminate();
