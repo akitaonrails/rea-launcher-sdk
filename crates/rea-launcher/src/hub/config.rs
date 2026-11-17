@@ -6,7 +6,8 @@
 //! fine; an unreadable file is an error, never an empty config) and written
 //! with [`crate::fsx::write_atomic`], keeping the player's comments and
 //! unknown keys: a save re-reads the file and refuses to write over one it
-//! can't read.
+//! can't read. A BOM is kept; a file in a Windows code page is saved back
+//! as UTF-8 (its accented letters read as Latin-1, as `cfg` does).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -112,11 +113,8 @@ impl HubConfig {
     /// keys follow them. A new file starts with "# Written by the launcher.".
     pub fn render(&self, existing: &str, fields: &[PathField]) -> String {
         let managed = |key: &str| key == LIBRARY || fields.iter().any(|f| f.answers_to(key));
-        let (bom, existing) = match existing.strip_prefix(BOM) {
-            Some(rest) => (BOM.to_string(), rest),
-            None => (String::new(), existing),
-        };
-        let mut out = bom;
+        let (bom, existing) = cfg::split_bom(existing);
+        let mut out = bom.to_string();
         if existing.trim().is_empty() {
             out.push_str("# Written by the launcher.\n");
         } else {
@@ -160,8 +158,6 @@ impl HubConfig {
         }
     }
 }
-
-const BOM: char = '\u{feff}';
 
 /// The key of an active `key = value` line, set or blank.
 fn line_key(line: &str) -> Option<&str> {

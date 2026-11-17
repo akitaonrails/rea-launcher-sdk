@@ -49,7 +49,7 @@ pub fn decode(bytes: Vec<u8>) -> String {
 const BOM: char = '\u{feff}';
 
 /// `text` without a leading BOM, and the BOM to put back.
-fn split_bom(text: &str) -> (&'static str, &str) {
+pub(crate) fn split_bom(text: &str) -> (&'static str, &str) {
     match text.strip_prefix(BOM) {
         Some(rest) => ("\u{feff}", rest),
         None => ("", text),
