@@ -14,6 +14,7 @@
 //! [`Scripted`].
 
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -168,6 +169,8 @@ pub struct Snapshot {
 pub struct InputService {
     tx: Sender<Command>,
     snapshot: Arc<Mutex<Snapshot>>,
+    /// Set on drop: the thread ends even while senders live.
+    quit: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -178,13 +181,16 @@ impl InputService {
         let (tx, rx) = mpsc::channel();
         let snapshot = Arc::new(Mutex::new(Snapshot::default()));
         let shared = Arc::clone(&snapshot);
+        let quit = Arc::new(AtomicBool::new(false));
+        let quitting = Arc::clone(&quit);
         let thread = std::thread::Builder::new()
             .name("input".into())
-            .spawn(move || run(rx, shared, pad_map, paddles))
+            .spawn(move || run(rx, shared, &quitting, pad_map, paddles))
             .expect("spawn input thread");
         InputService {
             tx,
             snapshot,
+            quit,
             thread: Some(thread),
         }
     }
@@ -200,8 +206,7 @@ impl InputService {
 
 impl Drop for InputService {
     fn drop(&mut self) {
-        let (tx, _) = mpsc::channel();
-        drop(std::mem::replace(&mut self.tx, tx));
+        self.quit.store(true, Ordering::SeqCst);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -251,6 +256,7 @@ impl Fed {
 fn run<B: Control>(
     rx: Receiver<Command>,
     shared: Arc<Mutex<Snapshot>>,
+    quit: &AtomicBool,
     pad_map: PadMap<B>,
     paddles: Option<(B, B)>,
 ) {
@@ -261,7 +267,7 @@ fn run<B: Control>(
                 s.error = Some(format!("controllers unavailable: {e}"));
             }
             // still feed a game (neutral input) so it never waits on us
-            idle_without_sdl(rx, &shared);
+            idle_without_sdl(rx, &shared, quit);
             return;
         }
     };
@@ -270,7 +276,8 @@ fn run<B: Control>(
     let mut wheels = WheelSettings::default();
     let mut profile: Option<WheelProfile<B>> = None;
     let mut fed: Option<Fed> = None;
-    loop {
+    let mut last = Instant::now();
+    while !quit.load(Ordering::SeqCst) {
         loop {
             match rx.try_recv() {
                 Ok(Command::Attach { sink, wire, tuning }) => {
@@ -338,7 +345,7 @@ fn run<B: Control>(
         let frame = Frame {
             controls,
             pitch,
-            dt: TICK.as_secs_f32(),
+            dt: since(&mut last),
         };
         if let Some(f) = fed.as_mut() {
             if f.send(&frame, REFRESH).is_err() {
@@ -360,20 +367,29 @@ fn run<B: Control>(
     }
 }
 
+/// Seconds since `last`, which becomes now.
+fn since(last: &mut Instant) -> f32 {
+    let now = Instant::now();
+    let dt = now.duration_since(*last).as_secs_f32();
+    *last = now;
+    dt
+}
+
 /// Without SDL: a game still gets neutral input, so it never waits on us.
-fn idle_without_sdl(rx: Receiver<Command>, shared: &Mutex<Snapshot>) {
+fn idle_without_sdl(rx: Receiver<Command>, shared: &Mutex<Snapshot>, quit: &AtomicBool) {
     let mut fed: Option<Fed> = None;
-    let neutral = Frame {
-        dt: REFRESH.as_secs_f32(),
-        ..Frame::default()
-    };
-    loop {
+    let mut last = Instant::now();
+    while !quit.load(Ordering::SeqCst) {
         match rx.recv_timeout(REFRESH) {
             Ok(Command::Attach { sink, wire, .. }) => fed = Some(Fed::new(sink, wire, 0.0)),
             Ok(Command::Detach) => fed = None,
             Ok(Command::Output(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
+        let neutral = Frame {
+            dt: since(&mut last),
+            ..Frame::default()
+        };
         if fed
             .as_mut()
             .is_some_and(|f| f.send(&neutral, REFRESH).is_err())

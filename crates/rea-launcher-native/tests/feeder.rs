@@ -169,3 +169,20 @@ fn a_script_writes_its_steps_then_quits() {
     feed.detach();
     assert_eq!(text.get(), "p1 0 0\np1 1 0.5\nquit\n");
 }
+
+#[test]
+fn dropping_the_service_ends_its_thread_while_senders_live() {
+    let service = InputService::start(PadMap::<Button>::default(), None);
+    let kept = service.sender();
+    std::thread::sleep(Duration::from_millis(100));
+    let (done, dropped) = mpsc::channel();
+    std::thread::spawn(move || {
+        drop(service);
+        done.send(()).unwrap();
+    });
+    assert!(
+        dropped.recv_timeout(Duration::from_secs(5)).is_ok(),
+        "the drop waited for every sender"
+    );
+    drop(kept);
+}
