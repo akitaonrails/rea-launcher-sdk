@@ -129,7 +129,6 @@ else
 fi
 # Native launchers ship x86_64 Windows builds: rea-launcher-native's job objects.
 if have cargo && have wine && why=$(win_target x86_64-pc-windows-gnu x86_64-w64-mingw32-gcc); then
-  check "wine-test (x86_64, rea-launcher-native)" sh scripts/wine-test --target x86_64-pc-windows-gnu --locked -p rea-launcher-native
   # The hub launchers ship x86_64 builds: linkfarm's junctions and copies.
   check "wine-test (x86_64, rea-launcher, all features)" sh scripts/wine-test --target x86_64-pc-windows-gnu --locked -p rea-launcher --all-features
   check "wine-test (x86_64, rea-launcher-native)" sh scripts/wine-test --target x86_64-pc-windows-gnu --locked -p rea-launcher-native --features group
