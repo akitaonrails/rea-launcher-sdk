@@ -8,6 +8,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod args;
+pub mod catalog;
 pub mod cfg;
 pub mod display;
 pub mod download;
@@ -19,6 +20,7 @@ pub mod ini;
 pub mod installer;
 pub mod instance;
 pub mod ledger;
+pub mod library;
 pub mod log;
 pub mod pad;
 pub mod patch;
