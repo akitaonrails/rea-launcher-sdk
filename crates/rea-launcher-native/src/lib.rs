@@ -4,7 +4,9 @@
 //! `input/{sdl,haptic}.rs`.
 //!
 //! Features: `child` (default) for [`child::spawn_tied`]; `sdl` for
-//! [`sdl`] (links SDL2). Each `unsafe` block sits inside a safe type; the
+//! [`sdl`] (links SDL2); `group` for `group` and `supervise` (a game
+//! session's processes, one run of it); `feeder` for `feeder` (the
+//! TeknoParrot hubs' input thread; `sdl` + `group`). Each `unsafe` block sits inside a safe type; the
 //! decisions around it (rescan throttling, haptic retries, rumble rate,
 //! effect directions) are pure and tested in [`policy`]. The Wine-run
 //! launchers (i686) need none of this: they keep `rea-launcher-win32`.

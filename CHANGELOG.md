@@ -9,6 +9,32 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+### Added
+
+- `rea-launcher-native` feature `group`: `group::Group`, a game session's
+  processes started and stopped as one (the TeknoParrot hubs'
+  `proc.rs`). Linux: a process group tied to the launcher
+  (`PR_SET_PDEATHSIG`), a tag in every environment for processes that
+  leave the group, the group signalled only while its leader is unreaped
+  (`waitid(WNOWAIT)`), tagged processes signalled through pidfds, zombies
+  never counted. Windows: the leader starts suspended and joins a
+  kill-on-close job before its first instruction (a failed join is a
+  warning, the game runs), `terminate` posts `WM_CLOSE` to the leader's
+  windows, descendants and `kill_under` re-checked by creation time;
+  `windows`, `Tag::cpus`, `logical_processor_information`.
+- `rea-launcher-native` `supervise::run`: one game run from start to
+  nothing left (10 ms poll, output to the log and a `Watcher`, polite
+  stop, grace, kill, leftovers; `Hold` keeps a loader's input open until
+  the stop; `Outcome::ended_early`).
+- `rea-launcher-native` feature `feeder`: the hubs' SDL input thread
+  (`InputService`, a `Wire` per game's line format, `Ffb` for
+  windowsarcadeloader's `out` lines, `Tuning`, `find_wheel`) and the
+  `Feeding`/`Scripted` feeds; the force feedback is released when the
+  game's input breaks.
+- `rea_launcher::procs` (`descendants`, `environ_has`, `is_zombie`,
+  `cmdline`, `under_dir`) and `rea_launcher::wheel::Script` (a timed
+  input script for headless runs).
+
 ## [0.9.0] - 2026-11-13
 
 Wheel support for games that read wheels through DirectInput themselves

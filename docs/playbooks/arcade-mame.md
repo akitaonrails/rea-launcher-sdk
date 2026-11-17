@@ -116,3 +116,8 @@ game ships. Run it on its own thread; never join it from the UI thread
 the *spawning thread* exits, so spawn from a thread that waits for MAME.
 Take the single-instance guard first: a second launcher would truncate the
 running game's bridge file and start a second MAME.
+When the run is more than one process (MAME in gamescope, a loader that
+starts the game, a Wine prefix), use `group::Group` and `supervise::run`
+instead (feature `group`, the TeknoParrot hubs' session): the same tie, a
+tag that finds processes that left the group, a polite stop with a grace
+to save, and the leftovers counted and killed.

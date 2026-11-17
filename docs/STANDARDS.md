@@ -220,7 +220,10 @@ that: if a step could be done by the launcher, the launcher does it.
   emulator from a pinned commit, patched by one regenerated patch file,
   with a corresponding-source archive for GPL code. The emulator dies with
   the launcher: start it with `rea_launcher_native::child::spawn_tied`
-  (Screamer doesn't yet; a killed launcher orphans DOSBox). An arcade
+  (Screamer doesn't yet; a killed launcher orphans DOSBox), or, when a run
+  is several processes in gamescope (the TeknoParrot hubs), with
+  `group::Group` and `supervise::run` (feature `group`): tied, tagged,
+  stopped politely, nothing left. An arcade
   game on MAME follows `docs/playbooks/arcade-mame.md`. A game with a
   native Linux port (DiRT Rally) follows the native-Linux recipe in
   `docs/playbooks/new-launcher.md` ("Patterns").
