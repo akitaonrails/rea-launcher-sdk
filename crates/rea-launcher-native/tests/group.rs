@@ -169,27 +169,26 @@ fn a_running_leader_is_not_reaped_by_looking() {
 
 const ROLE: &str = "REA_NATIVE_GROUP_ROLE";
 
-/// Does nothing in an ordinary run; as the "launcher", starts a session in
-/// the folder `REA_NATIVE_GROUP_DIR` and waits until the test kills it.
+/// Does nothing in an ordinary run; as the "launcher", starts a session
+/// (the stand-in gamescope, whose game leaves the group) in the folder
+/// `REA_NATIVE_GROUP_DIR` and waits until the test kills it.
 #[test]
 fn role_launcher() {
     if env::var(ROLE).as_deref() != Ok("launcher") {
         return;
     }
     let d = PathBuf::from(env::var_os("REA_NATIVE_GROUP_DIR").unwrap());
-    let mut cmd = Command::new("sh");
-    cmd.args([
-        "-c",
-        "echo $$ > \"$0.tmp\" && mv \"$0.tmp\" \"$0\" && exec sleep 300",
-    ])
-    .arg(d.join("leader"));
-    let mut g = Group::spawn(&mut cmd, &Tag::new(VAR, d.to_string_lossy())).unwrap();
+    let mut g = Group::spawn(&mut fake_gamescope(&d), &Tag::new(VAR, d.to_string_lossy())).unwrap();
+    fs::write(d.join("leader.tmp"), g.id().to_string()).unwrap();
+    fs::rename(d.join("leader.tmp"), d.join("leader")).unwrap();
     let _ = g.wait_exit();
 }
 
 #[test]
-fn the_session_dies_with_a_killed_launcher() {
+fn the_whole_session_dies_with_a_killed_launcher() {
     let d = dir("tied");
+    let value = d.to_string_lossy().into_owned();
+    let mut decoys = [decoy(None), decoy(Some(&format!("{value}0")))];
     let mut launcher = Command::new(env::current_exe().unwrap())
         .args([
             "--exact",
@@ -205,10 +204,20 @@ fn the_session_dies_with_a_killed_launcher() {
         .spawn()
         .unwrap();
     let leader = wait_for_pid(&d.join("leader"));
-    assert!(runs(leader));
+    let escaped = wait_for_pid(&d.join("escaped"));
+    assert!(runs(leader) && runs(escaped));
     launcher.kill().unwrap();
     launcher.wait().unwrap();
-    assert!(gone_soon(leader), "the game outlived its launcher");
+    assert!(gone_soon(leader), "the leader outlived its launcher");
+    assert!(
+        gone_soon(escaped),
+        "the game that left the group outlived its launcher"
+    );
+    for d in &mut decoys {
+        assert!(d.try_wait().unwrap().is_none(), "a decoy was signalled");
+        d.kill().unwrap();
+        d.wait().unwrap();
+    }
     let _ = fs::remove_dir_all(&d);
 }
 

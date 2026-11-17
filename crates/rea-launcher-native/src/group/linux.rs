@@ -1,10 +1,11 @@
-//! Linux: a process group, the session's tag, pidfds.
+//! Linux: a process group, the session's tag, pidfds, and a sentinel for
+//! a launcher that is killed.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 
 use rea_launcher::procs;
 
@@ -16,10 +17,19 @@ pub struct Group {
     /// The leader's status once read (it stays unreaped until `finish`).
     status: Option<ExitStatus>,
     reaped: bool,
+    warning: Option<String>,
+    /// Dropped last, once the session has ended in the launcher.
+    _sentinel: Option<Sentinel>,
 }
 
 impl Group {
     pub fn spawn(cmd: &mut Command, tag: &Tag) -> io::Result<Group> {
+        let sentinel = Sentinel::start(tag);
+        let warning = sentinel.as_ref().err().map(|e| {
+            format!(
+                "no sentinel ({e}): processes that leave the group may outlive a killed launcher"
+            )
+        });
         cmd.env(tag.var, &tag.value).process_group(0);
         crate::child::tie(cmd);
         Ok(Group {
@@ -27,6 +37,8 @@ impl Group {
             tag: tag.clone(),
             status: None,
             reaped: false,
+            warning,
+            _sentinel: sentinel.ok(),
         })
     }
 
@@ -35,7 +47,7 @@ impl Group {
     }
 
     pub fn warning(&self) -> Option<&str> {
-        None
+        self.warning.as_deref()
     }
 
     pub fn take_pipes(&mut self) -> Pipes {
@@ -149,6 +161,58 @@ impl Drop for Group {
             self.kill();
             let _ = self.child.wait();
         }
+    }
+}
+
+/// What ends the session when the launcher is killed: the leader dies with
+/// it (`PR_SET_PDEATHSIG`), but Wine's processes and anything else that
+/// left the group would run on. A small shell, in a process group of its
+/// own (a terminal's Ctrl+C doesn't reach it) and without the tag, waits
+/// on a pipe only the launcher holds (close-on-exec: no game inherits it).
+/// The session ending in the launcher (the sentinel dropped) writes `done`
+/// and the shell quits;
+/// the pipe closing without it means the launcher died, and the shell
+/// kills every process carrying the tag until none is left. It finds them
+/// by pid, so a pid reused between its look and its kill could be hit:
+/// a window of a few microseconds, after the launcher died.
+struct Sentinel {
+    child: Child,
+    done: ChildStdin,
+}
+
+/// `$1` the tag's variable, `$2` its value.
+const SENTINEL: &str = r#"read -r _ && exit 0
+n=0
+while [ "$n" -lt 50 ]; do
+  pids=$(grep -lzxF -- "$1=$2" /proc/[0-9]*/environ 2>/dev/null | sed 's|^/proc/||; s|/environ$||')
+  [ -n "$pids" ] || exit 0
+  for p in $pids; do kill -9 "$p" 2>/dev/null; done
+  n=$((n + 1))
+  sleep 0.1
+done"#;
+
+impl Sentinel {
+    fn start(tag: &Tag) -> io::Result<Sentinel> {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", SENTINEL, "rea-session-sentinel", tag.var, &tag.value])
+            .env_remove(tag.var)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()?;
+        let done = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("no pipe"))?;
+        Ok(Sentinel { child, done })
+    }
+}
+
+impl Drop for Sentinel {
+    fn drop(&mut self) {
+        let _ = self.done.write_all(b"done\n");
+        let _ = self.child.wait();
     }
 }
 
