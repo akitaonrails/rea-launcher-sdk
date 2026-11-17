@@ -39,6 +39,37 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   `pins.sh` (a download cut short no longer wedges the next build).
 - `scripts/dev-check` and CI test, lint and Wine-test `rea-launcher` with
   all its features (`zip` was built by no check).
+- `rea_launcher::hub`: the pure side of a hub launcher (one launcher for a
+  series of arcade games, the TeknoParrot launchers): the window's `Model`
+  (pages incl. a launcher-defined extra page, focus, `Input` incl. Start
+  and Settings, `Input::from_nav`, `Effect`), `TileState` with `Support`
+  and `Need` (a game that still needs something, which the extra page
+  adds), `HubConfig` (library folders plus the launcher's `PathField`s and
+  their old key names; read with `cfg::read_file`, written with
+  `fsx::write_atomic`, comments and unknown keys kept, an unreadable file
+  never overwritten), `HubPaths::discover` (an empty or relative
+  `XDG_DATA_HOME`/`LOCALAPPDATA` ignored, a relative `<PREFIX>_DATA` made
+  absolute, the development build's assets), `expand_home` (`~`, `~/`,
+  `~\`, `USERPROFILE`), `typed_path`, `display_path` (paths with this
+  system's separator), `sentence`, `step`/`pick`, `size_name`, and
+  `hub::cli` (flags from the option table and the path fields, `--list`,
+  `--check [game]`, `--play`, `--set` with `--game` as its old name and
+  options required, options a game doesn't take refused
+  (`CliSpec::offers`), `--key=value`, the test options, exit codes 0/1/2).
+  A library listed twice in `launcher.cfg` is saved once; a BOM is kept.
+- `rea_launcher_ui::hub`: the hub look (docs/STANDARDS.md, the third
+  sanctioned look): `run(HubSpec, impl HubBackend)`, `HubTheme`
+  (`contrast_problems`), `HubLayout`, `HubWords`, the `HubBackend` and
+  `HubForm` traits, `Session`/`Reporter`, `ControlsView`, `ExtraPage`,
+  `fatal`; pad navigation paused while a game runs, settings rows the
+  Linux helper owns shown off on Windows with the reason, the focused
+  row's whole note shown when its row cuts it, a double click counted on
+  one tile only, close → stop the game first, then close, every error
+  also in `launcher.log`.
+  `hub::testing` (feature `testing`): a harness, `misfits`, an AccessKit
+  `dump` for golden snapshots.
+- `rea_launcher_ui::theme::condensed_bold` (Barlow Condensed Bold, now
+  embedded with the other Barlow fonts) and `widgets::Fade::Left`.
 
 ## [0.9.0] - 2026-11-13
 

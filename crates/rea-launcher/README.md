@@ -32,6 +32,7 @@ made that copy the reference.
 | `log` | `launcher.log` with a size cap; opt-in `per_run` (previous run kept as `.old`) and `timestamps` |
 | `args` | Windows command-line quoting |
 | `instance` | One launcher at a time without the play helper (native Linux): `instance::single`, a `flock` |
+| `hub` | The pure side of a hub launcher (one launcher, a series of arcade games; drawn by `rea_launcher_ui::hub`): `Model` (pages incl. the launcher's extra page, `Focus`, `Input` incl. Start/Settings and `Input::from_nav`, `Effect`, `World`), `TileState::of(catalog::Support, scanned, found, Option<Need>)`, `HubConfig` (`library` lines plus the launcher's `PathField`s and their old names; `load`/`save` via `cfg::read_file`/`fsx::write_atomic`, keeping comments and unknown keys), `HubPaths::discover(&HubDirs)`, `expand_home`, `typed_path`, `display_path` (this system's separator), `sentence`, `step`/`pick`, `size_name(gamescope::Size)`, and `hub::cli` (`parse(&CliSpec, args)` with `CliSpec::offers` refusing options a game doesn't take, `usage`, `Invocation`, exit codes) |
 | `testing` | Golden snapshots for launcher tests: `snapshot!`, version as `<version>`, CRLF-proof |
 | `catalog` | A hub launcher's game table as data: `Title` (id, main file, editions), `Edition` (`Ident::Sha256`/`ChdSha1`), `Support`, `Host::current`, `identify`, `check_table` |
 | `library` | Finding those games in library folders: `Library::scan`/`probe_dir` → `Scan { entries, problems }`, a shared `HashCache`, `Extra` images by extension and size, `chd_sha1` |
@@ -305,6 +306,22 @@ use rea_launcher::pad::{self, Nav, PadNav};
 let mut nav = PadNav::default();
 assert_eq!(nav.update(pad::DPAD_DOWN | pad::A), [Nav::Down, Nav::Press]);
 assert_eq!(nav.update(pad::DPAD_DOWN | pad::A), []); // held: nothing more
+```
+
+### hub
+
+```rust
+use rea_launcher::hub::{self, Effect, Input, Model, Page, World};
+// eleven games, two settings rows, one path field besides the library
+let mut m = Model::new(11, &["render", "deadzone"], 1, true);
+let ready = World { playable: true, has_library: true, needs: false };
+assert_eq!(m.input(Input::Press, ready), Effect::Play);
+assert_eq!(m.input(Input::Settings, ready), Effect::OpenedSettings);
+assert_eq!(m.input(Input::Right, ready), Effect::Adjust("render", 1, false));
+assert_eq!(m.input(Input::Start, ready), Effect::None);
+assert_eq!(m.page, Page::Hub);
+assert_eq!(hub::sentence("gamescope is missing."), "Gamescope is missing");
+assert_eq!(hub::pick(&[1, 2, 3], 3, 1, true), 1);
 ```
 
 ### log

@@ -5,7 +5,7 @@ look with each game's colours, art and tabs left to the launcher.
 
 | Module | What |
 |---|---|
-| `theme` | `Palette` (colour roles: base, panel, line, ink, muted, action, select, error, disabled, focus, selection; `tint` for a const translucent colour), `Metrics` (sizes and style choices, below), `install`/`install_with`, `visuals` (the egui style: dark, or light with palette-filled widgets when `Palette::is_light`), `palette`/`metrics`, `contrast`, `contrast_problems(&Palette, &Metrics)` / `Palette::pairs`, Barlow fonts (`body`, `semibold`, `condensed`, `decal`) |
+| `theme` | `Palette` (colour roles: base, panel, line, ink, muted, action, select, error, disabled, focus, selection; `tint` for a const translucent colour), `Metrics` (sizes and style choices, below), `install`/`install_with`, `visuals` (the egui style: dark, or light with palette-filled widgets when `Palette::is_light`), `palette`/`metrics`, `contrast`, `contrast_problems(&Palette, &Metrics)` / `Palette::pairs`, Barlow fonts (`body`, `semibold`, `condensed`, `condensed_bold`, `decal`) |
 | `widgets` | `chips`/`chips_with`/`chips_sized` (disabled reasons written under the row, `disabled_reasons`, `ChipSize::Compact`, one focus stop stepped with ←/→), `toggle` (disabled: keeps the saved value, reason under the label), `join_sentences`, `look_card` + `fit_title`, `game_card`, `outline_button`, `primary_button`, `progress_bar`, `folder_field`, `heading`/`field`/`note`/`error_note`, `heading_focused`/`field_focused`/`focus_bar` (SCR's row focus), `tabs_bar`, `play_plate`/`footer`, `tab_body`, `gradient`, `stripes`, `decode_jpeg`/`load_jpeg`/`hero_image`/`photo_caption`/`photo_caption_plated` (wrapped lines on a solid `panel` plate, OR's caption), `photo_credit` (one credit line, plated), `name_control` |
 | `window` | `WindowFit` (final size at creation under Wine with Wine's DPI divided out; opt-in `with_native_fit` DPI fit + recentre off Wine; `screen()` in pixels), `window_zoom`, `creation_zoom`, `SIZE`, `Layout` |
 | `spec` | `spec_row(ui, &OptionSpec, &mut String)` / `spec_row_with(…, RowOptions { disabled, steps, notes, sizes })` (`steps`: chips for a `Range`, the `unset_label` chip first, `step_choices`; `notes`: per-value notes by cfg text, shown for the chosen value in place of the description; `sizes: Some(SizeChips { screen })`: a `Size` row as chips — `Screen W×H`, `COMMON_SIZES` 1080p/1440p/4K, a saved other size, Custom with a field — `size_choices`) / `spec_path_row(…, pick)` (an `unset_label` option adds an "As the game" chip): one row per core option (toggle, chips, slider, text/size field, folder), label + description as accessible name/description, refused values say what they need; `rendered_keys(ctx)` / `mark_rendered` / `clear_rendered` for `rea_launcher::cfg::spec::assert_parity` in a GUI test |
@@ -14,6 +14,7 @@ look with each game's colours, art and tabs left to the launcher.
 | `wheel` | `WheelTab::new(setup, calibration_text)` / `draw(ui, &mut dyn WheelDevices)` / `setup`, `profile` / `calibration_text(existing)` / `calibrating()`: the Wheel tab of a DirectInput game (below) |
 | `testing` (feature) | `harness(&Palette, &Metrics, state, ui)`, `harness_sized(…, size, …)`, `click_in_view(&mut ui, role, label)` (below the fold: `scroll_to_me`, `run()`, query again, `click`, `run()` — a plain click there is silently lost) on `egui_kittest`, `checked`/`disabled`/`description`/`value`, re-exported `Queryable` |
 | `report` | A native (Linux) launcher's messages: `native_audience(Mode, Native) -> NativeAudience` (`Terminal` / `Window` / `LogOnly`; `Native::here()` reads stdin/stderr `IsTerminal` and `DISPLAY`/`WAYLAND_DISPLAY`), `Message { title, text, link: Option<Link { label, url }>, details }`, `fatal(&Palette, &Metrics, &Message, Mode) -> NativeAudience` (prints to stderr, then the window when the audience is `Window`), `show`/`show_with` (the window alone, pad navigation included), `message_ui` + `MessageState` + `Action` for drawing it inside another window or a test |
+| `hub` | The hub look (below): `run(HubSpec, impl HubBackend)`, `HubSpec { theme: HubTheme, layout: HubLayout, words: HubWords, fields, paths, version }`, the `HubBackend` and `HubForm` traits, `Session`/`Reporter`, `ControlsView`, `ExtraPage`, `Note`, `fatal` (a message before the hub, in its colours and in `launcher.log`), `install`; `hub::testing` (feature): `harness`, `wait`, `request_close`, `commands`, `misfits`, `dump`, `says`, `SIZE_720`/`SIZE_800` |
 | `pad` | `inject` and `key_for`, plus `Nav`/`PadNav` re-exported from `rea_launcher::pad` (edge detection on XInput button masks; the bits are `rea_launcher::pad::DPAD_UP` …). `inject`: d-pad → Tab/Shift+Tab/arrows, A → Space; Start, LB/RB and B come back to the launcher ; Linux: `pad::joystick::Joysticks` (`new()`, `buttons()` → the XInput mask from every `/dev/input/js*` pad, read without blocking, rescanned every 2 s; `with_scan` for fake devices in tests) |
 
 `eframe` and `egui` are re-exported (`rea_launcher_ui::egui`), so a
@@ -230,6 +231,109 @@ predicate over the rows sees one row only. Keep the contrast test too:
 The bundled Barlow fonts are under the SIL Open Font License
 (`assets/fonts/OFL.txt`, also `theme::OFL`); ship that text with the
 launcher.
+
+## The hub (a launcher for a series of arcade games)
+
+The SDK's third sanctioned look (docs/STANDARDS.md, "Three sanctioned
+looks"), from the TeknoParrot launchers (Initial D, Nintendo, Sega,
+Wangan): full screen, pad first, a hero picture with a solid column for
+the text and a row of tiles, laid out for 720 lines and zoomed to the
+window (F11 toggles full screen). The pages: the hub, Controls, Settings
+(one row per option of the launcher's `cfg::spec` table, `◀ value ▶`),
+the setup page (library folders plus the launcher's path fields) and an
+optional extra page for something a game still needs (Wangan's board
+files). The pure model behind it is `rea_launcher::hub`.
+
+What the window does, so the launcher doesn't:
+
+- scans on a thread (`HubBackend::scanner`, a closure over the
+  launcher's `rea_launcher::library::Library` and its shared `HashCache`;
+  a rescan asked for during a scan runs after it), decodes the art (`art/<slug>.jpg`,
+  `art/<slug>-tile.jpg`, JPEG, through `widgets::decode_jpeg`) on another;
+- turns keys, clicks and the pad (`HubBackend::pad`, drained every frame
+  and dropped while a game runs) into the model's inputs;
+- runs the game's `Session` on its own thread with a `Reporter`
+  (`setting_up(title, body)`, `playing()`, `stop_flag()`), shows the
+  overlay and its Stop button, and, when the window is closed while a game
+  runs, stops the game first and closes once it has ended;
+- writes every error (a session's, a save's, `launcher.cfg`'s) to
+  `launcher.log`; "couldn't start" names `launcher.log`, "stopped with an
+  error" names `HubBackend::game_log`;
+- shows paths with the system's separator (`rea_launcher::hub::display_path`),
+  the focused row's whole note when its row cuts it, and counts a double
+  click only on one tile;
+- shows settings rows the Linux helper owns (`OptionSpec::helper`) on
+  Windows too, off, with `HubWords::not_here` as the reason;
+- never overwrites a `launcher.cfg` it can't read (`HubConfig::save`
+  re-reads it first).
+
+### A hub launcher's code
+
+```rust
+use rea_launcher::catalog::Support;
+use rea_launcher::hub::{HubConfig, HubDirs, HubPaths, Need, PathField, PathKind};
+use rea_launcher::library::{HashCache, Library, Scan};
+use rea_launcher_ui::hub::{self, HubBackend, HubForm, HubLayout, HubSpec, HubTheme, HubWords};
+
+const THEME: HubTheme = HubTheme { /* the launcher's colours */ brand: "ID",
+    title: "Initial D Launcher", app_id: "rea-initiald", ..};
+const NAOMI2_BIOS: PathField = PathField { key: "naomi2_bios", kind: PathKind::File,
+    flag: "--naomi2-bios", /* words of its setup row */ .. };
+static FIELDS: [PathField; 1] = [NAOMI2_BIOS];
+
+struct Launcher { paths: HubPaths, cache: HashCache, input: InputService /* … */ }
+
+impl HubBackend for Launcher {
+    type Library = Scan<Game>;      // the launcher's scan result
+    type Form = Form;               // a game's settings (impl HubForm)
+    fn games(&self) -> &[hub::HubGame] { &HUB_GAMES }
+    fn options(&self) -> &'static [OptionSpec] { settings::OPTIONS }
+    fn support(&self, game: usize) -> Support { /* the catalog's, on this host */ }
+    fn scanner(&self) -> hub::Scanner<Scan<Game>> {
+        let library = Library::new(GAMES).with_cache(self.cache.clone());
+        Box::new(move |roots| library.scan(roots))
+    }
+    fn found(scan: &Scan<Game>, game: usize) -> Option<hub::Found> { /* dir, edition */ }
+    fn unknown(scan: &Scan<Game>) -> Vec<String> { /* "unknown build … in …" */ }
+    fn form(&mut self, game: usize, screen: Option<(u32, u32)>) -> Form { /* load */ }
+    fn session(&mut self, game: usize, scan: &Scan<Game>, config: &HubConfig,
+               screen: Option<(u32, u32)>) -> Result<hub::Session, String> {
+        let prepared = /* everything the thread needs, cloned */;
+        Ok(Box::new(move |r: &hub::Reporter| {
+            if first_start { r.setting_up("Building lindbergh-loader…", "This takes a few minutes."); }
+            r.playing();
+            supervise(prepared, r.stop_flag())   // rea_launcher_native::supervise
+        }))
+    }
+    fn controls(&self) -> hub::ControlsView { /* from the input thread's snapshot */ }
+    fn pad(&mut self) -> Vec<rea_launcher::hub::Input> { /* Input::from_nav, Y as Settings */ }
+}
+
+fn window(paths: HubPaths, launcher: Launcher) -> Result<(), String> {
+    hub::run(HubSpec { theme: THEME, layout: HubLayout::DEFAULT,
+        words: HubWords { setup_intro: "…", folders_button: "Folders and BIOS", ..HubWords::DEFAULT },
+        fields: &FIELDS, paths, version: env!("CARGO_PKG_VERSION") }, launcher)
+}
+```
+
+What stays in the launcher (roughly 600–900 lines instead of the 4 500 of
+each copy's `ui.rs`, `ui/model.rs`, `ui/form.rs` and `ui/theme.rs`): the
+`HubTheme` constant, the games as `HubGame`s, the `HubBackend` impl (its
+scan, its form over its option table, the session it prepares, its
+controls view and pad), its path fields and words, and its window tests
+through `hub::testing`. Before the window: the CLI
+(`rea_launcher::hub::cli`), `rea_launcher::instance::single`, and
+`hub::fatal` for anything refused.
+
+### Tests
+
+`hub::testing::harness(spec, backend, SIZE_720)` drives the real window
+headless (fake games: folders named after their slug in a temp library).
+Keep, per launcher: every control fits at `SIZE_720` and `SIZE_800`
+(`misfits` on each page), pad and keyboard navigation, every settings row
+reaching its file, close → stop, an error in `launcher.log`, and golden
+`dump`s of each page (the AccessKit tree with positions) under
+`tests/snapshots/`.
 
 ## Use
 
