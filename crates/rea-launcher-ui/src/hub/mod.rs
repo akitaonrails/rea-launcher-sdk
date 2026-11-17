@@ -42,6 +42,9 @@ pub use theme::{
 
 use eframe::egui;
 use rea_launcher::hub::{HubPaths, PathField};
+use rea_launcher::log::Log;
+
+use crate::report::{self, Link, NativeAudience};
 
 /// What a hub launcher is, besides its backend.
 #[derive(Debug, Clone)]
@@ -77,6 +80,33 @@ pub fn run<B: HubBackend>(spec: HubSpec, backend: B) -> Result<(), String> {
         }),
     )
     .map_err(|e| format!("the window could not open: {e}"))
+}
+
+/// A message before (or instead of) the hub: a refused command, another
+/// launcher already open, a game that can't start from `--play`. Written to
+/// `log`, printed to stderr, and shown in a window in the hub's colours
+/// when someone may be watching ([`report::fatal`]); `link` is the issue
+/// form, when it helps.
+pub fn fatal(
+    theme: &HubTheme,
+    log: &Log,
+    text: &str,
+    link: Option<Link<'_>>,
+    mode: report::Mode,
+) -> NativeAudience {
+    log.line(&format!("error: {text}"));
+    let message = report::Message {
+        title: theme.title,
+        text,
+        link,
+        details: None,
+    };
+    report::fatal(
+        &theme.palette(),
+        &crate::theme::Metrics::DEFAULT,
+        &message,
+        mode,
+    )
 }
 
 struct Window<B: HubBackend>(HubApp<B>);

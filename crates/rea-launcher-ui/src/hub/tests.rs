@@ -1314,3 +1314,26 @@ fn a_window_too_small_for_the_layout_has_misfits() {
         "{misfits:#?}"
     );
 }
+
+#[test]
+fn a_message_before_the_window_reaches_the_log() {
+    let t = tmp("fatal");
+    let log = rea_launcher::log::Log::new(t.join("launcher.log"));
+    let mode = crate::report::Mode::Command { interactive: false };
+    let who = super::fatal(
+        &THEME,
+        &log,
+        "Arcade Racer 9 is not a game here.",
+        None,
+        mode,
+    );
+    assert_ne!(
+        who,
+        crate::report::NativeAudience::Window,
+        "a script sees no window"
+    );
+    assert_eq!(
+        std::fs::read_to_string(log.path()).unwrap(),
+        "error: Arcade Racer 9 is not a game here.\n"
+    );
+}
