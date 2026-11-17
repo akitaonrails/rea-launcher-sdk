@@ -28,6 +28,11 @@ pub enum Kind {
     },
     /// A whole number in `min..=max`.
     Range { min: u32, max: u32 },
+    /// A number with `places` decimals, rounded to them, in `min..=max`
+    /// counted in steps of `10^-places`: a dead zone of 0–0.30 is
+    /// `Decimal { min: 0, max: 30, places: 2 }`. Written back with all
+    /// its places ([`Decimal`]'s `Display`).
+    Decimal { min: i32, max: i32, places: u8 },
     /// A folder or file.
     Path,
     /// Free text.
@@ -219,6 +224,13 @@ impl OptionSpec {
                 words.extend(self.special_words().map(str::to_owned));
                 join_or(&words.iter().map(String::as_str).collect::<Vec<_>>())
             }
+            Kind::Decimal { min, max, places } => {
+                format!(
+                    "{} to {}",
+                    Decimal::new(min, places),
+                    Decimal::new(max, places)
+                )
+            }
             Kind::Path => "a folder or file".to_owned(),
             Kind::Text => "text".to_owned(),
         }
@@ -238,6 +250,13 @@ impl OptionSpec {
                 let mut parts = vec![format!("{min}-{max}")];
                 parts.extend(self.special_words().map(str::to_owned));
                 format!("<{}>", parts.join("|"))
+            }
+            Kind::Decimal { min, max, places } => {
+                format!(
+                    "<{}-{}>",
+                    Decimal::new(min, places),
+                    Decimal::new(max, places)
+                )
             }
             Kind::Path => "<folder>".to_owned(),
             Kind::Text => "<text>".to_owned(),
@@ -285,6 +304,9 @@ impl OptionSpec {
                 .ok()
                 .filter(|n| (min..=max).contains(n) || special(n))
                 .map(Value::Number),
+            Kind::Decimal { min, max, places } => Decimal::parse(value, places)
+                .filter(|d| (min..=max).contains(&d.units))
+                .map(Value::Decimal),
             Kind::Path | Kind::Text => Some(Value::Text(value.trim())),
         };
         parsed.ok_or_else(|| Rejected::needs(self.needs()))
@@ -299,8 +321,47 @@ pub enum Value<'a> {
     Choice(&'static str),
     Size(Resolution),
     Number(u32),
+    Decimal(Decimal),
     /// A path or text, trimmed.
     Text(&'a str),
+}
+
+/// A [`Kind::Decimal`] value: `units` steps of `10^-places` (0.05 is 5
+/// units of 2 places). `Display` writes every place: `0.05`, `0.30`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Decimal {
+    pub units: i32,
+    pub places: u8,
+}
+
+impl Decimal {
+    pub const fn new(units: i32, places: u8) -> Decimal {
+        Decimal { units, places }
+    }
+
+    /// `text` as a number rounded to `places`; `None` when it isn't a
+    /// finite number or doesn't fit.
+    pub fn parse(text: &str, places: u8) -> Option<Decimal> {
+        let v: f64 = text.trim().parse().ok().filter(|v: &f64| v.is_finite())?;
+        let units = (v * 10f64.powi(i32::from(places))).round();
+        (f64::from(i32::MIN)..=f64::from(i32::MAX))
+            .contains(&units)
+            .then(|| Decimal::new(units as i32, places))
+    }
+
+    pub fn as_f64(self) -> f64 {
+        f64::from(self.units) / 10f64.powi(i32::from(self.places))
+    }
+
+    pub fn as_f32(self) -> f32 {
+        self.as_f64() as f32
+    }
+}
+
+impl std::fmt::Display for Decimal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:.*}", usize::from(self.places), self.as_f64())
+    }
 }
 
 fn join_or(words: &[&str]) -> String {
@@ -837,6 +898,66 @@ mod tests {
         assert_eq!(VSYNC.parse("TRUE"), Ok(Value::Choice("on")));
         assert_eq!(VSYNC.parse("half"), Ok(Value::Choice("adaptive")));
         assert_eq!(VSYNC.needs(), "on, off or adaptive", "aliases stay silent");
+    }
+
+    #[test]
+    fn a_decimal_is_kept_to_its_places_within_its_range() {
+        const DEADZONE: OptionSpec = OptionSpec::new(
+            "deadzone",
+            Kind::Decimal {
+                min: 0,
+                max: 30,
+                places: 2,
+            },
+            "Dead zone",
+            "How far the stick moves first.",
+        );
+        let parsed = |v| match DEADZONE.parse(v) {
+            Ok(Value::Decimal(d)) => Some(d),
+            _ => None,
+        };
+        let five = parsed(" 0.05 ").unwrap();
+        assert_eq!((five.units, five.places), (5, 2));
+        assert_eq!(five.to_string(), "0.05");
+        assert!((five.as_f32() - 0.05).abs() < 1e-6);
+        assert_eq!(parsed("0.3").unwrap().to_string(), "0.30");
+        assert_eq!(parsed("0").unwrap().to_string(), "0.00");
+        assert_eq!(
+            parsed("0.123").unwrap().to_string(),
+            "0.12",
+            "rounded to its places"
+        );
+        for bad in ["0.9", "-0.01", "0.31", "nan", "inf", "", "five"] {
+            assert_eq!(
+                DEADZONE.parse(bad),
+                Err(Rejected::needs("0.00 to 0.30")),
+                "{bad}"
+            );
+        }
+        assert_eq!(DEADZONE.placeholder(), "<0.00-0.30>");
+        let negative = Decimal {
+            units: -125,
+            places: 1,
+        };
+        assert_eq!(negative.to_string(), "-12.5");
+        assert_eq!(
+            Decimal {
+                units: -5,
+                places: 2
+            }
+            .to_string(),
+            "-0.05"
+        );
+        assert_eq!(
+            Decimal {
+                units: 7,
+                places: 0
+            }
+            .to_string(),
+            "7"
+        );
+        assert!(template("", &[DEADZONE]).contains("# Values: 0.00 to 0.30."));
+        assert!(usage(&[DEADZONE], KeyStyle::Underscore).contains("--deadzone <0.00-0.30>"));
     }
 
     #[test]

@@ -388,6 +388,28 @@ mod tests {
     }
 
     #[test]
+    fn a_decimal_option_is_checked_on_the_command_line() {
+        const STICK: &[OptionSpec] = &[OptionSpec::new(
+            "stick_deadzone",
+            Kind::Decimal {
+                min: 0,
+                max: 30,
+                places: 2,
+            },
+            "Dead zone",
+            "How far the stick moves first.",
+        )];
+        let spec = CliSpec {
+            options: STICK,
+            ..SPEC
+        };
+        let parse_d = |v: &[&str]| parse(&spec, v.iter().map(|s| s.to_string()));
+        assert!(parse_d(&["--stick-deadzone", "0.05", "--play", "sr3"]).is_ok());
+        let e = parse_d(&["--stick-deadzone", "0.9", "--play", "sr3"]).unwrap_err();
+        assert!(e.contains("bad value for --stick-deadzone: 0.9"), "{e}");
+    }
+
+    #[test]
     fn game_is_the_old_name_of_set_and_needs_options() {
         let inv = parse_v(&["--game", "or2sdx", "--deadzone", "4"]).unwrap();
         assert_eq!(inv.mode, Mode::Set("or2sdx".into()));

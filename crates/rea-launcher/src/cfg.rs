@@ -17,7 +17,7 @@
 
 pub mod spec;
 
-pub use spec::{Kind, OptionSpec, Value};
+pub use spec::{Decimal, Kind, OptionSpec, Value};
 
 use std::io;
 use std::ops::RangeInclusive;

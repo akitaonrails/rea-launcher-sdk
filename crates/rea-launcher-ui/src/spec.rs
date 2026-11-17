@@ -223,7 +223,7 @@ fn row(
                     control = Some(size_chips(ui, spec, value, screen, disabled));
                 });
             }
-            Kind::Size { .. } | Kind::Text => {
+            Kind::Size { .. } | Kind::Decimal { .. } | Kind::Text => {
                 ui.horizontal_top(|ui| {
                     widgets::field(ui, spec.label);
                     control = Some(text_field(ui, spec, value, 320.0, disabled.is_none()));
