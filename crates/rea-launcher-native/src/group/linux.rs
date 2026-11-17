@@ -15,6 +15,7 @@ pub struct Group {
     tag: Tag,
     /// The leader's status once read (it stays unreaped until `finish`).
     status: Option<ExitStatus>,
+    reaped: bool,
 }
 
 impl Group {
@@ -25,6 +26,7 @@ impl Group {
             child: cmd.spawn()?,
             tag: tag.clone(),
             status: None,
+            reaped: false,
         })
     }
 
@@ -104,6 +106,7 @@ impl Group {
 
     pub fn finish(mut self) -> io::Result<Finished> {
         let status = self.child.wait()?;
+        self.reaped = true;
         let left = self.tagged();
         for p in &left {
             p.signal(libc::SIGKILL);
@@ -135,6 +138,17 @@ impl Group {
         let read = |what| fs::read(format!("/proc/{pid}/{what}")).unwrap_or_default();
         procs::environ_has(&read("environ"), self.tag.var, &self.tag.value)
             && !procs::is_zombie(&String::from_utf8_lossy(&read("stat")))
+    }
+}
+
+/// A group dropped without `finish` (an error mid-run) takes its session
+/// along, as a closed job does on Windows.
+impl Drop for Group {
+    fn drop(&mut self) {
+        if !self.reaped {
+            self.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 

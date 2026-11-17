@@ -98,9 +98,9 @@ pub struct Finished {
     pub leftovers: usize,
 }
 
-/// A running session. Dropping it without [`Group::finish`] kills it on
-/// Windows (the job closes); on Linux the leader stays unreaped until the
-/// launcher exits.
+/// A running session. Dropping it without [`Group::finish`] kills it (on
+/// Linux the group and its tagged processes, on Windows what the job
+/// holds).
 pub struct Group(imp::Group);
 
 impl Group {

@@ -211,3 +211,14 @@ fn the_session_dies_with_a_killed_launcher() {
     assert!(gone_soon(leader), "the game outlived its launcher");
     let _ = fs::remove_dir_all(&d);
 }
+
+#[test]
+fn a_dropped_session_takes_its_processes_along() {
+    let d = dir("dropped");
+    let g = Group::spawn(&mut fake_gamescope(&d), &Tag::new(VAR, d.to_string_lossy())).unwrap();
+    let escaped = wait_for_pid(&d.join("escaped"));
+    let leader = g.id();
+    drop(g);
+    assert!(gone_soon(escaped) && gone_soon(leader));
+    let _ = fs::remove_dir_all(&d);
+}

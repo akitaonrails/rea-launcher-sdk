@@ -59,10 +59,14 @@ impl Group {
         let job = match Job::create().and_then(|j| j.assign(handle).map(|()| j)) {
             Ok(job) => Some(job),
             Err(e) => {
-                warning = Some(format!(
+                let ungrouped = format!(
                     "the game's processes couldn't be grouped ({e}): \
                      they may outlive the launcher"
-                ));
+                );
+                warning = Some(match warning {
+                    Some(w) => format!("{w}; {ungrouped}"),
+                    None => ungrouped,
+                });
                 None
             }
         };
