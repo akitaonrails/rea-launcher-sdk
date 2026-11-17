@@ -14,6 +14,7 @@ pub mod download;
 pub mod env;
 pub mod ffb;
 pub mod fsx;
+pub mod hub;
 pub mod identify;
 pub mod ini;
 pub mod installer;
