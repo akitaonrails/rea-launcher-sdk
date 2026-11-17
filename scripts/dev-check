@@ -57,6 +57,9 @@ if have cargo; then
   check "cargo fmt" cargo fmt --all --check
   check "cargo test (host)" cargo test --workspace --locked
   check "cargo clippy (host)" cargo clippy --workspace --all-targets --locked -- -D warnings
+  # rea-launcher's optional modules (zip, linkfarm): no crate here enables them.
+  check "cargo test (rea-launcher, all features)" cargo test -p rea-launcher --all-features --locked
+  check "cargo clippy (rea-launcher, all features)" cargo clippy -p rea-launcher --all-features --all-targets --locked -- -D warnings
   # rea-launcher-native's `sdl` feature links the system SDL2.
   if have pkg-config && pkg-config --exists sdl2; then
     check "cargo test (rea-launcher-native, sdl)" cargo test -p rea-launcher-native --features sdl --locked
@@ -66,6 +69,7 @@ if have cargo; then
   fi
   if why=$(win_target i686-pc-windows-gnu i686-w64-mingw32-gcc); then
     check "cargo clippy (i686 Windows)" cargo clippy --workspace --all-targets --locked --target i686-pc-windows-gnu -- -D warnings
+    check "cargo clippy (rea-launcher, all features, i686 Windows)" cargo clippy -p rea-launcher --all-features --all-targets --locked --target i686-pc-windows-gnu -- -D warnings
   else
     skip "cargo clippy (i686 Windows)" "$why"
   fi
@@ -116,12 +120,15 @@ elif ! have wine; then
   skip "wine-test" "wine not installed"
 elif why=$(win_target i686-pc-windows-gnu i686-w64-mingw32-gcc); then
   check "wine-test (i686)" sh scripts/wine-test --locked --workspace
+  check "wine-test (i686, rea-launcher, all features)" sh scripts/wine-test --locked -p rea-launcher --all-features
 else
   skip "wine-test" "$why"
 fi
 # Native launchers ship x86_64 Windows builds: rea-launcher-native's job object.
 if have cargo && have wine && why=$(win_target x86_64-pc-windows-gnu x86_64-w64-mingw32-gcc); then
   check "wine-test (x86_64, rea-launcher-native)" sh scripts/wine-test --target x86_64-pc-windows-gnu --locked -p rea-launcher-native
+  # The hub launchers ship x86_64 builds: linkfarm's junctions and copies.
+  check "wine-test (x86_64, rea-launcher, all features)" sh scripts/wine-test --target x86_64-pc-windows-gnu --locked -p rea-launcher --all-features
 elif have cargo && have wine; then
   skip "wine-test (x86_64, rea-launcher-native)" "$why"
 fi

@@ -8,18 +8,24 @@
 #![doc = include_str!("../README.md")]
 
 pub mod args;
+pub mod catalog;
 pub mod cfg;
+pub mod cpus;
 pub mod display;
 pub mod download;
 pub mod env;
 pub mod ffb;
 pub mod fsx;
+pub mod gamescope;
 pub mod hub;
 pub mod identify;
 pub mod ini;
 pub mod installer;
 pub mod instance;
 pub mod ledger;
+pub mod library;
+#[cfg(feature = "linkfarm")]
+pub mod linkfarm;
 pub mod log;
 pub mod pad;
 pub mod patch;
@@ -27,7 +33,9 @@ pub mod paths;
 pub mod pe;
 pub mod runtime;
 pub mod saves;
+pub mod session;
 pub mod testing;
+pub mod wal;
 pub mod wheel;
 pub mod wine;
 

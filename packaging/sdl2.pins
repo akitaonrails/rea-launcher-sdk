@@ -1,0 +1,4 @@
+# SDL2 for the Windows build of a native launcher (zlib licence), in
+# pins.sh format, fetched by build-launcher.sh: the MinGW development
+# package, whose x86_64-w64-mingw32/ holds SDL2.dll and the import library.
+sdl2-mingw https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-mingw.tar.gz 83a5d74012311edc3c0d40ea6faecbe57ad692aa033fa5dc273cc937e3938ff2

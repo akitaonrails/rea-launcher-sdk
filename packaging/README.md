@@ -13,6 +13,8 @@ busybox) and is vendored into each launcher by `scripts/sdk-sync`.
 | `appimage/wine/` | Wine's licence and source notes, shipped in every Wine AppImage |
 | `smoke-package.sh` | Checks a package folder or zip against an allowlist |
 | `release-notes.sh` | Prints a version's CHANGELOG section; `--since vX` adds every section after vX (a fix-forward release) |
+| `build-launcher.sh` | Builds a native launcher's packages for Linux or x86_64 Windows; `sdl2` only fetches SDL2 (see below) |
+| `sdl2.pins` | The SDL2 MinGW package a native launcher's Windows build links and ships |
 | `../.github/workflows/launcher-ci.yml` | Reusable: checks, build, package, allowlist, upload |
 | `../.github/workflows/launcher-release.yml` | Reusable: tag/version check, SHA256SUMS, attestation, release |
 | `../.github/workflows/upstream-watch.yml` | Reusable: opens an issue when an upstream release no longer matches its pin |
@@ -356,6 +358,24 @@ instead of the newest), `base`, `sdk-dir`, `sdk-repository`, `runs-on`.
 
 The SDK side, `compat.yml`, builds every launcher's default branch against
 the SDK under test before a tag exists (CONTRIBUTING.md, "Before tagging").
+
+## Building a native launcher
+
+A launcher built on `rea-launcher-native` with the `sdl` feature (the
+TeknoParrot hub launchers) links SDL2. `build-launcher.sh` builds it:
+
+```sh
+sdk/packaging/build-launcher.sh --root . linux initiald-launcher
+sdk/packaging/build-launcher.sh --root . windows initiald-launcher   # + dist/sdl2/SDL2.dll
+sdk/packaging/build-launcher.sh --root . sdl2                        # SDL2 only, for wine-test
+```
+
+The Windows build fetches `sdl2.pins`' MinGW package through `pins.sh`
+into `dist/sdl2/` (checked, cached, mirrors; a download cut short is never
+taken for the file), links with lld and SDL2's import library, and copies
+`SDL2.dll` to `dist/sdl2/` for the package. A launcher's own
+`scripts/build-launcher.sh` stays as a two-line wrapper (Wangan adds its
+I/O board's target around it); `$SDL2_PINS` points at another pin file.
 
 ## Linking with lld
 
