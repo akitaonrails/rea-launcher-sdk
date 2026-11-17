@@ -41,7 +41,7 @@ has_line "skips the secret scan without gitleaks" "SKIP secret scan: gitleaks no
 
 PATH=$T/full "$SH" "$F/scripts/dev-check" --list >"$T/out" 2>"$T/err"
 for c in "secret scan (prepush-scan)" "cargo clippy (i686 Windows)" "cargo deny" "packaging and scripts tests (dash)" "shellcheck" "actionlint" "wine-test (i686)" \
-  "cargo test (rea-launcher-native, sdl)" "cargo clippy (rea-launcher-native, sdl)" "cargo clippy (rea-launcher-native, x86_64 Windows)" "wine-test (x86_64, rea-launcher-native)"; do
+  "cargo test (rea-launcher-native, group)" "cargo test (rea-launcher-native, sdl, feeder)" "cargo clippy (rea-launcher-native, sdl, feeder)" "cargo clippy (rea-launcher-native, x86_64 Windows)" "wine-test (x86_64, rea-launcher-native)"; do
   has_line "runs $c when its tools exist" "RUN  $c" "$T/out"
 done
 [ ! -s "$T/err" ] && ok "nothing skipped with every tool" || bad "nothing skipped with every tool: $(cat "$T/err")"
