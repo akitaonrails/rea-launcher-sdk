@@ -234,3 +234,29 @@ mod window {
         }
     }
 }
+
+#[test]
+fn a_supervised_stop_closes_the_window_and_waits_for_the_save() {
+    use rea_launcher_native::supervise::{self, Ended, Hold, Options};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let d = dir("supervised");
+    let g = Group::spawn(&mut helper("window", &d), &Tag::new("UNUSED", "x")).unwrap();
+    wait_for(&d.join("ready"));
+    // the window's Stop, pressed as soon as the game runs
+    let stop = AtomicBool::new(true);
+    let opts = Options {
+        stop: &stop,
+        log: Arc::new(Mutex::new(std::io::sink())),
+        grace: Duration::from_secs(20),
+        sink: None,
+    };
+    let started = Instant::now();
+    let out = supervise::run(g, &mut Hold::default(), &mut (), opts).unwrap();
+    assert_eq!(out.ended, Ended::Stopped);
+    assert!(out.status.success(), "killed, not closed: {:?}", out.status);
+    assert!(started.elapsed() < Duration::from_secs(20));
+    assert_eq!(wait_for(&d.join("closed")), "saved");
+    let _ = fs::remove_dir_all(&d);
+}

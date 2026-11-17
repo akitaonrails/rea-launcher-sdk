@@ -18,3 +18,5 @@ pub mod group;
 pub mod policy;
 #[cfg(feature = "sdl")]
 pub mod sdl;
+#[cfg(all(feature = "group", any(target_os = "linux", windows)))]
+pub mod supervise;
