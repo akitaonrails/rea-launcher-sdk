@@ -24,6 +24,7 @@ pub mod pad;
 pub mod patch;
 pub mod paths;
 pub mod pe;
+pub mod procs;
 pub mod runtime;
 pub mod saves;
 pub mod testing;
