@@ -125,9 +125,67 @@ pub enum Op {
 
 /// The runtime `rt` for game folder `src`: `Dir(rt)`, then each entry
 /// placed per `policy`; the [`Place::Open`] folders are listed in turn.
+/// A folder the policy links but a seed goes into (or below) is opened
+/// instead, so the seed lands in the runtime, not in the dump.
 /// `ls` lists a folder ([`list`], or a fake in tests); a folder it cannot
 /// list is an error, not a silent gap.
 pub fn plan(
+    src: &Path,
+    rt: &Path,
+    policy: &dyn Policy,
+    ls: &dyn Fn(&Path) -> io::Result<Vec<Item>>,
+) -> io::Result<Vec<Op>> {
+    let mut seeds: Vec<String> = Vec::new();
+    loop {
+        let opening = Opening {
+            policy,
+            seeds: &seeds,
+        };
+        let ops = plan_once(src, rt, &opening, ls)?;
+        let mut found: Vec<String> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Seed { to, .. } => to.strip_prefix(rt).ok(),
+                _ => None,
+            })
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .collect();
+        found.sort();
+        found.dedup();
+        // an opened folder may hold more seeds: plan again until none is new
+        if found == seeds {
+            return Ok(ops);
+        }
+        seeds = found;
+    }
+}
+
+/// `policy`, with the linked folders on the way to a seed's folder opened.
+struct Opening<'a> {
+    policy: &'a dyn Policy,
+    /// The seeds' folders, relative to the runtime, `/`-separated.
+    seeds: &'a [String],
+}
+
+impl Policy for Opening<'_> {
+    fn place(&self, rel: &str, item: &Item) -> Place {
+        let place = self.policy.place(rel, item);
+        let on_the_way = |seed: &String| {
+            seed == rel || seed.strip_prefix(rel).is_some_and(|r| r.starts_with('/'))
+        };
+        if place == Place::Link && item.dir && self.seeds.iter().any(on_the_way) {
+            Place::Open
+        } else {
+            place
+        }
+    }
+
+    fn seed(&self, rel: &str) -> Option<&str> {
+        self.policy.seed(rel)
+    }
+}
+
+fn plan_once(
     src: &Path,
     rt: &Path,
     policy: &dyn Policy,
@@ -186,34 +244,105 @@ pub enum Occupied {
 }
 
 /// Carries out a plan. Idempotent; never writes to a link's target and
-/// never replaces a file the game wrote.
+/// never replaces a file the game wrote. Inside the folders the plan's
+/// [`Op::Dir`]s make (the runtime: put the launcher's own ops in the same
+/// call), a write whose path passes through a link is refused: it would
+/// land in the game folder.
 pub fn apply(ops: &[Op], occupied: Occupied) -> io::Result<()> {
-    for op in ops {
-        match op {
-            Op::Dir(d) => real_dir(d)?,
-            Op::Link { target, at } => link(target, at, occupied)?,
-            Op::CopyOnce { from, to } => {
-                if from.is_file() && replaceable(to)? {
-                    fsx::install_copy(from, to)?;
-                }
-            }
-            Op::TreeOnce { from, to } => {
-                if from.is_dir() && replaceable(to)? {
-                    copy_tree(from, to)?;
-                }
-            }
-            Op::Seed { from, to } => seed(from, to)?,
-            Op::Refresh { from, to, exec } => {
+    let roots = roots(ops);
+    let mut copies = Records::default();
+    let done = ops
+        .iter()
+        .try_for_each(|op| apply_one(op, occupied, &roots, &mut copies));
+    // what was copied before an error is recorded too
+    copies.save().and(done)
+}
+
+fn apply_one(
+    op: &Op,
+    occupied: Occupied,
+    roots: &[&Path],
+    #[cfg_attr(not(windows), allow(unused_variables))] copies: &mut Records,
+) -> io::Result<()> {
+    let (to, itself) = match op {
+        Op::Link { .. } => (None, false),
+        Op::Seed { to, .. } => (Some(to), true),
+        Op::Dir(to)
+        | Op::CopyOnce { to, .. }
+        | Op::TreeOnce { to, .. }
+        | Op::Refresh { to, .. }
+        | Op::Archive { to, .. } => (Some(to), false),
+    };
+    if let Some(to) = to {
+        no_link_on_the_way(to, itself, roots)?;
+    }
+    match op {
+        Op::Dir(d) => real_dir(d)?,
+        #[cfg(windows)]
+        Op::Link { target, at } => link(target, at, occupied, copies.of(at, roots))?,
+        #[cfg(not(windows))]
+        Op::Link { target, at } => link(target, at, occupied)?,
+        Op::CopyOnce { from, to } => {
+            if from.is_file() && replaceable(to)? {
                 fsx::install_copy(from, to)?;
-                #[cfg(unix)]
-                if *exec {
-                    use std::os::unix::fs::PermissionsExt;
-                    fs::set_permissions(to, fs::Permissions::from_mode(0o755))?;
-                }
-                #[cfg(not(unix))]
-                let _ = exec;
             }
-            Op::Archive { files, to } => archive(files, to)?,
+        }
+        Op::TreeOnce { from, to } => {
+            if from.is_dir() && replaceable(to)? {
+                copy_tree(from, to)?;
+            }
+        }
+        Op::Seed { from, to } => seed(from, to)?,
+        Op::Refresh { from, to, exec } => {
+            fsx::install_copy(from, to)?;
+            #[cfg(unix)]
+            if *exec {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(to, fs::Permissions::from_mode(0o755))?;
+            }
+            #[cfg(not(unix))]
+            let _ = exec;
+        }
+        Op::Archive { files, to } => archive(files, to)?,
+    }
+    Ok(())
+}
+
+/// The outermost folders `ops` make: the runtime folders.
+fn roots(ops: &[Op]) -> Vec<&Path> {
+    let dirs: Vec<&Path> = ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Dir(d) => Some(d.as_path()),
+            _ => None,
+        })
+        .collect();
+    dirs.iter()
+        .filter(|d| !dirs.iter().any(|o| o != *d && d.starts_with(o)))
+        .copied()
+        .collect()
+}
+
+/// An error when a folder between the runtime folder holding `to` and `to`
+/// (`to` too, when `itself`) is a link.
+fn no_link_on_the_way(to: &Path, itself: bool, roots: &[&Path]) -> io::Result<()> {
+    let Some(root) = roots.iter().find(|r| to.starts_with(r)) else {
+        return Ok(());
+    };
+    let first = if itself { Some(to) } else { to.parent() };
+    for dir in first.into_iter().flat_map(Path::ancestors) {
+        if dir == *root || !dir.starts_with(root) {
+            break;
+        }
+        if fs::symlink_metadata(dir).is_ok_and(|m| is_link(&m)) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{}: the launcher won't write through the link {} (it leads into the game folder)",
+                    to.display(),
+                    dir.display()
+                ),
+            ));
         }
     }
     Ok(())
@@ -330,18 +459,30 @@ fn link(target: &Path, at: &Path, occupied: Occupied) -> io::Result<()> {
 }
 
 /// Windows: a folder is a directory junction, a file a copy kept in step.
+/// A real file where a file's copy goes is mirrored over only when it is
+/// the copy the launcher made, untouched since (`copies`), or already the
+/// same as the game folder's file (an older launcher's copy); anything else
+/// is the game's, or an older [`Op::CopyOnce`], and kept or refused.
 #[cfg(windows)]
-fn link(target: &Path, at: &Path, occupied: Occupied) -> io::Result<()> {
+fn link(target: &Path, at: &Path, occupied: Occupied, copies: &mut Copies) -> io::Result<()> {
     let existing = fs::symlink_metadata(at).ok();
-    let real = existing.as_ref().is_some_and(|m| !is_link(m));
-    if real && (target.is_dir() || existing.as_ref().is_some_and(fs::Metadata::is_dir)) {
+    let real = existing.as_ref().filter(|m| !is_link(m));
+    let ours = |m: &fs::Metadata| {
+        m.is_file()
+            && (copies.made(at, m)
+                || fs::metadata(target)
+                    .is_ok_and(|src| mirror_action(&src, Some(m)) == Mirror::Keep))
+    };
+    if real.is_some_and(|m| target.is_dir() || !ours(m)) {
         return match occupied {
             Occupied::Keep => Ok(()),
             Occupied::Refuse => Err(real_where_a_link_goes(at)),
         };
     }
     if !target.is_dir() {
-        return mirror_file(target, at);
+        mirror_file(target, at)?;
+        copies.record(at);
+        return Ok(());
     }
     if existing.is_some() {
         if junction::get_target(at).ok().as_deref() == Some(target) {
@@ -388,7 +529,8 @@ pub fn mirror_action(src: &fs::Metadata, at: Option<&fs::Metadata>) -> Mirror {
 /// Keeps `at` a writable copy of `target` (Windows's stand-in for a file
 /// link): copied when missing or when size or modification time differ;
 /// the copy gets the source's modification time. A real folder in the
-/// copy's place is the game's and is kept.
+/// copy's place is the game's and is kept; a file in its place is
+/// overwritten ([`apply`] calls this only over a copy it made itself).
 pub fn mirror_file(target: &Path, at: &Path) -> io::Result<()> {
     let src = fs::metadata(target)?;
     let cur = fs::symlink_metadata(at).ok();
@@ -406,6 +548,126 @@ pub fn mirror_file(target: &Path, at: &Path) -> io::Result<()> {
             .open(tmp)?
             .set_modified(src.modified()?)
     })
+}
+
+/// The copies [`apply`] made where a file link goes (Windows), one record
+/// per runtime folder: `.linkfarm-copies` in it (or beside the copy,
+/// outside any), a line per copy: its path inside, size, and modification
+/// time in nanoseconds. A file that no longer matches its line was written
+/// by the game.
+#[cfg(windows)]
+#[derive(Default)]
+struct Records(Vec<Copies>);
+
+/// Elsewhere a file link is a link: nothing to record.
+#[cfg(not(windows))]
+#[derive(Default)]
+struct Records;
+
+#[cfg(not(windows))]
+impl Records {
+    fn save(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Records {
+    fn save(&mut self) -> io::Result<()> {
+        self.0.iter_mut().try_for_each(Copies::save)
+    }
+
+    /// The record for the runtime folder holding `at`.
+    fn of(&mut self, at: &Path, roots: &[&Path]) -> &mut Copies {
+        let dir = roots
+            .iter()
+            .find(|r| at.starts_with(r))
+            .map(|r| r.to_path_buf())
+            .or_else(|| at.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        match self.0.iter().position(|c| c.dir == dir) {
+            Some(i) => &mut self.0[i],
+            None => {
+                self.0.push(Copies::load(dir));
+                self.0.last_mut().expect("just pushed")
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+struct Copies {
+    dir: PathBuf,
+    /// (path inside `dir`, size, modification time) per copy.
+    rows: Vec<(String, u64, u128)>,
+    changed: bool,
+}
+
+#[cfg(windows)]
+impl Copies {
+    const FILE: &str = ".linkfarm-copies";
+
+    fn load(dir: PathBuf) -> Copies {
+        let text = fs::read_to_string(dir.join(Self::FILE)).unwrap_or_default();
+        let rows = text
+            .lines()
+            .filter_map(|l| {
+                let mut f = l.rsplitn(3, '\t');
+                let (t, n, rel) = (f.next()?, f.next()?, f.next()?);
+                Some((rel.to_string(), n.parse().ok()?, t.parse().ok()?))
+            })
+            .collect();
+        Copies {
+            dir,
+            rows,
+            changed: false,
+        }
+    }
+
+    fn key(&self, at: &Path) -> String {
+        at.strip_prefix(&self.dir)
+            .unwrap_or(at)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn stamp(m: &fs::Metadata) -> Option<(u64, u128)> {
+        let t = m.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+        Some((m.len(), t.as_nanos()))
+    }
+
+    /// Whether `at` (now `m`) is a copy this record made, untouched.
+    fn made(&self, at: &Path, m: &fs::Metadata) -> bool {
+        let key = self.key(at);
+        Self::stamp(m)
+            .is_some_and(|(n, t)| self.rows.iter().any(|r| r.0 == key && (r.1, r.2) == (n, t)))
+    }
+
+    /// Records the copy now at `at`.
+    fn record(&mut self, at: &Path) {
+        let Some((n, t)) = fs::metadata(at).ok().as_ref().and_then(Self::stamp) else {
+            return;
+        };
+        let key = self.key(at);
+        if self.rows.iter().any(|r| r.0 == key && (r.1, r.2) == (n, t)) {
+            return;
+        }
+        self.rows.retain(|r| r.0 != key);
+        self.rows.push((key, n, t));
+        self.changed = true;
+    }
+
+    fn save(&mut self) -> io::Result<()> {
+        if !std::mem::take(&mut self.changed) {
+            return Ok(());
+        }
+        let text: String = self
+            .rows
+            .iter()
+            .map(|(rel, n, t)| format!("{rel}\t{n}\t{t}\n"))
+            .collect();
+        fsx::write_atomic(&self.dir.join(Self::FILE), text)
+    }
 }
 
 /// Removes a link the launcher made (on Windows a junction is a folder),
@@ -908,6 +1170,86 @@ mod tests {
     }
 
     #[test]
+    fn a_seed_into_a_linked_folder_opens_it_instead_of_writing_into_the_dump() {
+        let t = test_dir("linkfarm-seed-through-link");
+        let (src, rt) = (dump(&t), t.join("rt"));
+        // the dump has the seed's target folder too: by default a link
+        fs::create_dir_all(src.join("F")).unwrap();
+        fs::write(src.join("F/drive.bin"), b"drive").unwrap();
+        let ops = plan(&src, &rt, &Rules, &list).unwrap();
+        apply(&ops, Occupied::Refuse).unwrap();
+        assert!(!src.join("F/TestMode").exists(), "seeded into the dump");
+        assert!(!is_link(&rt.join("F")));
+        assert_eq!(
+            fs::read(rt.join("F/TestMode/one.bin")).unwrap(),
+            b"camera off"
+        );
+        assert_eq!(fs::read(rt.join("F/drive.bin")).unwrap(), b"drive");
+        apply(&plan(&src, &rt, &Rules, &list).unwrap(), Occupied::Refuse).unwrap();
+        fs::remove_dir_all(t).unwrap();
+    }
+
+    #[test]
+    fn no_write_goes_through_a_link_in_the_runtime() {
+        let t = test_dir("linkfarm-through-link");
+        let (src, rt) = (dump(&t), t.join("rt"));
+        let (ini, data) = (src.join("a.ini"), src.join("data"));
+        let linked = [
+            Op::Dir(rt.clone()),
+            Op::Link {
+                target: data.clone(),
+                at: rt.join("data"),
+            },
+        ];
+        apply(&linked, Occupied::Refuse).unwrap();
+        let inside = |name: &str| rt.join("data").join(name);
+        for op in [
+            Op::Dir(inside("d")),
+            Op::CopyOnce {
+                from: ini.clone(),
+                to: inside("c.ini"),
+            },
+            Op::TreeOnce {
+                from: src.join("AMCUS"),
+                to: inside("tree"),
+            },
+            Op::Seed {
+                from: src.join("FTestMode"),
+                to: inside("seed"),
+            },
+            Op::Seed {
+                from: src.join("FTestMode"),
+                to: rt.join("data"),
+            },
+            Op::Refresh {
+                from: ini.clone(),
+                to: inside("r.ini"),
+                exec: false,
+            },
+            Op::Archive {
+                files: vec![ini.clone()],
+                to: inside("a.zip"),
+            },
+        ] {
+            let mut ops = linked.to_vec();
+            ops.push(op.clone());
+            let err = apply(&ops, Occupied::Refuse).unwrap_err();
+            assert!(
+                err.to_string().contains("through the link"),
+                "{op:?}: {err}"
+            );
+        }
+        let mut left: Vec<_> = fs::read_dir(&data)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["big.bin"], "the dump was written to");
+        fs::remove_dir_all(t).unwrap();
+    }
+
+    #[test]
     fn launcher_files_are_refreshed_and_missing_sources_copy_nothing() {
         let t = test_dir("linkfarm-refresh");
         let (ours, rt) = (t.join("loader"), t.join("rt"));
@@ -1079,6 +1421,42 @@ mod tests {
         }
         write_stored_zip(&[], &zip).unwrap();
         assert_eq!(fs::metadata(&zip).unwrap().len(), 22);
+        fs::remove_dir_all(t).unwrap();
+    }
+
+    /// Windows: a file where a linked file's copy goes is mirrored over
+    /// only when it is the copy the launcher made, untouched since.
+    #[test]
+    #[cfg(windows)]
+    fn on_windows_a_real_file_where_a_link_goes_is_never_mirrored_over() {
+        let t = test_dir("linkfarm-windows-real");
+        let (src, rt) = (t.join("dump"), t.join("rt"));
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("game.ini"), b"v1").unwrap();
+        fs::write(src.join("other.ini"), b"the dump's").unwrap();
+        let link = |name: &str| Op::Link {
+            target: src.join(name),
+            at: rt.join(name),
+        };
+        let ops = [Op::Dir(rt.clone()), link("game.ini")];
+        apply(&ops, Occupied::Refuse).unwrap();
+        // the launcher's own copy follows the dump
+        fs::write(src.join("game.ini"), b"v2, longer").unwrap();
+        apply(&ops, Occupied::Refuse).unwrap();
+        assert_eq!(fs::read(rt.join("game.ini")).unwrap(), b"v2, longer");
+        // the game rewrote it: never overwritten again
+        fs::write(rt.join("game.ini"), b"the game's own").unwrap();
+        fs::write(src.join("game.ini"), b"v3, longer still").unwrap();
+        // and a file someone else put there (an older CopyOnce)
+        fs::write(rt.join("other.ini"), b"an older copy").unwrap();
+        for name in ["game.ini", "other.ini"] {
+            let ops = [Op::Dir(rt.clone()), link(name)];
+            let err = apply(&ops, Occupied::Refuse).unwrap_err();
+            assert!(err.to_string().contains("move it away"), "{name}: {err}");
+            apply(&ops, Occupied::Keep).unwrap();
+        }
+        assert_eq!(fs::read(rt.join("game.ini")).unwrap(), b"the game's own");
+        assert_eq!(fs::read(rt.join("other.ini")).unwrap(), b"an older copy");
         fs::remove_dir_all(t).unwrap();
     }
 
