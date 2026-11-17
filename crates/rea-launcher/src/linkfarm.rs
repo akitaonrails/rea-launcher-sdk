@@ -27,6 +27,8 @@
 //! never followed (writing through it wrote into the dump); a real file
 //! where a link goes is kept or refused per [`Occupied`].
 
+#[cfg(windows)]
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -250,7 +252,7 @@ pub enum Occupied {
 /// land in the game folder.
 pub fn apply(ops: &[Op], occupied: Occupied) -> io::Result<()> {
     let roots = roots(ops);
-    let mut copies = Records::default();
+    let mut copies = Records::new();
     let done = ops
         .iter()
         .try_for_each(|op| apply_one(op, occupied, &roots, &mut copies));
@@ -556,16 +558,18 @@ pub fn mirror_file(target: &Path, at: &Path) -> io::Result<()> {
 /// time in nanoseconds. A file that no longer matches its line was written
 /// by the game.
 #[cfg(windows)]
-#[derive(Default)]
 struct Records(Vec<Copies>);
 
 /// Elsewhere a file link is a link: nothing to record.
 #[cfg(not(windows))]
-#[derive(Default)]
 struct Records;
 
 #[cfg(not(windows))]
 impl Records {
+    fn new() -> Records {
+        Records
+    }
+
     fn save(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -573,6 +577,10 @@ impl Records {
 
 #[cfg(windows)]
 impl Records {
+    fn new() -> Records {
+        Records(Vec::new())
+    }
+
     fn save(&mut self) -> io::Result<()> {
         self.0.iter_mut().try_for_each(Copies::save)
     }
@@ -598,8 +606,8 @@ impl Records {
 #[cfg(windows)]
 struct Copies {
     dir: PathBuf,
-    /// (path inside `dir`, size, modification time) per copy.
-    rows: Vec<(String, u64, u128)>,
+    /// Path inside `dir` → (size, modification time) per copy.
+    rows: BTreeMap<String, (u64, u128)>,
     changed: bool,
 }
 
@@ -614,7 +622,7 @@ impl Copies {
             .filter_map(|l| {
                 let mut f = l.rsplitn(3, '\t');
                 let (t, n, rel) = (f.next()?, f.next()?, f.next()?);
-                Some((rel.to_string(), n.parse().ok()?, t.parse().ok()?))
+                Some((rel.to_string(), (n.parse().ok()?, t.parse().ok()?)))
             })
             .collect();
         Copies {
@@ -638,23 +646,15 @@ impl Copies {
 
     /// Whether `at` (now `m`) is a copy this record made, untouched.
     fn made(&self, at: &Path, m: &fs::Metadata) -> bool {
-        let key = self.key(at);
-        Self::stamp(m)
-            .is_some_and(|(n, t)| self.rows.iter().any(|r| r.0 == key && (r.1, r.2) == (n, t)))
+        Self::stamp(m).is_some_and(|stamp| self.rows.get(&self.key(at)) == Some(&stamp))
     }
 
     /// Records the copy now at `at`.
     fn record(&mut self, at: &Path) {
-        let Some((n, t)) = fs::metadata(at).ok().as_ref().and_then(Self::stamp) else {
-            return;
-        };
-        let key = self.key(at);
-        if self.rows.iter().any(|r| r.0 == key && (r.1, r.2) == (n, t)) {
-            return;
+        if let Some(stamp) = fs::metadata(at).ok().as_ref().and_then(Self::stamp) {
+            let key = self.key(at);
+            self.changed |= self.rows.insert(key, stamp) != Some(stamp);
         }
-        self.rows.retain(|r| r.0 != key);
-        self.rows.push((key, n, t));
-        self.changed = true;
     }
 
     fn save(&mut self) -> io::Result<()> {
@@ -664,7 +664,7 @@ impl Copies {
         let text: String = self
             .rows
             .iter()
-            .map(|(rel, n, t)| format!("{rel}\t{n}\t{t}\n"))
+            .map(|(rel, (n, t))| format!("{rel}\t{n}\t{t}\n"))
             .collect();
         fsx::write_atomic(&self.dir.join(Self::FILE), text)
     }
