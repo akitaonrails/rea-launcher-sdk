@@ -12,5 +12,12 @@ sha2.workspace = true
 # Unpacking downloaded archives (`download::install`): deflate only, pure Rust.
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
 
+# Directory junctions for `linkfarm` on Windows (no administrator rights needed).
+[target.'cfg(windows)'.dependencies]
+junction = { version = "2", optional = true }
+
 [features]
 zip = ["dep:zip"]
+# `linkfarm`: a runtime folder of links to a read-only game folder (the hub
+# launchers').
+linkfarm = ["dep:junction"]

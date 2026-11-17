@@ -23,6 +23,8 @@ pub mod installer;
 pub mod instance;
 pub mod ledger;
 pub mod library;
+#[cfg(feature = "linkfarm")]
+pub mod linkfarm;
 pub mod log;
 pub mod pad;
 pub mod patch;
