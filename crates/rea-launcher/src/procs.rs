@@ -15,18 +15,31 @@ pub fn descendants(
     pid: u32,
     created: impl Fn(u32) -> Option<u64>,
 ) -> Vec<u32> {
-    let mut out: Vec<u32> = Vec::new();
+    descendants_at(processes, pid, created)
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect()
+}
+
+/// [`descendants`], each with the creation time it was matched on: end a
+/// process only when its handle shows that same time (its id may have
+/// been reused since the list was taken).
+pub fn descendants_at(
+    processes: &[(u32, u32)],
+    pid: u32,
+    created: impl Fn(u32) -> Option<u64>,
+) -> Vec<(u32, u64)> {
+    let mut out: Vec<(u32, u64)> = Vec::new();
     let mut next = vec![(pid, created(pid))];
     while let Some((parent, born)) = next.pop() {
         let Some(born) = born else { continue };
         for &(child, of) in processes {
-            if of != parent || child == parent || child == pid || out.contains(&child) {
+            if of != parent || child == parent || child == pid || out.iter().any(|o| o.0 == child) {
                 continue;
             }
-            let at = created(child);
-            if at.is_some_and(|c| c >= born) {
-                out.push(child);
-                next.push((child, at));
+            if let Some(at) = created(child).filter(|&c| c >= born) {
+                out.push((child, at));
+                next.push((child, Some(at)));
             }
         }
     }
@@ -112,6 +125,17 @@ mod tests {
         // a loop in stale records doesn't hang
         let (ring, at) = listed(&[(1, 2, Some(1)), (2, 1, Some(1))]);
         assert_eq!(descendants(&ring, 1, &at), vec![2]);
+    }
+
+    #[test]
+    fn descendants_come_with_the_creation_time_they_were_matched_on() {
+        let (ps, at) = listed(&[
+            (340, 100, Some(100)),
+            (576, 340, Some(110)),
+            (900, 576, Some(120)),
+        ]);
+        // ended by these exact times later, never by "created after"
+        assert_eq!(descendants_at(&ps, 340, &at), vec![(576, 110), (900, 120)]);
     }
 
     #[test]

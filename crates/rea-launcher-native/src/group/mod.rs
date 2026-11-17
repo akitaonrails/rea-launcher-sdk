@@ -12,19 +12,29 @@
 //!   can't have been reused; the leader is reaped in [`Group::finish`],
 //!   which consumes the group. A tagged process is signalled through a
 //!   pidfd opened *before* its tag is read, so a reused pid is never hit.
-//!   Zombies are never counted or signalled.
+//!   Zombies are never counted or signalled. A killed launcher takes the
+//!   whole session along: a small sentinel shell, started with the
+//!   session, kills every tagged process once the launcher is gone (see
+//!   [`Group::warning`] when it couldn't start).
 //! - **Windows:** the leader starts suspended and joins a kill-on-close job
 //!   before its first instruction, so none of its children escape; a
 //!   failed join only loses that net (see [`Group::warning`]) and the game
 //!   runs. Wine's jobs don't always hold a process's children, so they are
 //!   also found by parent and creation time
-//!   ([`rea_launcher::procs::descendants`]). [`Group::terminate`] asks
+//!   ([`rea_launcher::procs::descendants_at`]), each ended only while its
+//!   handle shows that same creation time. [`Group::terminate`] asks
 //!   politely: `WM_CLOSE` to the leader's windows (Flycast and Dolphin
 //!   save, then quit; a console loader has none and ends when its input
 //!   closes).
 //!
 //! Spawn from the thread that waits for the session (Linux ties the leader
-//! to the spawning thread). Nothing outside the session is signalled.
+//! to the spawning thread). What is signalled is the session's: its group
+//! and tagged processes on Linux, its job and descendants on Windows, plus
+//! what the caller asks for by name ([`Group::terminate_one`], and
+//! [`Group::kill_under`]: any program inside a folder, started after the
+//! leader). The one look-then-kill without a held handle is the Linux
+//! sentinel's, after the launcher died: a pid reused within those
+//! microseconds could be hit.
 
 use std::io;
 use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
@@ -100,9 +110,9 @@ pub struct Finished {
     pub leftovers: usize,
 }
 
-/// A running session. Dropping it without [`Group::finish`] kills it (on
-/// Linux the group and its tagged processes, on Windows what the job
-/// holds).
+/// A running session. Dropping it without [`Group::finish`] (an early
+/// return, a panic) kills it: on Linux the group and its tagged processes,
+/// on Windows the job and the leader's descendants.
 pub struct Group(imp::Group);
 
 impl Group {

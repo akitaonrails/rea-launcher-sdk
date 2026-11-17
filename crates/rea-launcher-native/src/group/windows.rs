@@ -9,7 +9,7 @@ use std::process::{Child, Command, ExitStatus};
 
 use rea_launcher::procs;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT,
+    CloseHandle, ERROR_MORE_DATA, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -31,8 +31,8 @@ use windows_sys::Win32::System::Threading::{
     TerminateProcess,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumThreadWindows, GetWindowRect, IsWindowVisible, PostMessageW, SW_HIDE, SetForegroundWindow,
-    ShowWindow, WM_CLOSE,
+    EnumThreadWindows, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+    SW_HIDE, SetForegroundWindow, ShowWindow, WM_CLOSE,
 };
 use windows_sys::core::BOOL;
 
@@ -45,6 +45,8 @@ pub struct Group {
     warning: Option<String>,
     /// When the leader was created (what its descendants are checked against).
     created: Option<u64>,
+    /// `finish` ran: nothing is left to end on drop.
+    finished: bool,
 }
 
 impl Group {
@@ -81,6 +83,7 @@ impl Group {
             child,
             job,
             warning,
+            finished: false,
         })
     }
 
@@ -114,9 +117,9 @@ impl Group {
         }
     }
 
-    /// The leader's descendants, from one snapshot (empty when its
-    /// creation time is unknown).
-    fn descendants(&self, snap: &Snapshot) -> Vec<u32> {
+    /// The leader's descendants with their creation times, from one
+    /// snapshot (empty when the leader's creation time is unknown).
+    fn descendants(&self, snap: &Snapshot) -> Vec<(u32, u64)> {
         let at = |pid| {
             if pid == self.id() {
                 self.created
@@ -124,13 +127,13 @@ impl Group {
                 created(pid)
             }
         };
-        procs::descendants(&snap.processes, self.id(), at)
+        procs::descendants_at(&snap.processes, self.id(), at)
     }
 
     /// The session's processes besides the leader: its descendants and
     /// whatever else the job holds.
     fn others(&self) -> Vec<u32> {
-        let mut v = self.descendants(&snapshot());
+        let mut v: Vec<u32> = self.descendants(&snapshot()).iter().map(|d| d.0).collect();
         if let Some(job) = &self.job {
             v.extend(job.processes().into_iter().filter(|p| *p != self.id()));
         }
@@ -140,10 +143,8 @@ impl Group {
     }
 
     pub fn kill(&self) {
-        if let Some(since) = self.created {
-            for pid in self.descendants(&snapshot()) {
-                end(pid, since);
-            }
+        for (pid, born) in self.descendants(&snapshot()) {
+            end(pid, born);
         }
         if let Some(job) = &self.job {
             // SAFETY: the job handle is open while self lives.
@@ -170,7 +171,7 @@ impl Group {
     pub fn windows(&self) -> Vec<Window> {
         let snap = snapshot();
         let mut pids = vec![self.id()];
-        pids.extend(self.descendants(&snap));
+        pids.extend(self.descendants(&snap).iter().map(|d| d.0));
         windows_of(&snap, &pids)
     }
 
@@ -186,7 +187,7 @@ impl Group {
             .map(|&(pid, _)| pid)
             .filter(|&pid| pid != 0 && pid != me)
             .filter(|&pid| image(pid).is_some_and(|exe| procs::under_dir(&exe, &dir)))
-            .filter(|&pid| end(pid, since))
+            .filter(|&pid| created(pid).is_some_and(|born| born >= since && end(pid, born)))
             .count()
     }
 
@@ -194,10 +195,22 @@ impl Group {
         let status = self.child.wait()?;
         let left = self.others();
         self.kill();
+        self.finished = true;
         Ok(Finished {
             status,
             leftovers: left.len(),
         })
+    }
+}
+
+/// A group dropped without `finish` (an early return, a panic) takes its
+/// session along, the job or not.
+impl Drop for Group {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -242,32 +255,60 @@ impl Job {
         Ok(())
     }
 
-    /// The processes in the job (up to 256).
+    /// The processes in the job, however many.
     fn processes(&self) -> Vec<u32> {
-        #[repr(C)]
-        struct List {
-            head: JOBOBJECT_BASIC_PROCESS_ID_LIST,
-            more: [usize; 255],
-        }
-        // SAFETY: zeroed plain data, sized as the call is told.
-        let mut list: List = unsafe { std::mem::zeroed() };
-        let ok = unsafe {
-            QueryInformationJobObject(
-                self.0,
-                JobObjectBasicProcessIdList,
-                (&raw mut list).cast(),
-                size_of::<List>() as u32,
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 {
-            return Vec::new();
-        }
-        let n = (list.head.NumberOfProcessIdsInList as usize).min(256);
-        // SAFETY: the ids sit one after another from ProcessIdList, inside `list`.
-        let ids = unsafe { std::slice::from_raw_parts(list.head.ProcessIdList.as_ptr(), n) };
-        ids.iter().map(|&id| id as u32).collect()
+        id_list(|buf| {
+            // SAFETY: the buffer is word-aligned and sized as the call is told.
+            let ok = unsafe {
+                QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicProcessIdList,
+                    buf.as_mut_ptr().cast(),
+                    size_of_val(buf) as u32,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        })
     }
+}
+
+/// Words before `ProcessIdList` in `JOBOBJECT_BASIC_PROCESS_ID_LIST`.
+const HEADER: usize =
+    std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) / size_of::<usize>();
+
+/// A job's process ids through `query` (`QueryInformationJobObject`'s id
+/// list into a buffer of words), with a bigger buffer while the job holds
+/// more than fit; empty on any other error.
+fn id_list(mut query: impl FnMut(&mut [usize]) -> io::Result<()>) -> Vec<u32> {
+    let mut room = 256;
+    for _ in 0..8 {
+        let mut buf = vec![0usize; HEADER + room];
+        let result = query(&mut buf);
+        // SAFETY: the header's two u32s at the start of the word buffer.
+        let (assigned, listed) = unsafe {
+            let head = buf.as_ptr().cast::<u32>();
+            (head.read() as usize, head.add(1).read() as usize)
+        };
+        match result {
+            Ok(()) => {
+                return buf[HEADER..HEADER + listed.min(room)]
+                    .iter()
+                    .map(|&id| id as u32)
+                    .collect();
+            }
+            Err(e) if e.raw_os_error() == Some(ERROR_MORE_DATA as i32) => {
+                // processes may join meanwhile: some room to spare
+                room = room.max(assigned) + 64;
+            }
+            Err(_) => break,
+        }
+    }
+    Vec::new()
 }
 
 impl Drop for Job {
@@ -303,9 +344,9 @@ fn pin(process: HANDLE, cpus: &[u32]) -> bool {
     mask != 0 && unsafe { SetProcessAffinityMask(process, mask) } != 0
 }
 
-/// Ends process `pid` if it was created at or after `since` (checked on
-/// the handle that ends it, so a reused id is never hit); whether it did.
-fn end(pid: u32, since: u64) -> bool {
+/// Ends process `pid` if it is the one created at `born` (checked on the
+/// handle that ends it, so a reused id is never hit); whether it did.
+fn end(pid: u32, born: u64) -> bool {
     // SAFETY: a handle we open, use and close here.
     unsafe {
         let h = OpenProcess(
@@ -316,7 +357,7 @@ fn end(pid: u32, since: u64) -> bool {
         if h.is_null() {
             return false;
         }
-        let ok = times(h).is_some_and(|c| c >= since) && TerminateProcess(h, 1) != 0;
+        let ok = times(h) == Some(born) && TerminateProcess(h, 1) != 0;
         CloseHandle(h);
         ok
     }
@@ -415,22 +456,37 @@ pub struct Window {
 // SAFETY: a window handle is a plain identifier, usable from any thread.
 unsafe impl Send for Window {}
 
+/// Each call first checks that the window still belongs to `pid`: a
+/// window handle is reused once its window is gone, and a stale one must
+/// never close, hide or raise another program's window.
 impl Window {
     /// Asks it to close, as its close button does.
     pub fn close(&self) {
-        // SAFETY: posting to a window that may be gone is harmless.
-        unsafe { PostMessageW(self.hwnd, WM_CLOSE, 0, 0) };
+        if self.owned() {
+            // SAFETY: a plain call on a window handle.
+            unsafe { PostMessageW(self.hwnd, WM_CLOSE, 0, 0) };
+        }
     }
 
     pub fn hide(&self) {
-        // SAFETY: as in `close`.
-        unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+        if self.owned() {
+            // SAFETY: as in `close`.
+            unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+        }
     }
 
     /// Brings it to the front, with the keyboard's focus.
     pub fn focus(&self) {
-        // SAFETY: as in `close`.
-        unsafe { SetForegroundWindow(self.hwnd) };
+        if self.owned() {
+            // SAFETY: as in `close`.
+            unsafe { SetForegroundWindow(self.hwnd) };
+        }
+    }
+
+    fn owned(&self) -> bool {
+        let mut pid = 0u32;
+        // SAFETY: plain out-parameter; a gone window returns 0.
+        unsafe { GetWindowThreadProcessId(self.hwnd, &mut pid) != 0 && pid == self.pid }
     }
 }
 
@@ -489,4 +545,165 @@ pub fn logical_processor_information() -> Option<Vec<u8>> {
     // SAFETY: the call wrote `len` bytes into the buffer.
     let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), len as usize) };
     Some(bytes.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Stdio;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, MSG, PM_REMOVE, PeekMessageW,
+        RegisterClassW, WNDCLASSW,
+    };
+
+    /// A process that waits for its input (held open by the returned child).
+    fn waiter() -> Child {
+        Command::new("cmd")
+            .args(["/c", "pause"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn running(child: &mut Child) -> bool {
+        child.try_wait().unwrap().is_none()
+    }
+
+    /// A job holding `n` processes, answered as Windows does: the header
+    /// always, the ids when they fit, `ERROR_MORE_DATA` when they don't.
+    fn job_of(n: usize) -> impl FnMut(&mut [usize]) -> io::Result<()> {
+        move |buf| {
+            let room = buf.len() - HEADER;
+            let listed = n.min(room);
+            // SAFETY: the header's two u32s at the buffer's start
+            let head = buf.as_mut_ptr().cast::<u32>();
+            unsafe { (head.write(n as u32), head.add(1).write(listed as u32)) };
+            for (i, id) in buf[HEADER..HEADER + listed].iter_mut().enumerate() {
+                *id = 1000 + i;
+            }
+            if listed < n {
+                Err(io::Error::from_raw_os_error(ERROR_MORE_DATA as i32))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn every_process_of_a_big_job_is_listed() {
+        for n in [0, 3, 256, 300, 5000] {
+            let ids = id_list(job_of(n));
+            assert_eq!(ids.len(), n);
+            assert_eq!(
+                ids.last().copied(),
+                n.checked_sub(1).map(|i| 1000 + i as u32)
+            );
+        }
+        // another error: nothing listed
+        assert!(id_list(|_| Err(io::Error::from_raw_os_error(5))).is_empty());
+    }
+
+    #[test]
+    fn a_process_is_ended_only_at_its_exact_creation_time() {
+        let mut c = waiter();
+        let born = created(c.id()).unwrap();
+        // a process created later took a descendant's id: never ended
+        assert!(!end(c.id(), born - 1));
+        assert!(!end(c.id(), born + 1));
+        assert!(running(&mut c));
+        assert!(end(c.id(), born));
+        c.wait().unwrap();
+    }
+
+    #[test]
+    fn a_dropped_group_without_a_job_ends_its_game() {
+        let mut probe = waiter();
+        let pid = probe.id();
+        let mut child = waiter();
+        // held here: the game must not end because its input closed
+        let _input = child.stdin.take();
+        let g = Group {
+            created: created(child.id()),
+            child,
+            job: None,
+            warning: None,
+            finished: false,
+        };
+        let leader = g.id();
+        drop(g);
+        let started = std::time::Instant::now();
+        while created(leader).is_some() && started.elapsed().as_secs() < 10 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            created(leader).is_none(),
+            "the game outlived its dropped group"
+        );
+        assert!(running(&mut probe) && probe.id() == pid);
+        probe.kill().unwrap();
+        probe.wait().unwrap();
+    }
+
+    unsafe extern "system" fn plain(h: HWND, msg: u32, w: usize, l: isize) -> isize {
+        unsafe { DefWindowProcW(h, msg, w, l) }
+    }
+
+    /// Whether a `WM_CLOSE` waits in this thread's queue (taken out).
+    fn closed() -> bool {
+        // SAFETY: zeroed plain data the call fills in.
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            PeekMessageW(
+                &mut msg,
+                std::ptr::null_mut(),
+                WM_CLOSE,
+                WM_CLOSE,
+                PM_REMOVE,
+            ) != 0
+        }
+    }
+
+    #[test]
+    fn a_window_is_closed_only_while_its_process_owns_it() {
+        let class: Vec<u16> = "rea-group-unit\0".encode_utf16().collect();
+        // SAFETY: a hidden window of this thread, destroyed below.
+        let hwnd = unsafe {
+            let mut wc: WNDCLASSW = std::mem::zeroed();
+            wc.lpfnWndProc = Some(plain);
+            wc.lpszClassName = class.as_ptr();
+            RegisterClassW(&wc);
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!hwnd.is_null());
+        let me = unsafe { GetCurrentProcessId() };
+        let window = |pid| Window {
+            hwnd,
+            pid,
+            visible: false,
+            big: false,
+        };
+        // the handle now names another process's window: left alone
+        window(me + 4).close();
+        assert!(!closed(), "closed a window of another process");
+        window(me).close();
+        assert!(closed());
+        unsafe { DestroyWindow(hwnd) };
+        window(me).close();
+        assert!(!closed(), "a gone window");
+    }
 }
