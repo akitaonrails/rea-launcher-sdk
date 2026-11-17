@@ -222,3 +222,18 @@ fn a_dropped_session_takes_its_processes_along() {
     assert!(gone_soon(escaped) && gone_soon(leader));
     let _ = fs::remove_dir_all(&d);
 }
+
+#[test]
+fn a_missing_program_is_named_plainly() {
+    let e = Group::spawn(
+        &mut Command::new("rea-no-such-gamescope"),
+        &Tag::new(VAR, "missing"),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(
+        e.to_string(),
+        "rea-no-such-gamescope is not installed (or not on PATH)"
+    );
+}

@@ -107,8 +107,19 @@ impl Group {
     /// Starts `cmd` as a new session marked with `tag`. On Windows it sets
     /// `cmd`'s creation flags (suspended, no console window of its own: the
     /// loaders are console programs).
+    /// A program that isn't there is named: "gamescope is not installed
+    /// (or not on PATH)".
     pub fn spawn(cmd: &mut Command, tag: &Tag) -> io::Result<Group> {
-        imp::Group::spawn(cmd, tag).map(Group)
+        imp::Group::spawn(cmd, tag).map(Group).map_err(|e| {
+            if e.kind() != io::ErrorKind::NotFound {
+                return e;
+            }
+            let program = cmd.get_program().to_string_lossy().into_owned();
+            io::Error::new(
+                e.kind(),
+                format!("{program} is not installed (or not on PATH)"),
+            )
+        })
     }
 
     /// The leader's process id.
