@@ -185,8 +185,9 @@ mod tests {
         assert_eq!(p.components, Path::new("/opt/id/components"));
         let env = env_of(&[("ID_COMPONENTS", "/c")]);
         let p = HubPaths::discover_in(&DIRS, &env, Some(Path::new("/opt/id")));
-        assert_eq!(p.components, Path::new("/c"));
-        assert_eq!(p.art("id1.jpg"), Path::new("/c/art/id1.jpg"));
+        let c = std::path::absolute("/c").unwrap();
+        assert_eq!(p.components, c);
+        assert_eq!(p.art("id1.jpg"), c.join("art").join("id1.jpg"));
     }
 
     #[test]

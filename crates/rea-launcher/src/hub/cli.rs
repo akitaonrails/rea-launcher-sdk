@@ -38,6 +38,9 @@ pub struct CliSpec<'a> {
     pub options: &'a [OptionSpec],
     pub style: KeyStyle,
     pub paths: &'a [PathField],
+    /// Whether game `id` takes option `key` (the rows its window offers);
+    /// `None`: every game takes every option.
+    pub offers: Option<fn(id: &str, key: &str) -> bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +93,9 @@ impl Invocation {
         matches!(self.mode, Mode::Play(_) | Mode::Set(_) | Mode::Configure)
     }
 
-    /// An action that must not run while another launcher is open.
+    /// An action that must not run while another launcher is open
+    /// (`instance::single`). `--help` and `--list` only read: run them
+    /// without the lock, so they work while the window is open.
     pub fn is_action(&self) -> bool {
         matches!(
             self.mode,
@@ -220,6 +225,11 @@ pub fn parse(spec: &CliSpec, args: impl IntoIterator<Item = String>) -> Result<I
             .paths
             .iter()
             .position(|f| f.flag == flag || f.flag_aliases.contains(&flag.as_str()));
+        if let Some(n) = path_field {
+            let noun = spec.paths[n].kind.noun();
+            inv.paths[n] = Some(value(&format!("a {noun}"))?.into());
+            continue;
+        }
         match flag.as_str() {
             "--help" | "-h" => {
                 return Ok(Invocation {
@@ -228,11 +238,6 @@ pub fn parse(spec: &CliSpec, args: impl IntoIterator<Item = String>) -> Result<I
                 });
             }
             "--library" => inv.libraries.push(value("a folder")?.into()),
-            _ if path_field.is_some() => {
-                let n = path_field.unwrap_or_default();
-                let noun = spec.paths[n].kind.noun();
-                inv.paths[n] = Some(value(&format!("a {noun}"))?.into());
-            }
             "--list" => set_mode(&mut mode, Mode::List)?,
             "--check" => {
                 let game = match it.peek() {
@@ -289,6 +294,14 @@ pub fn parse(spec: &CliSpec, args: impl IntoIterator<Item = String>) -> Result<I
         }
         None => Mode::Window,
     };
+    if let (Mode::Play(game) | Mode::Set(game), Some(offers)) = (&inv.mode, spec.offers)
+        && let Some((key, _)) = inv.options.iter().find(|(k, _)| !offers(game, k))
+    {
+        return Err(format!(
+            "{game} doesn't take {}: it has no such setting",
+            spec.style.flag(key)
+        ));
+    }
     if inv.test != Test::default() && !matches!(inv.mode, Mode::Play(_)) {
         return Err("the test options go with --play <game>".into());
     }
@@ -330,6 +343,7 @@ mod tests {
         options: OPTIONS,
         style: KeyStyle::Underscore,
         paths: &[BIOS],
+        offers: Some(|game, key| !(game == "or2sdx" && key == "upscaler")),
     };
 
     fn parse_v(v: &[&str]) -> Result<Invocation, String> {
@@ -406,6 +420,14 @@ mod tests {
             let e = parse_v(args).unwrap_err();
             assert!(e.contains(words), "{args:?}: {e}");
         }
+    }
+
+    #[test]
+    fn an_option_the_game_doesnt_take_is_refused() {
+        let e = parse_v(&["--upscaler", "nis", "--play", "or2sdx"]).unwrap_err();
+        assert_eq!(e, "or2sdx doesn't take --upscaler: it has no such setting");
+        assert!(parse_v(&["--set", "or2sdx", "--deadzone", "3"]).is_ok());
+        assert!(parse_v(&["--set", "sr3", "--upscaler", "nis"]).is_ok());
     }
 
     #[test]

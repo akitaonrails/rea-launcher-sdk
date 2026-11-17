@@ -9,8 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
+use rea_launcher::catalog::Support;
 use rea_launcher::cfg::OptionSpec;
-use rea_launcher::hub::{HubConfig, Input, Need, Support};
+use rea_launcher::hub::{HubConfig, Input, Need};
 use rea_launcher::wheel::Kind;
 
 /// One game of the hub.
@@ -121,6 +122,9 @@ impl Reporter {
 /// inside the session and return it as an `Err`.
 pub type Session = Box<dyn FnOnce(&Reporter) -> Result<(), String> + Send>;
 
+/// A scan to run on the scan thread, given the library folders.
+pub type Scanner<L> = Box<dyn FnOnce(&[PathBuf]) -> L + Send>;
+
 /// A controller, for the top bar and the Controls page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Device {
@@ -212,7 +216,9 @@ pub trait HubForm {
     /// Writes the settings to `file`, keeping the player's comments and
     /// unknown keys: re-read it with `rea_launcher::cfg::read_file`, refuse
     /// (return the error) when it can't be read, write with
-    /// `rea_launcher::fsx::write_atomic`.
+    /// `rea_launcher::fsx::write_atomic`, and change only the keys the
+    /// player changed (a value the launcher couldn't read stays as the
+    /// player wrote it, never replaced by the default).
     fn save(&self, file: &Path) -> io::Result<()>;
 }
 
@@ -221,11 +227,8 @@ pub trait HubForm {
 /// [`HubBackend::need`], [`HubBackend::note`], [`HubBackend::controls`],
 /// [`HubBackend::pad`]): keep them to lookups.
 pub trait HubBackend: 'static {
-    /// What a scan returns (the launcher's library entries).
+    /// What a scan returns (`rea_launcher::library::Scan`).
     type Library: Send + 'static;
-    /// What a scan keeps between scans (file digests): reused by every
-    /// rescan, so only new or changed files are hashed again.
-    type Cache: Default + Send + 'static;
     type Form: HubForm;
 
     fn games(&self) -> &[HubGame];
@@ -244,8 +247,11 @@ pub trait HubBackend: 'static {
         None
     }
 
-    /// Looks for the games under `roots`; runs on its own thread.
-    fn scan(roots: &[PathBuf], cache: &mut Self::Cache) -> Self::Library;
+    /// A scan of `roots` for the scan thread. Keep the digests between
+    /// scans in it (`rea_launcher::library::Library::with_cache` over one
+    /// `HashCache`: its clones share it), so only new or changed files are
+    /// hashed again; a rescan asked for during a scan runs after it.
+    fn scanner(&self) -> Scanner<Self::Library>;
     fn found(library: &Self::Library, game: usize) -> Option<Found>;
     /// One `launcher.log` line per folder holding a build the launcher
     /// doesn't know (its digest).

@@ -9,7 +9,7 @@ use eframe::egui::accesskit::Role;
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, CursorIcon, Rect, Sense, Stroke, StrokeKind, pos2, vec2,
 };
-use rea_launcher::hub::{Focus, Input, Item, Page, Tab, TileState};
+use rea_launcher::hub::{Focus, Input, Item, Page, Tab, TileState, display_path};
 use rea_launcher::wheel::Kind;
 
 use super::app::{Click, HubApp};
@@ -270,7 +270,7 @@ impl<B: HubBackend> HubApp<B> {
             y = rr.bottom() + 4.0;
         }
         if let Some(f) = &found {
-            let line = format!("Folder: {}", f.dir.display());
+            let line = format!("Folder: {}", display_path(&f.dir));
             let fr = pen.ellipsized(pos2(x, y), &line, body(size::BODY), t.muted, colw + 40.0);
             pen.say("folder", fr, &line);
             y = fr.bottom();
@@ -418,8 +418,8 @@ impl<B: HubBackend> HubApp<B> {
                     pen.focus_ring(tr, 6);
                 }
             }
-            if resp.clicked() || resp.double_clicked() {
-                clicks.push(Click::Tile(i, resp.double_clicked()));
+            if resp.clicked() {
+                clicks.push(Click::Tile(i));
             }
         }
     }
@@ -503,6 +503,8 @@ impl<B: HubBackend> HubApp<B> {
         );
         pen.card(left);
         let mut y = pen.card_heading(left, "Picture and controls") + 4.0;
+        // the focused row's note when the row has no room for all of it
+        let mut cut_note = None;
         for (idx, item) in self.model.items.iter().enumerate() {
             let Item::Option(key) = *item else { continue };
             let Some(spec) = self.rows.iter().find(|s| s.key == key) else {
@@ -512,7 +514,7 @@ impl<B: HubBackend> HubApp<B> {
                 Rect::from_min_size(pos2(left.left() + 4.0, y), vec2(left.width() - 8.0, row_h));
             y += row_h;
             let off = self.row_off(form, spec);
-            self.draw_row(
+            let cut = self.draw_row(
                 pen,
                 rr,
                 idx,
@@ -522,15 +524,19 @@ impl<B: HubBackend> HubApp<B> {
                 off.as_deref(),
                 clicks,
             );
+            if cut {
+                cut_note = Some(off.unwrap_or_else(|| spec.description.to_string()));
+            }
         }
         let library = Rect::from_min_max(
             pos2(left.right() + 24.0, top),
             pos2(r.right() - MARGIN, left.bottom()),
         );
-        self.draw_library_card(pen, library, clicks);
+        self.draw_library_card(pen, library, cut_note.as_deref(), clicks);
     }
 
     /// One settings row: label, note (or why it is off), `◀ value ▶`.
+    /// Returns whether it is focused and its note didn't fit.
     #[allow(clippy::too_many_arguments)]
     fn draw_row(
         &self,
@@ -542,7 +548,7 @@ impl<B: HubBackend> HubApp<B> {
         value: &str,
         off: Option<&str>,
         clicks: &mut Vec<Click>,
-    ) {
+    ) -> bool {
         let (p, t) = (pen.p, pen.t);
         let layout = self.spec.layout;
         let focused = self.model.focus == Focus::Item(idx);
@@ -578,13 +584,16 @@ impl<B: HubBackend> HubApp<B> {
             if off.is_some() { t.muted } else { t.ink },
         );
         let valw = 270.0;
-        pen.ellipsized(
+        let note_w = rr.width() - valw - 40.0;
+        let shown = pen.ellipsize(note, body(size::NOTE), note_w);
+        pen.text(
             pos2(lx, rr.top() + layout.row_note_top),
-            note,
+            Align2::LEFT_TOP,
+            &shown,
             body(size::NOTE),
             t.muted,
-            rr.width() - valw - 40.0,
         );
+        let cut = focused && shown != note;
         let vr = Rect::from_min_max(
             pos2(rr.right() - valw - 12.0, rr.top()),
             pos2(rr.right() - 12.0, rr.bottom()),
@@ -623,7 +632,7 @@ impl<B: HubBackend> HubApp<B> {
                 );
                 if a.clicked() {
                     clicks.push(Click::Focus(Focus::Item(idx), Some(input)));
-                    return;
+                    return cut;
                 }
             }
         }
@@ -631,9 +640,18 @@ impl<B: HubBackend> HubApp<B> {
             let input = off.is_none().then_some(Input::Press);
             clicks.push(Click::Focus(Focus::Item(idx), input));
         }
+        cut
     }
 
-    fn draw_library_card(&self, pen: Pen, rc: Rect, clicks: &mut Vec<Click>) {
+    /// The library card; under its buttons the last save's note, then
+    /// `cut_note` (the focused row's whole note when its row cut it).
+    fn draw_library_card(
+        &self,
+        pen: Pen,
+        rc: Rect,
+        cut_note: Option<&str>,
+        clicks: &mut Vec<Click>,
+    ) {
         let t = pen.t;
         pen.card(rc);
         let mut y = pen.card_heading(rc, "Your game folders") + 16.0;
@@ -687,16 +705,16 @@ impl<B: HubBackend> HubApp<B> {
         if pen.button(b2, folders).clicked() {
             clicks.push(Click::Focus(Focus::Item(n - 1), Some(Input::Press)));
         }
+        let mut y = b2.bottom() + 22.0;
         if let Some(note) = &self.note {
             let color = if note.error { t.error } else { t.ink };
-            let nr = pen.wrapped(
-                pos2(ix, b2.bottom() + 22.0),
-                &note.text,
-                body(size::BODY),
-                color,
-                iw,
-            );
+            let nr = pen.wrapped(pos2(ix, y), &note.text, body(size::BODY), color, iw);
             pen.say("note", nr, &note.text);
+            y = nr.bottom() + 12.0;
+        }
+        if let Some(whole) = cut_note {
+            let wr = pen.wrapped(pos2(ix, y), whole, body(size::NOTE), t.muted, iw);
+            pen.say("row-note", wr, whole);
         }
     }
 
@@ -722,7 +740,7 @@ impl<B: HubBackend> HubApp<B> {
             y += 24.0;
         }
         for (k, f) in folders.iter().enumerate().take(3) {
-            let line = f.display().to_string();
+            let line = display_path(f);
             let fr = pen.ellipsized(pos2(x, y), &line, body(size::BODY), t.ink, w);
             pen.say(&format!("folder-{k}"), fr, &line);
             y += 24.0;
@@ -986,7 +1004,7 @@ impl<B: HubBackend> HubApp<B> {
             if self.notes[n].is_none()
                 && let Some(p) = &self.config.paths[k]
             {
-                let line = format!("In use: {}", p.display());
+                let line = format!("In use: {}", display_path(p));
                 let lr = pen.ellipsized(pos2(x, y), &line, body(size::BODY), t.muted, w);
                 pen.say(&format!("path-current-{k}"), lr, &line);
                 y += 26.0;

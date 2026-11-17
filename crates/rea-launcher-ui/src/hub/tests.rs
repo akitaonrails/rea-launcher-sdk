@@ -8,9 +8,10 @@ use std::sync::mpsc;
 
 use eframe::egui::accesskit::Role;
 use eframe::egui::{self, ViewportCommand};
+use rea_launcher::catalog::Support;
 use rea_launcher::cfg::{self, Kind, OptionSpec};
 use rea_launcher::hub::{
-    Focus, HubConfig, HubPaths, Input, Need, Page, PathField, PathKind, Support, Tab,
+    Focus, HubConfig, HubPaths, Input, Need, Page, PathField, PathKind, Tab, display_path,
 };
 
 use super::testing::{self, SIZE_720, SIZE_800, says};
@@ -62,6 +63,10 @@ const BIOS_GAME: usize = 0;
 /// The game that needs board files (the extra page).
 const FILES_GAME: usize = 4;
 
+/// Longer than a row has room for.
+const SHARPNESS_OFF: &str = "Only FSR 1 and NVIDIA Image Scaling use sharpness; \
+     choose one of them as the upscaler above to change how crisp the edges are.";
+
 const UPSCALERS: &[(&str, &str)] = &[
     ("fsr", "FSR 1"),
     ("nis", "NVIDIA Image Scaling"),
@@ -81,15 +86,13 @@ static OPTIONS: &[OptionSpec] = &[
         Kind::Choice(UPSCALERS),
         "Upscaler",
         "How the picture is stretched.",
-    )
-    .helper_owned(),
+    ),
     OptionSpec::new(
         "sharpness",
         Kind::Range { min: 0, max: 20 },
         "Sharpness",
         "How crisp the upscaler makes edges.",
-    )
-    .helper_owned(),
+    ),
     OptionSpec::new(
         "fullscreen",
         Kind::Toggle,
@@ -127,10 +130,6 @@ struct Library {
     found: Vec<Option<Found>>,
     unknown: Vec<String>,
 }
-
-/// How many scans one cache went through.
-#[derive(Default)]
-struct Cache(usize);
 
 #[derive(Debug, Clone, PartialEq)]
 struct Form {
@@ -200,8 +199,7 @@ impl HubForm for Form {
     }
 
     fn disabled(&self, key: &str) -> Option<String> {
-        (key == "sharpness" && self.upscaler == "linear")
-            .then(|| "Only FSR 1 and NVIDIA Image Scaling use sharpness.".into())
+        (key == "sharpness" && self.upscaler == "linear").then(|| SHARPNESS_OFF.into())
     }
 
     fn adjust(&mut self, key: &str, d: i32, wrap: bool) -> bool {
@@ -243,6 +241,8 @@ struct Fake {
     pads: Vec<Input>,
     extra_reads: std::cell::Cell<usize>,
     ended: usize,
+    /// Scans started, shared with the scan threads (the launcher's hash cache).
+    scans: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Fake {
@@ -256,13 +256,39 @@ impl Fake {
             pads: Vec::new(),
             extra_reads: std::cell::Cell::new(0),
             ended: 0,
+            scans: Default::default(),
         }
     }
 }
 
+/// The fake scan: a folder named after a game's slug is that game; one
+/// named `mystery` holds an unknown build.
+fn scan(roots: &[PathBuf]) -> Library {
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let mut lib = Library {
+        found: vec![None; GAMES.len()],
+        unknown: Vec::new(),
+    };
+    for root in roots {
+        for (i, g) in GAMES.iter().enumerate() {
+            let dir = root.join(g.slug);
+            if dir.is_dir() {
+                lib.found[i] = Some(Found {
+                    dir,
+                    edition: Some("Export".into()),
+                });
+            }
+        }
+        if root.join("mystery").is_dir() {
+            lib.unknown
+                .push(format!("unknown build game.exe 00ff in {}", root.display()));
+        }
+    }
+    lib
+}
+
 impl HubBackend for Fake {
     type Library = Library;
-    type Cache = Cache;
     type Form = Form;
 
     fn games(&self) -> &[HubGame] {
@@ -287,29 +313,12 @@ impl HubBackend for Fake {
             .then(|| Note::error("Needs the NAOMI 2 BIOS: add it in Settings."))
     }
 
-    fn scan(roots: &[PathBuf], cache: &mut Cache) -> Library {
-        cache.0 += 1;
-        std::thread::sleep(std::time::Duration::from_millis(30));
-        let mut lib = Library {
-            found: vec![None; GAMES.len()],
-            unknown: Vec::new(),
-        };
-        for root in roots {
-            for (i, g) in GAMES.iter().enumerate() {
-                let dir = root.join(g.slug);
-                if dir.is_dir() {
-                    lib.found[i] = Some(Found {
-                        dir,
-                        edition: Some("Export".into()),
-                    });
-                }
-            }
-            if root.join("mystery").is_dir() {
-                lib.unknown
-                    .push(format!("unknown build game.exe 00ff in {}", root.display()));
-            }
-        }
-        lib
+    fn scanner(&self) -> Scanner<Library> {
+        let scans = std::sync::Arc::clone(&self.scans);
+        Box::new(move |roots| {
+            scans.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            scan(roots)
+        })
     }
     fn found(library: &Library, game: usize) -> Option<Found> {
         library.found[game].clone()
@@ -615,8 +624,8 @@ fn a_game_that_wont_start_says_why_and_the_log_has_it() {
         &h,
         "The game needs launcher components that are missing."
     ));
-    let log = t.join("data/launcher.log");
-    assert!(says(&h, &format!("Details are in {}.", log.display())));
+    let log = paths_in(&t).log();
+    assert!(says(&h, &format!("Details are in {}.", display_path(&log))));
     assert!(
         log_of(&t).contains("Arcade Racer 2: the game needs launcher components that are missing"),
         "{}",
@@ -675,12 +684,12 @@ fn a_game_that_stops_with_an_error_points_at_its_log() {
     .unwrap();
     testing::wait(&mut h, "the end", |a| !a.is_running());
     assert!(says(&h, "Arcade Racer 2 stopped with an error"));
-    let game_log = t.join("data/runtimes/ar2/session.log");
+    let game_log = paths_in(&t).runtime("ar2").join("session.log");
     assert!(says(
         &h,
         &format!(
             "The game ended at once (exit code 0xc0000135).\n\nTry again. If it happens again, the game's log is {}.",
-            game_log.display()
+            display_path(&game_log)
         )
     ));
     assert!(log_of(&t).contains("Arcade Racer 2: the game ended at once"));
@@ -794,6 +803,10 @@ fn every_option_in_the_settings_window_reaches_the_file() {
         ("Fullscreen", "next", "fullscreen", "off"),
         ("Dead zone", "previous", "deadzone", "4"),
     ] {
+        if cfg!(windows) && key == "fullscreen" {
+            // the Linux helper's row: off on Windows (tested below)
+            continue;
+        }
         h.get_by_role_and_label(Role::Button, &format!("{label}: {way}"))
             .click();
         h.run_steps(3);
@@ -814,7 +827,8 @@ fn every_option_in_the_settings_window_reaches_the_file() {
     assert_eq!(shown(&h, "Game render size"), "1920 × 1080 (1080p)");
     assert_eq!(shown(&h, "Upscaler"), "NVIDIA Image Scaling");
     assert_eq!(shown(&h, "Sharpness"), "6");
-    assert_eq!(shown(&h, "Fullscreen"), "Off");
+    let fullscreen = if cfg!(windows) { "On" } else { "Off" };
+    assert_eq!(shown(&h, "Fullscreen"), fullscreen);
     assert_eq!(shown(&h, "Dead zone"), "4%");
 }
 
@@ -851,6 +865,17 @@ fn a_row_that_cant_change_says_why_and_ignores_input() {
             .contains("FSR 1")
     );
     assert!(h.query_by_label_contains("Sharpness: next").is_none());
+    // its whole reason is on the page once the row has the focus
+    assert!(
+        h.query_by_role_and_label(Role::Label, SHARPNESS_OFF)
+            .is_none()
+    );
+    h.state_mut().model.focus = Focus::Item(2);
+    h.run_steps(2);
+    assert!(
+        h.query_by_role_and_label(Role::Label, SHARPNESS_OFF)
+            .is_some()
+    );
     h.state_mut().backend_mut().pads = vec![Input::Down, Input::Down, Input::Right];
     h.run_steps(3);
     assert!(settings_text(&t, 0).contains("sharpness = 5"), "unchanged");
@@ -863,17 +888,18 @@ fn a_row_that_cant_change_says_why_and_ignores_input() {
 
 #[test]
 fn rows_the_linux_helper_owns_are_shown_on_every_system() {
-    let (_t, mut h) = hub("helper-rows");
+    let (t, mut h) = hub("helper-rows");
     open_tab(&mut h, Tab::Settings);
-    for label in ["Upscaler", "Sharpness", "Fullscreen"] {
-        let row = h.get_by_role_and_label(Role::Button, label);
-        assert_eq!(crate::testing::disabled(&row), cfg!(windows), "{label}");
-        if cfg!(windows) {
-            assert_eq!(
-                crate::testing::description(&row).as_deref(),
-                Some(HubWords::DEFAULT.not_here)
-            );
-        }
+    let row = h.get_by_role_and_label(Role::Button, "Fullscreen");
+    assert_eq!(crate::testing::disabled(&row), cfg!(windows));
+    if cfg!(windows) {
+        assert_eq!(
+            crate::testing::description(&row).as_deref(),
+            Some(HubWords::DEFAULT.not_here)
+        );
+        h.get_by_role_and_label(Role::Button, "Fullscreen").click();
+        h.run_steps(3);
+        assert!(!paths_in(&t).settings("ar1").exists(), "nothing changed");
     }
 }
 
@@ -919,7 +945,7 @@ fn rescan_looks_again_and_finds_a_new_game() {
 }
 
 #[test]
-fn a_rescan_during_a_scan_waits_for_it_and_keeps_its_cache() {
+fn a_rescan_during_a_scan_runs_after_it() {
     let (_t, mut h) = hub("rescan-twice");
     open_tab(&mut h, Tab::Settings);
     click_button(&mut h, "Rescan");
@@ -932,9 +958,13 @@ fn a_rescan_during_a_scan_waits_for_it_and_keeps_its_cache() {
     testing::wait(&mut h, "both scans", |a| {
         !a.scanning() && a.library().is_some()
     });
-    // three scans on one cache: the first, the button's, the pad's
-    let scans = h.state().cache.as_ref().map(|c| c.0);
-    assert_eq!(scans, Some(3));
+    // three scans, one after the other: the first, the button's, the pad's
+    let scans = h
+        .state()
+        .backend()
+        .scans
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(scans, 3);
 }
 
 // ------------------------------------------------------------ setup
@@ -1336,4 +1366,14 @@ fn a_message_before_the_window_reaches_the_log() {
         std::fs::read_to_string(log.path()).unwrap(),
         "error: Arcade Racer 9 is not a game here.\n"
     );
+}
+
+#[test]
+fn a_click_on_another_tile_only_selects_it() {
+    let (_t, mut h) = hub_with("double", &[0, 1]);
+    select(&mut h, 0);
+    tile(&h, 1).click();
+    h.run_steps(2);
+    assert_eq!(h.state().model().selected, 1);
+    assert!(h.state().message().is_none(), "nothing started");
 }

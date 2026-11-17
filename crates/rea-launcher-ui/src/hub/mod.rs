@@ -32,7 +32,7 @@ mod theme;
 pub use app::{HubApp, Message};
 pub use backend::{
     ButtonView, Check, ControlsView, Device, ExtraPage, Found, HubBackend, HubForm, HubGame,
-    HubWords, Mark, Note, Reporter, Session, Stage,
+    HubWords, Mark, Note, Reporter, Scanner, Session, Stage,
 };
 pub use paint::{Semantics, cover_uv, edit_text};
 pub use theme::{

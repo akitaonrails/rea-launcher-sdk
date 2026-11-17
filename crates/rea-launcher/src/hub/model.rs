@@ -3,6 +3,7 @@
 //! setup page's path fields and the launcher's extra page. The window
 //! draws this and acts on the [`Effect`]s it returns.
 
+use crate::catalog::Support;
 use crate::pad::Nav;
 
 /// One menu input, from the pad, the keyboard or a click.
@@ -401,17 +402,6 @@ impl Model {
         }
         Effect::None
     }
-}
-
-/// How far a game is from playable here, as the launcher's catalog says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Support {
-    /// Verified in a real race.
-    Ready,
-    /// Starts, but no race was verified; the text says what is known.
-    Unverified(&'static str),
-    /// Can't be played here; the text says why.
-    Blocked(&'static str),
 }
 
 /// Something a game found in the library still needs before it can be

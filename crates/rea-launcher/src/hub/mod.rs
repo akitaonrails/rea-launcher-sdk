@@ -14,8 +14,12 @@ pub use config::{
     HubConfig, LIBRARY, PathField, PathKind, expand_home, expand_home_in, typed_path,
 };
 pub use dirs::{HubDirs, HubPaths};
+
+use std::path::Path;
+
+use crate::gamescope::Size;
 pub use model::{
-    Effect, Focus, Input, Item, Model, Need, Page, Support, Tab, TileState, World, settings_items,
+    Effect, Focus, Input, Item, Model, Need, Page, Tab, TileState, World, settings_items,
 };
 
 /// An error message as a sentence: capital first letter, no final stop
@@ -26,6 +30,22 @@ pub fn sentence(e: &str) -> String {
     match c.next() {
         Some(f) => f.to_uppercase().chain(c).collect(),
         None => "Something went wrong".into(),
+    }
+}
+
+/// A path as the player reads it, with this system's separator: on
+/// Windows a library joined with `/` parts (`C:/games` + `fzax`) shows
+/// as `C:\games\fzax`, never `C:/games\fzax`.
+pub fn display_path(path: &Path) -> String {
+    display_path_on(cfg!(windows), path)
+}
+
+fn display_path_on(windows: bool, path: &Path) -> String {
+    let shown = path.display().to_string();
+    if windows {
+        shown.replace('/', "\\")
+    } else {
+        shown
     }
 }
 
@@ -49,7 +69,8 @@ pub fn pick<T: Copy + PartialEq>(all: &[T], cur: T, d: i32, wrap: bool) -> T {
 
 /// A screen size as the rows show it: `1920 × 1080 (1080p)`; only
 /// 1080p, 1440p and 4K are named.
-pub fn size_name(w: u32, h: u32) -> String {
+pub fn size_name(s: Size) -> String {
+    let (w, h) = (s.w, s.h);
     let tag = match (w, h) {
         (1920, 1080) => " (1080p)",
         (2560, 1440) => " (1440p)",
@@ -87,10 +108,20 @@ mod tests {
     }
 
     #[test]
+    fn paths_show_this_systems_separator() {
+        let mixed = Path::new("C:/games").join("fzax");
+        let windows = display_path_on(true, &mixed);
+        assert!(!windows.contains('/'), "{windows}");
+        assert!(windows.starts_with("C:\\games") && windows.ends_with("fzax"));
+        assert_eq!(display_path_on(false, Path::new("/a/b")), "/a/b");
+    }
+
+    #[test]
     fn sizes_have_their_common_names() {
-        assert_eq!(size_name(1920, 1080), "1920 × 1080 (1080p)");
-        assert_eq!(size_name(3840, 2160), "3840 × 2160 (4K)");
-        assert_eq!(size_name(1360, 768), "1360 × 768");
-        assert_eq!(size_name(1280, 720), "1280 × 720");
+        let name = |w, h| size_name(Size::new(w, h));
+        assert_eq!(name(1920, 1080), "1920 × 1080 (1080p)");
+        assert_eq!(name(3840, 2160), "3840 × 2160 (4K)");
+        assert_eq!(name(1360, 768), "1360 × 768");
+        assert_eq!(name(1280, 720), "1280 × 720");
     }
 }

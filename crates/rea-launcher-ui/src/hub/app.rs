@@ -11,7 +11,8 @@ use std::time::Duration;
 use eframe::egui::{self, TextureHandle};
 use rea_launcher::cfg::OptionSpec;
 use rea_launcher::hub::{
-    Effect, Focus, HubConfig, Input, Model, Page, TileState, World, sentence, typed_path,
+    Effect, Focus, HubConfig, Input, Model, Page, TileState, World, display_path, sentence,
+    typed_path,
 };
 use rea_launcher::log::Log;
 
@@ -58,9 +59,8 @@ pub struct HubApp<B: HubBackend> {
     pub(crate) rows: Vec<&'static OptionSpec>,
     /// The last scan; `None` while looking.
     pub(crate) library: Option<B::Library>,
-    scan: Option<Receiver<(B::Library, B::Cache)>>,
-    pub(crate) cache: Option<B::Cache>,
-    /// A rescan asked for during a scan: started when it ends, with its cache.
+    scan: Option<Receiver<B::Library>>,
+    /// A rescan asked for during a scan: started when it ends.
     rescan: bool,
     pub(crate) form: Option<(usize, B::Form)>,
     /// The last settings save.
@@ -83,13 +83,16 @@ pub struct HubApp<B: HubBackend> {
     pub(crate) screen: Option<(u32, u32)>,
     /// The window was closed while a game ran: close once it has stopped.
     close_after_stop: bool,
+    /// The last tile clicked and when: a second click on the same tile
+    /// soon after plays (egui's double click counts any two widgets).
+    last_tile_click: Option<(usize, f64)>,
     pub(crate) controls: ControlsView,
 }
 
 /// A mouse click, turned into the same model inputs the keyboard sends.
 pub(crate) enum Click {
     Focus(Focus, Option<Input>),
-    Tile(usize, bool),
+    Tile(usize),
     Dismiss,
     StopGame,
 }
@@ -108,8 +111,8 @@ impl<B: HubBackend> HubApp<B> {
                     body: format!(
                         "{}: {e}.\n\nThe launcher won't write over it. Check the file, \
                          then start the launcher again. Details are in {}.",
-                        file.display(),
-                        log.path().display()
+                        display_path(&file),
+                        display_path(log.path())
                     ),
                 };
                 (HubConfig::new(spec.fields), Some(m))
@@ -136,7 +139,6 @@ impl<B: HubBackend> HubApp<B> {
             log,
             library: None,
             scan: None,
-            cache: Some(B::Cache::default()),
             rescan: false,
             form: None,
             note: None,
@@ -153,6 +155,7 @@ impl<B: HubBackend> HubApp<B> {
             extra_note: None,
             screen: None,
             close_after_stop: false,
+            last_tile_click: None,
             controls: ControlsView::default(),
             spec,
             backend,
@@ -201,17 +204,17 @@ impl<B: HubBackend> HubApp<B> {
         if self.config.libraries.is_empty() {
             return;
         }
-        let Some(mut cache) = self.cache.take() else {
+        if self.scan.is_some() {
             self.rescan = true;
             return;
-        };
+        }
         let roots = self.config.libraries.clone();
+        let scanner = self.backend.scanner();
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("scan".into())
             .spawn(move || {
-                let found = B::scan(&roots, &mut cache);
-                let _ = tx.send((found, cache));
+                let _ = tx.send(scanner(&roots));
             })
             .expect("spawn scan thread");
         self.library = None;
@@ -221,12 +224,11 @@ impl<B: HubBackend> HubApp<B> {
     fn poll_scan(&mut self) {
         let Some(rx) = &self.scan else { return };
         match rx.try_recv() {
-            Ok((found, cache)) => {
+            Ok(found) => {
                 for line in B::unknown(&found) {
                     self.log.line(&line);
                 }
                 self.library = Some(found);
-                self.cache = Some(cache);
                 self.scan = None;
                 if std::mem::take(&mut self.rescan) {
                     self.start_scan();
@@ -235,7 +237,6 @@ impl<B: HubBackend> HubApp<B> {
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
                 self.log.error("the library scan stopped unexpectedly");
-                self.cache = Some(B::Cache::default());
                 self.scan = None;
             }
         }
@@ -311,7 +312,7 @@ impl<B: HubBackend> HubApp<B> {
                 Ok(()) => Note::ok("Saved. The game uses it the next time you press Play."),
                 Err(e) => self.logged(format!(
                     "Couldn't save to {}: {e}. Check that the folder can be written.",
-                    path.display()
+                    display_path(&path)
                 )),
             });
         }
@@ -332,7 +333,7 @@ impl<B: HubBackend> HubApp<B> {
             .map_err(|e| {
                 self.logged(format!(
                     "Couldn't save the choice ({e}). Check that {} can be written.",
-                    self.spec.paths.data.display()
+                    display_path(&self.spec.paths.data)
                 ))
             })
     }
@@ -359,10 +360,11 @@ impl<B: HubBackend> HubApp<B> {
             self.config = before;
             return note;
         }
-        self.log.line(&format!("library added: {}", dir.display()));
+        self.log
+            .line(&format!("library added: {}", display_path(&dir)));
         self.typed[0].clear();
         self.start_scan();
-        Note::ok(format!("Added {}.", dir.display()))
+        Note::ok(format!("Added {}.", display_path(&dir)))
     }
 
     fn use_path(&mut self, k: usize) -> Note {
@@ -382,10 +384,7 @@ impl<B: HubBackend> HubApp<B> {
     fn opened_setup(&mut self) {
         self.typed[0].clear();
         for (k, p) in self.config.paths.iter().enumerate() {
-            self.typed[k + 1] = p
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
+            self.typed[k + 1] = p.as_ref().map(|p| display_path(p)).unwrap_or_default();
         }
         self.notes.iter_mut().for_each(|n| *n = None);
     }
@@ -519,7 +518,10 @@ impl<B: HubBackend> HubApp<B> {
                     self.handle(i, ctx);
                 }
             }
-            Click::Tile(i, double) => {
+            Click::Tile(i) => {
+                let now = ctx.input(|inp| inp.time);
+                let double = second_click(self.last_tile_click, i, now);
+                self.last_tile_click = (!double).then_some((i, now));
                 let before = self.model.selected;
                 self.model.select(i);
                 self.model.focus = Focus::Tile;
@@ -607,10 +609,10 @@ impl<B: HubBackend> HubApp<B> {
         let Err(e) = r else { return };
         let title = self.backend.games()[game].title;
         self.log.error(&format!("{title}: {e}"));
-        let launcher_log = format!("Details are in {}.", self.log.path().display());
+        let launcher_log = format!("Details are in {}.", display_path(self.log.path()));
         self.message = Some(if started {
             let next = match self.backend.game_log(game) {
-                Some(log) => format!("the game's log is {}.", log.display()),
+                Some(log) => format!("the game's log is {}.", display_path(&log)),
                 None => launcher_log,
             };
             Message {
@@ -678,6 +680,15 @@ impl<B: HubBackend> HubApp<B> {
     }
 }
 
+/// Seconds between two clicks on one tile that play it.
+const DOUBLE_CLICK: f64 = 0.4;
+
+/// Whether a click on tile `i` at `now` is the second of a double click:
+/// the last click was on the same tile, soon enough.
+fn second_click(last: Option<(usize, f64)>, i: usize, now: f64) -> bool {
+    last.is_some_and(|(at, t)| at == i && now - t <= DOUBLE_CLICK)
+}
+
 /// Laid out for 720 lines, zoomed to the window.
 fn zoom_to_design(ctx: &egui::Context) {
     let native = ctx.native_pixels_per_point().unwrap_or(1.0);
@@ -737,4 +748,20 @@ fn load_art<B: HubBackend>(spec: &HubSpec, backend: &B) -> Receiver<Art> {
         })
         .expect("spawn art thread");
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_double_click_is_two_clicks_on_one_tile() {
+        assert!(second_click(Some((1, 10.0)), 1, 10.3));
+        assert!(!second_click(Some((1, 10.0)), 1, 10.5), "too slow");
+        assert!(
+            !second_click(Some((0, 10.0)), 1, 10.1),
+            "another tile (or a tab)"
+        );
+        assert!(!second_click(None, 1, 10.0));
+    }
 }

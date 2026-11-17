@@ -112,15 +112,21 @@ impl HubConfig {
     /// keys follow them. A new file starts with "# Written by the launcher.".
     pub fn render(&self, existing: &str, fields: &[PathField]) -> String {
         let managed = |key: &str| key == LIBRARY || fields.iter().any(|f| f.answers_to(key));
-        let mut out = if existing.trim().is_empty() {
-            String::from("# Written by the launcher.\n")
-        } else {
-            existing
-                .lines()
-                .filter(|line| !line_key(line).is_some_and(managed))
-                .map(|line| format!("{line}\n"))
-                .collect()
+        let (bom, existing) = match existing.strip_prefix(BOM) {
+            Some(rest) => (BOM.to_string(), rest),
+            None => (String::new(), existing),
         };
+        let mut out = bom;
+        if existing.trim().is_empty() {
+            out.push_str("# Written by the launcher.\n");
+        } else {
+            out.extend(
+                existing
+                    .lines()
+                    .filter(|line| !line_key(line).is_some_and(managed))
+                    .map(|line| format!("{line}\n")),
+            );
+        }
         for l in &self.libraries {
             out.push_str(&format!("{LIBRARY} = {}\n", l.display()));
         }
@@ -155,10 +161,11 @@ impl HubConfig {
     }
 }
 
-/// The key of an active `key = value` line, set or blank (a BOM before it
-/// is skipped).
+const BOM: char = '\u{feff}';
+
+/// The key of an active `key = value` line, set or blank.
 fn line_key(line: &str) -> Option<&str> {
-    let t = line.trim_start_matches('\u{feff}').trim();
+    let t = line.trim();
     if t.starts_with(['#', ';']) {
         return None;
     }
@@ -197,7 +204,7 @@ pub fn typed_path(typed: &str, kind: PathKind, empty: &str) -> Result<PathBuf, S
     if !kind.accepts(&path) {
         return Err(format!(
             "{} isn't a {} this computer can open. Check the path and try again.",
-            path.display(),
+            super::display_path(&path),
             kind.noun()
         ));
     }
@@ -242,6 +249,14 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_library_listed_twice_is_saved_once() {
+        let text = "library = /a\nlibrary = /b\nlibrary = /a\n";
+        let c = HubConfig::parse(text, &FIELDS);
+        assert_eq!(c.libraries, [PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert_eq!(c.render(text, &FIELDS), "library = /a\nlibrary = /b\n");
+    }
+
+    #[test]
     fn an_old_key_is_read_and_saved_under_the_new_name() {
         let c = HubConfig::parse("chihiro_bios = /old\n", &FIELDS);
         assert_eq!(c.paths[0], Some(PathBuf::from("/old")));
@@ -256,8 +271,8 @@ pub(crate) mod tests {
         c.add_library(Path::new("/b"));
         assert_eq!(
             c.render(text, &FIELDS),
-            "# mine\nfuture = 1\nlibrary = /a\nlibrary = /b\n",
-            "no duplicate first key"
+            "\u{feff}# mine\nfuture = 1\nlibrary = /a\nlibrary = /b\n",
+            "no duplicate first key, the BOM kept"
         );
     }
 
