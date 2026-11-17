@@ -30,6 +30,7 @@ pub mod paths;
 pub mod pe;
 pub mod runtime;
 pub mod saves;
+pub mod session;
 pub mod testing;
 pub mod wal;
 pub mod wheel;
