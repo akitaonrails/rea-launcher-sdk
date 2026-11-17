@@ -133,6 +133,10 @@ EOF
 expect "native Linux build without the unix lock (DiRT Rally)" error instance-unix
 printf '%s\n' "$out" | grep -q 'error\[native-report\]' && ok "... and without the native error window" \
   || bad "native-report not reported: $out"
+printf 'fn f() { hub::fatal(); }\nuse rea_launcher_ui::hub;\n' >> "$L/crates/fx-launcher/src/main.rs"
+run "$L"
+printf '%s\n' "$out" | grep -q 'native-report' && bad "a hub launcher's hub::fatal not accepted: $out" \
+  || ok "a hub launcher reports through hub::fatal"
 printf '%s\n' "$out" | grep -q '\[instance\]' && bad "Windows tests only: no Windows program ships, no mutex needed: $out" \
   || ok "a Windows-tests-only job ships no Windows program"
 fresh; printf 'fn f() { running.bring_to_front(Window::Title(TITLE)); }\n' >> "$L/crates/fx-launcher/src/main.rs"
