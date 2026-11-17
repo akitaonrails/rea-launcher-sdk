@@ -13,6 +13,8 @@
 
 #[cfg(feature = "child")]
 pub mod child;
+#[cfg(all(feature = "feeder", any(target_os = "linux", windows)))]
+pub mod feeder;
 #[cfg(all(feature = "group", any(target_os = "linux", windows)))]
 pub mod group;
 pub mod policy;
