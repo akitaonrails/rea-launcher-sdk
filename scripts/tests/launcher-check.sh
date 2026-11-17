@@ -55,6 +55,17 @@ after=$(cd "$GOOD" && find . -type f -exec cksum {} + | LC_ALL=C sort)
 [ "$before" = "$after" ] && [ -z "$(cd "$GOOD" && find . -newer "$CHECK" -name '*.tmp')" ] \
   && ok "read-only: the repository is unchanged" || bad "the check changed the repository"
 
+# sdk-sync vendors the hub launchers' build helper and SDL2 pin into every
+# launcher: a launcher that doesn't use them is not flagged for them.
+fresh; mkdir -p "$L/sdk/packaging"
+cp "$ROOT/packaging/sdl2.pins" "$ROOT/packaging/build-launcher.sh" "$ROOT/packaging/pins.sh" "$L/sdk/packaging/"
+run "$L"
+if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '^launcher-check: 0 error(s), 0 warning(s)'; then
+  ok "the vendored build-launcher.sh and sdl2.pins are not flagged"
+else
+  bad "vendored build-launcher.sh and sdl2.pins: $out"
+fi
+
 # --- golden snapshots -----------------------------------------------------------------
 fresh; rm "$L/crates/fx-launcher/tests/snapshots.rs"
 expect "no tests/snapshots.rs (DiRT Rally)" error snapshots
