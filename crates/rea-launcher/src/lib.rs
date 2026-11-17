@@ -10,11 +10,13 @@
 pub mod args;
 pub mod catalog;
 pub mod cfg;
+pub mod cpus;
 pub mod display;
 pub mod download;
 pub mod env;
 pub mod ffb;
 pub mod fsx;
+pub mod gamescope;
 pub mod identify;
 pub mod ini;
 pub mod installer;
