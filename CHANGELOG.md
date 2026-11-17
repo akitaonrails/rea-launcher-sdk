@@ -11,6 +11,34 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ### Added
 
+- The TeknoParrot hub launchers' pure code, from their four copies
+  (Initial D, Nintendo, Sega, Wangan) with each copy's fixes for all
+  (`crates/rea-launcher/README.md`, "Hub launchers", and its Migration
+  section for each launcher):
+  - `catalog` and `library`: a game table as `Title` implementations
+    (SHA-256 or CHD SHA-1 editions), and `Library::scan` returning the
+    games and the folders or files it could not read. Clones of a
+    `HashCache` share it, so a rescan reuses a running scan's digests;
+    images found by extension are hashed only within a size range.
+  - `gamescope`: picture sizes, upscalers, the CRT look, `fit`, the
+    gamescope arguments (a headless run scales `linear`) and the command
+    line through bubblewrap's read-only library binds and `taskset`.
+  - `cpus`: one cache domain of alike cores, from sysfs or Windows'
+    processor records (Sega's F355 boards).
+  - `wal`: windowsarcadeloader's `p1` input lines from a launcher's bit
+    table, its `out` lines and force feedback state, and
+    `free_port_block` (a free block of its ports for every start).
+  - `session`: `early_end`, `WindowWatch`, `strip_ansi`,
+    `default_interface`.
+  - `linkfarm` (feature `linkfarm`): a runtime folder of links to a
+    read-only dump, by a `Policy`; copies are writable whole-file swaps,
+    and a link left where a real folder now goes is replaced, never
+    written through.
+- `packaging/build-launcher.sh` and `packaging/sdl2.pins`: a native
+  launcher's Linux or x86_64 Windows build, SDL2 fetched through
+  `pins.sh` (a download cut short no longer wedges the next build).
+- `scripts/dev-check` and CI test, lint and Wine-test `rea-launcher` with
+  all its features (`zip` was built by no check).
 - `rea-launcher-native` feature `group`: `group::Group`, a game session's
   processes started and stopped as one (the TeknoParrot hubs'
   `proc.rs`). Linux: a process group tied to the launcher

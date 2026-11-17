@@ -34,6 +34,13 @@ made that copy the reference.
 | `args` | Windows command-line quoting |
 | `instance` | One launcher at a time without the play helper (native Linux): `instance::single`, a `flock` |
 | `testing` | Golden snapshots for launcher tests: `snapshot!`, version as `<version>`, CRLF-proof |
+| `catalog` | A hub launcher's game table as data: `Title` (id, main file, editions), `Edition` (`Ident::Sha256`/`ChdSha1`), `Support`, `Host::current`, `identify`, `check_table` |
+| `library` | Finding those games in library folders: `Library::scan`/`probe_dir` → `Scan { entries, problems }`, a shared `HashCache`, `Extra` images by extension and size, `chd_sha1` |
+| `gamescope` | `Size`, `fit`, `Upscaler`, `Crt`, the gamescope arguments (`Picture::args`, headless → `linear`), the ReShade `effect_home`, `CommandLine` (gamescope → bubblewrap read-only binds → `taskset` → game) |
+| `cpus` | Alike CPUs for a game that needs them: `uniform_cpus`, from sysfs (`linux_cpus`) or a Windows `GetLogicalProcessorInformationEx` buffer (`windows_cpus`) |
+| `wal` | windowsarcadeloader's input pipe (`Stick::line`, `buttons` through the launcher's bit table, `button::*`), its outputs (`Out`, `Ffb`) and `free_port_block` |
+| `session` | One game run: `early_end` (a start that failed, with the log's errors), `WindowWatch` (a closed game window, debounced), `strip_ansi`, `default_interface` |
+| `linkfarm` | Feature `linkfarm`: a runtime folder of links to a read-only dump (junctions and kept-in-step copies on Windows): `plan` by a `Policy` of `Place`s, `apply`, `dangling`, `mirror_file`, `write_stored_zip` |
 
 ## Examples
 
@@ -573,6 +580,148 @@ the launcher's own extractor to `download::install_with`; it reports
 progress with `job.set_phase(Phase::Unpacking { done, total })`. Give
 each component its own `root`: older versions there are removed.
 
+## Hub launchers
+
+The TeknoParrot launchers (Initial D, Nintendo, Sega, Wangan) start many
+games from a player's library through loaders and emulators. Their game
+knowledge (the table, routes, button bits, which files a game writes)
+stays in the launcher as data and trait implementations:
+
+```rust
+use rea_launcher::catalog::{Edition, Support, Title};
+use rea_launcher::library::{Extra, HashCache, Library};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum GameId { Id5, Id8 }
+
+#[derive(Debug)]
+struct Game { id: GameId, main_file: &'static str, editions: &'static [Edition], support: Support }
+
+impl Title for Game {
+    type Id = GameId;
+    fn id(&self) -> GameId { self.id }
+    fn main_file(&self) -> &'static str { self.main_file }
+    fn editions(&self) -> &'static [Edition] { self.editions }
+}
+
+static GAMES: &[Game] = &[Game {
+    id: GameId::Id5,
+    main_file: "id5.elf",
+    editions: &[Edition::sha256(
+        "5bef53f3b9fd38e3b27d450866468301626515b17d01c77e3c720a42f33cb6ad",
+        "Export 2.0",
+    )],
+    support: Support::Ready,
+}];
+
+assert_eq!(rea_launcher::catalog::check_table(GAMES), Ok(()));
+// one cache for the launcher: every scan (and a rescan during a scan) shares it
+let cache = HashCache::default();
+let library = Library::new(GAMES)
+    .with_extra(Extra { extensions: &[".iso", ".gcm"], sizes: 1 << 30..=2 << 30 })
+    .with_cache(cache.clone());
+let scan = library.scan(&[std::env::temp_dir().join("rea-doc-no-library")]);
+assert!(scan.entries.is_empty());
+for problem in &scan.problems {
+    eprintln!("warning: {problem}"); // and into launcher.log
+}
+```
+
+On Linux a game runs inside gamescope, with every library folder bound
+read-only by bubblewrap:
+
+```rust
+use std::path::Path;
+use rea_launcher::gamescope::{CommandLine, Crt, Picture, Size, Upscaler};
+
+let picture = Picture {
+    game: Size::new(1360, 768),
+    output: Size::new(3840, 2160),
+    upscaler: Upscaler::Fsr,
+    sharpness: 5,
+    fullscreen: true,
+    crt: Crt::Off,
+};
+let line = CommandLine {
+    gamescope: picture.args(false), // true: headless, for tests
+    homes: None,                    // Some((effect_home(rt), player's HOME)) with a CRT look
+    read_only: Some(vec!["/games".into()]), // None when bwrap is missing
+    cpus: None,                     // Some(cpus::taskset_list(&set))
+};
+let argv = line.argv(Path::new("/c/wal/arcade-launcher"), &["run".into()]);
+assert_eq!(argv[0], "gamescope");
+```
+
+windowsarcadeloader reads `p1 <buttons> <lx> <ly> <rx> <ry> <accel>
+<brake>` lines; the launcher maps its own buttons to the profile's bits:
+
+```rust
+use rea_launcher::wal::{self, Ffb, Stick, button};
+use rea_launcher::wheel::{Control, Controls};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Button { GearUp, Start }
+impl Control for Button {
+    const ALL: &'static [Self] = &[Button::GearUp, Button::Start];
+    fn key(self) -> &'static str { "b" }
+    fn label(self) -> &'static str { "B" }
+    fn bit(self) -> u32 { 1 << (self as u32) }
+}
+fn ringedge(b: Button) -> u32 {
+    match b { Button::GearUp => button::B1, Button::Start => button::START }
+}
+
+let read = Controls { steer: -1.0, accel: 1.0, brake: 0.0, buttons: Button::Start.bit() };
+let line = Stick::driving(wal::buttons(read.buttons, ringedge), &read).line();
+assert_eq!(line, "p1 1000 -32767 0 0 0 32767 0");
+let mut ffb = Ffb::default();
+assert!(ffb.apply("out 0 1 -5000")); // from the loader's stdout
+let port = wal::free_port_block(33700); // the loader's first port this start
+# let _ = port;
+```
+
+`linkfarm` (feature) builds the runtime folder: a `Policy` says where each
+entry of the dump goes (`Place::Link` by default, `CopyOnce`, `Open` for a
+folder the game writes into, `Empty`, `Skip`) and the launcher adds its own
+files as `Op::Refresh`:
+
+```rust
+# #[cfg(feature = "linkfarm")] {
+use std::path::Path;
+use rea_launcher::linkfarm::{self, Item, Occupied, Place, Policy};
+
+struct Rally;
+impl Policy for Rally {
+    fn place(&self, rel: &str, it: &Item) -> Place {
+        match rel {
+            _ if linkfarm::ntfs_leftover(rel) => Place::Skip,
+            "Rally" => Place::Open, // config.ini and logs beside the program
+            _ if !it.dir && it.size < 4 << 20 && !it.name.ends_with(".exe") => Place::CopyOnce,
+            _ => Place::Link,
+        }
+    }
+}
+
+let (dump, rt) = (std::env::temp_dir().join("rea-doc-dump"), std::env::temp_dir().join("rea-doc-farm"));
+std::fs::create_dir_all(dump.join("Rally"))?;
+let ops = linkfarm::plan(&dump, &rt, &Rally, &linkfarm::list)?;
+// a launcher appends its own files: Op::Refresh { from, to, exec }
+for gone in linkfarm::dangling(&rt).unwrap_or_default() {
+    linkfarm::remove_link(&gone)?;
+}
+linkfarm::apply(&ops, Occupied::Refuse)?;
+assert!(rt.join("Rally").is_dir());
+# std::fs::remove_dir_all(dump)?; std::fs::remove_dir_all(rt)?;
+# }
+# Ok::<(), std::io::Error>(())
+```
+
+`session` has the run's small helpers (`early_end` after a run that ended
+by itself, `WindowWatch` for a game window the player closes, `strip_ansi`
+for coloured logs) and `cpus` keeps a game on one cache domain.
+`packaging/build-launcher.sh` builds such a launcher for Linux or x86_64
+Windows with the SDK's pinned SDL2 (packaging/README.md).
+
 ## Migration
 
 What changes for each launcher when it swaps its own copy for the SDK's.
@@ -733,6 +882,59 @@ What changes when it moves its own copies onto the SDK:
   `Log::new(..).per_run().timestamps(true)`: `info` lines go to the file
   only (it printed every line to stderr too), and lines get `info:`/
   `warning:` prefixes from `info`/`warn`.
+
+### TeknoParrot hub launchers (Initial D, Nintendo, Sega, Wangan)
+
+What changes when a hub launcher swaps its copy for the SDK's module:
+
+- `catalog.rs`: implement `catalog::Title` for `Game`; editions become
+  `Edition::sha256(..)` / `Edition::chd_sha1(..)` (Nintendo, Sega and
+  Wangan had a bare `sha256` field); `Support`, `Host` (Wangan's
+  `Platform::HOST` is `Host::current()`) and `identify(GAMES, digest)` come
+  from the SDK; the uniqueness test is `check_table(GAMES)`.
+- `library.rs` → `Library::new(GAMES).scan(&roots)`, which returns
+  `Scan { entries, problems }`: unreadable folders and files are now
+  reported (log them) instead of skipped. `Found::Unknown` has `digest`
+  (Wangan: `sha256`) and `Entry` has `file` everywhere. Keep one
+  `HashCache` in the window and pass a clone to each scan: a rescan during
+  a scan reuses its digests. Nintendo: `with_extra(Extra { extensions:
+  &[".iso", ".gcm"], sizes })` with the disc sizes it accepts; images
+  outside them are no longer hashed. Wangan: a folder with two main-file
+  names yields both (it stopped at the first).
+- `settings.rs`'s `Size`, `Upscaler`, `Crt`, `fit` → `gamescope`.
+  `Upscaler::parse` accepts any case (Sega's; Initial D, Nintendo and
+  Wangan were exact). `gamescope_args` → `Picture { .. }.args(headless)`;
+  `session::command_line` → `gamescope::CommandLine::argv` (Initial D's
+  `HOME` pair is `homes`, Sega's CPU list `cpus`); the CRT link is
+  `effect_link(&effect_home(rt), shaders, effect)`.
+- Sega's `launch::{Cpu, cpu_list, uniform_cpus, windows_cpus}` and the
+  sysfs reader → `cpus` (`linux_cpus(Path::new("/sys"))`, `taskset_list`).
+- `input.rs`: the `wal` bit constants → `wal::button`, `pipe_line` →
+  `Stick::driving(wal::buttons(read.buttons, layout_bit), &read).line()`
+  (a gun: `Stick { lx, ly, .. }`), the input thread's `Ffb` → `wal::Ffb`.
+  Initial D's `free_wal_port` → `wal::free_port_block`; Sega (the loader's
+  default 33700, Initial D's too) and Nintendo (a fixed 33790) take a free
+  block from their own start port.
+- `session.rs`: Initial D's `early_end`, Sega's `GameWindow` (→
+  `WindowWatch`, `gone()`), `without_colours` (→ `strip_ansi`) and
+  `launch::default_interface` → `session`.
+- `runtime.rs` → `linkfarm` (feature `linkfarm`; drop the `junction`
+  dependency): the per-route `skip`/`copied`/`opened`/seeds become one
+  `Policy::place` (+ `seed`); Nintendo's `Mirror` op is `Place::Open` for
+  the folders on the way to the program; Wangan's `TreeOnce` is
+  `Place::CopyOnce` on a folder and its save folders `Place::Empty`; Sega's
+  `Archive` stays (its `zipstore` and `crc32fast` go). `apply(ops,
+  Occupied::Refuse)` for Initial D, Nintendo and Sega, `Occupied::Keep` for
+  Wangan. Behaviour that changes: every copy is writable (a read-only file
+  in a dump broke the next refresh on Windows); an `Op::Dir` where an
+  older launcher left a link replaces the link (writes went into the dump
+  through it); `CopyOnce` replaces a leftover link (Wangan kept it) and
+  copies nothing when the source is missing (Initial D, Nintendo and Sega
+  failed); Initial D's Zero adds `Op::Dir(rt)` before planning into
+  `rt/package`.
+- `scripts/build-launcher.sh` → `sdk/packaging/build-launcher.sh --root
+  "$root" <linux|windows|sdl2> <package>...`; `packaging/sdl2.pin` goes
+  (the SDK's `sdl2.pins`). Wangan keeps its `io` target around it.
 
 ### OR
 
