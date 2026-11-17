@@ -63,9 +63,11 @@ impl Tag {
     }
 
     /// Windows: keep the session on these logical CPUs (processor group
-    /// 0), set before its first instruction, so every process it starts
-    /// inherits them. On Linux put `taskset` in the command line instead
-    /// (it pins the game without pinning gamescope).
+    /// 0; `rea_launcher::cpus::windows_cpus` of
+    /// [`logical_processor_information`], then `uniform_cpus`), set before
+    /// its first instruction, so every process it starts inherits them. On
+    /// Linux put `taskset` in the command line instead
+    /// (`cpus::taskset_list`: it pins the game without pinning gamescope).
     #[cfg(windows)]
     pub fn cpus(mut self, cpus: &[u32]) -> Tag {
         self.cpus = cpus.to_vec();

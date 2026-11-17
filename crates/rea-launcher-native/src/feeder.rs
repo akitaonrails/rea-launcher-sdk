@@ -20,6 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use rea_launcher::ffb::FfbOutput;
+use rea_launcher::wal::{Ffb, Out};
 use rea_launcher::wheel::{
     Control, Controls, Kind, PadMap, PadSettings, PedalAxis, Script, SteeringLock, WheelProfile,
     WheelSettings, dinput::NoButtons, read_pad,
@@ -36,8 +37,6 @@ pub const REFRESH: Duration = Duration::from_millis(100);
 /// A script's line is written at least this often (Dolphin's pipe drops
 /// what came before it opened).
 const SCRIPT_REFRESH: Duration = Duration::from_millis(200);
-/// windowsarcadeloader's force feedback lines on its stdout.
-const OUTPUT_PREFIX: &str = "out ";
 
 /// One look at the controls.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -55,7 +54,8 @@ pub trait Wire: Send + 'static {
     /// The text to write for `frame`: whole lines, each ending in `\n`.
     fn encode(&mut self, frame: &Frame) -> String;
     /// One line the game wrote (`out …`), into its force feedback state;
-    /// whether it was one. The default reads windowsarcadeloader's.
+    /// whether it was one. The default reads windowsarcadeloader's
+    /// ([`Ffb::apply`]).
     fn output(&mut self, line: &str, ffb: &mut Ffb) -> bool {
         ffb.apply(line)
     }
@@ -68,50 +68,6 @@ pub trait Wire: Send + 'static {
     /// windowsarcadeloader).
     fn quit(&self) -> Option<&'static str> {
         None
-    }
-}
-
-/// The game's force feedback state, from windowsarcadeloader's outputs
-/// (`out <player> <id> <value>`: 1 constant, 2 centring spring, 3
-/// vibration, each ±10000). The spring is played as a damper, which also
-/// resists the wheel.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Ffb(pub FfbOutput);
-
-impl Ffb {
-    /// The state scaled by the player's strength (`gain`, 0–2), each effect
-    /// kept within its range.
-    pub fn scaled(&self, gain: f32) -> FfbOutput {
-        let o = self.0;
-        FfbOutput {
-            constant: (o.constant * gain).clamp(-1.0, 1.0),
-            damper: (o.damper * gain).clamp(0.0, 1.0),
-            rumble: (o.rumble * gain).clamp(0.0, 1.0),
-            ..o
-        }
-    }
-
-    /// Applies one `out <player> <id> <value>` line; `false` if it isn't one.
-    pub fn apply(&mut self, line: &str) -> bool {
-        let mut w = line.split_whitespace();
-        if w.next() != Some("out") {
-            return false;
-        }
-        let (Some(_player), Some(id), Some(value)) = (
-            w.next(),
-            w.next().and_then(|v| v.parse::<u16>().ok()),
-            w.next().and_then(|v| v.parse::<i32>().ok()),
-        ) else {
-            return false;
-        };
-        let v = value as f32 / 10000.0;
-        match id {
-            1 => self.0.constant = v.clamp(-1.0, 1.0),
-            2 => self.0.damper = v.clamp(0.0, 1.0),
-            3 => self.0.rumble = v.clamp(0.0, 1.0),
-            _ => return false,
-        }
-        true
     }
 }
 
@@ -474,7 +430,7 @@ impl supervise::Feed for Feeding {
     fn outputs(&mut self) -> Option<Outputs> {
         let tx = self.tx.clone();
         Some(Box::new(move |line| {
-            let ffb = line.starts_with(OUTPUT_PREFIX);
+            let ffb = Out::parse(line).is_some();
             if ffb {
                 let _ = tx.send(Command::Output(line.to_string()));
             }
@@ -516,7 +472,7 @@ impl supervise::Feed for Scripted {
     }
 
     fn outputs(&mut self) -> Option<Outputs> {
-        Some(Box::new(|line| line.starts_with(OUTPUT_PREFIX)))
+        Some(Box::new(|line| Out::parse(line).is_some()))
     }
 
     fn tick(&mut self, ran: Duration) {
@@ -562,27 +518,5 @@ mod tests {
         assert_eq!(stick_axis(32767, 1638), 1.0);
         assert_eq!(stick_axis(-32768, 1638), -1.0);
         assert!(stick_axis(17000, 1638) > 0.4);
-    }
-
-    #[test]
-    fn force_feedback_lines_update_the_state() {
-        let mut f = Ffb::default();
-        assert!(f.apply("out 0 1 -5000"));
-        assert!(f.apply("out 0 2 10000"));
-        assert!(f.apply("out 0 3 2500"));
-        assert!(!f.apply("out 0 9 1"));
-        assert!(!f.apply("out 0 1"));
-        assert!(!f.apply("wine: hello"));
-        assert_eq!(f.0.constant, -0.5);
-        assert_eq!(f.0.damper, 1.0);
-        assert_eq!(f.0.rumble, 0.25);
-        let half = f.scaled(0.5);
-        assert_eq!(
-            (half.constant, half.damper, half.rumble),
-            (-0.25, 0.5, 0.125)
-        );
-        let off = f.scaled(0.0);
-        assert_eq!((off.constant, off.damper, off.rumble), (0.0, 0.0, 0.0));
-        assert_eq!(f.scaled(2.0).damper, 1.0, "kept within range");
     }
 }

@@ -55,8 +55,8 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   stop, grace, kill, leftovers; `Hold` keeps a loader's input open until
   the stop; `Outcome::ended_early`).
 - `rea-launcher-native` feature `feeder`: the hubs' SDL input thread
-  (`InputService`, a `Wire` per game's line format, `Ffb` for
-  windowsarcadeloader's `out` lines, `Tuning`, `find_wheel`) and the
+  (`InputService`, a `Wire` per game's line format, `rea_launcher::wal::Ffb`
+  for windowsarcadeloader's `out` lines, `Tuning`, `find_wheel`) and the
   `Feeding`/`Scripted` feeds; the force feedback is released when the
   game's input breaks.
 - `rea_launcher::procs` (`descendants`, `environ_has`, `is_zombie`,

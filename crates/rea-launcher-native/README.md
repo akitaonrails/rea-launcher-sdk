@@ -17,7 +17,7 @@ tested on any host in `policy`.
 | `sdl` | `sdl` | `Sdl` (hints, no video), `Devices` (rescan throttle that keeps plug events, spare interfaces skipped, force feedback of the wheel in use), `Device` (axes, buttons, hat, the pad view of a pad, `nav_bits`, rate-limited `rumble`), `Haptic` (constant + damper + friction, keepalive, revive) |
 | `group` | `group` | A game session's processes as one: `Group::spawn(cmd, &Tag)`, `terminate` (Linux `SIGTERM` to the group, Windows `WM_CLOSE` to the leader's windows), `kill`, `any_left`, `exited`/`wait_exit` (no reaping), `finish` (reap, kill and count the leftovers); Linux `terminate_one`, `members`; Windows `windows` (`Window::hide`/`focus`/`close`), `kill_under`, `Tag::cpus`, `logical_processor_information` |
 | `supervise` | `group` | `run(group, feed, watcher, Options)`: one game run, 10 ms poll, output to the log and a `Watcher`, stop → polite stop → grace → kill, leftovers; `Feed` and `Hold` (input kept open), `Outcome::ended_early` |
-| `feeder` | `feeder` (`sdl` + `group`) | The hubs' input thread: `InputService::start(pad_map, paddles)`, `Command::{Attach, Output, Detach}`, `Wire` (a game's line format), `Ffb`, `Tuning`, `Snapshot`, `find_wheel`; feeds `Feeding` and `Scripted` |
+| `feeder` | `feeder` (`sdl` + `group`) | The hubs' input thread: `InputService::start(pad_map, paddles)`, `Command::{Attach, Output, Detach}`, `Wire` (a game's line format; force feedback in `rea_launcher::wal::Ffb`), `Tuning`, `Snapshot`, `find_wheel`; feeds `Feeding` and `Scripted` |
 | `policy` | always | `Rescan`, `Retry`, `RumbleLimit`, `HapticPolicy`, `effect_params` ("from the west") |
 
 The pure halves live in `rea-launcher`: `wheel` (known wheels,
@@ -86,6 +86,7 @@ if out.ended_early(Duration::from_secs(20)) {
 
 ```rust,no_run
 # #[cfg(feature = "feeder")] fn main() {
+use rea_launcher::wal::{self, Stick};
 use rea_launcher::wheel::{Control, PadMap};
 use rea_launcher_native::feeder::{Feeding, Frame, InputService, Tuning, Wire};
 
@@ -96,12 +97,14 @@ use rea_launcher_native::feeder::{Feeding, Frame, InputService, Tuning, Wire};
 #     fn label(self) -> &'static str { "Start" }
 #     fn bit(self) -> u32 { 1 }
 # }
-/// windowsarcadeloader's stick line (the launcher's button table).
+/// windowsarcadeloader's stick line, through the launcher's button table.
 struct Wal;
 impl Wire for Wal {
     fn encode(&mut self, f: &Frame) -> String {
-        let c = f.controls;
-        format!("p1 {:x} {} 0 0 0 {} {}\n", c.buttons, c.steer, c.accel, c.brake)
+        let bits = wal::buttons(f.controls.buttons, |b: Button| match b {
+            Button::Start => wal::button::START,
+        });
+        Stick::driving(bits, &f.controls).line() + "\n"
     }
     fn quit(&self) -> Option<&'static str> { Some("quit") }
 }
