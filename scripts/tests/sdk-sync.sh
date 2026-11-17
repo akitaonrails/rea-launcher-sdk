@@ -43,7 +43,7 @@ if cmp -s "$S/shell/rea-play.sh" "$L/sdk/rea-play.sh"; then ok "play library ven
   && ok "vendored scripts/launcher-check (executable, for launcher-ci's conformance step)" || bad "vendored scripts/launcher-check"
 [ ! -e "$L/sdk/scripts/sdk-sync" ] && ok "sdk-sync itself not vendored" || bad "sdk-sync itself not vendored"
 for f in packaging/pins.sh packaging/appimage-wine.sh packaging/smoke-package.sh \
-  packaging/release-notes.sh packaging/appimage/AppRun.in packaging/appimage/tools.pins \
+  packaging/release-notes.sh packaging/build-launcher.sh packaging/sdl2.pins packaging/appimage/AppRun.in packaging/appimage/tools.pins \
   packaging/appimage/wine/COPYING.LIB packaging/appimage/wine/LICENSE packaging/appimage/wine/SOURCE.txt; do
   if cmp -s "$S/$f" "$L/sdk/$f"; then ok "vendored $f"; else bad "vendored $f"; fi
 done
