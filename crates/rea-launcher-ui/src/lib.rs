@@ -16,6 +16,9 @@
 //! - [`spec`]: window rows from the core option table, with a parity check.
 //! - [`wheel`]: the Wheel tab of a DirectInput game (`rea_wheel.ini`):
 //!   devices, live check, steering, pedal calibration, force feedback.
+//! - [`hub`]: the hub look (full screen, pad first, tiles and a hero
+//!   picture) for a launcher of a series of arcade games: `hub::run` over
+//!   the launcher's `hub::HubBackend`.
 //! - `testing` (feature `testing`): headless GUI tests through AccessKit.
 //!
 //! `eframe` and `egui` are re-exported, so a launcher needs no matching
@@ -28,6 +31,7 @@ pub use eframe;
 pub use eframe::egui;
 
 pub mod download;
+pub mod hub;
 pub mod pad;
 pub mod report;
 pub mod spec;

@@ -411,6 +411,7 @@ pub fn text_size_problems(metrics: &Metrics) -> Vec<String> {
 /// default proportional font).
 pub const SEMIBOLD: &str = "barlow-semibold";
 pub const CONDENSED: &str = "condensed";
+pub const CONDENSED_BOLD: &str = "condensed-bold";
 pub const DECAL: &str = "decal";
 
 /// Barlow Regular, the body font.
@@ -426,6 +427,11 @@ pub fn semibold(size: f32) -> FontId {
 /// Barlow Condensed SemiBold: tabs, card titles.
 pub fn condensed(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(CONDENSED.into()))
+}
+
+/// Barlow Condensed Bold: the hub's game titles and page headings.
+pub fn condensed_bold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(CONDENSED_BOLD.into()))
 }
 
 /// Barlow Condensed Black Italic: the title and the Play plate, like a door
@@ -457,6 +463,10 @@ pub fn fonts() -> FontDefinitions {
             &include_bytes!("../assets/fonts/BarlowCondensed-SemiBold.ttf")[..],
         ),
         (
+            CONDENSED_BOLD,
+            &include_bytes!("../assets/fonts/BarlowCondensed-Bold.ttf")[..],
+        ),
+        (
             DECAL,
             &include_bytes!("../assets/fonts/BarlowCondensed-BlackItalic.ttf")[..],
         ),
@@ -466,7 +476,7 @@ pub fn fonts() -> FontDefinitions {
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         fonts.families.insert(family, vec!["barlow".into()]);
     }
-    for name in [SEMIBOLD, CONDENSED, DECAL] {
+    for name in [SEMIBOLD, CONDENSED, CONDENSED_BOLD, DECAL] {
         fonts.families.insert(
             FontFamily::Name(name.into()),
             vec![name.into(), "barlow".into()],
@@ -1020,7 +1030,7 @@ pub(crate) mod tests {
         install_with(&ctx, &OR, &OR_METRICS);
         assert_eq!(metrics(&ctx), OR_METRICS);
         let fonts = fonts();
-        for name in [SEMIBOLD, CONDENSED, DECAL] {
+        for name in [SEMIBOLD, CONDENSED, CONDENSED_BOLD, DECAL] {
             assert!(fonts.families.contains_key(&FontFamily::Name(name.into())));
         }
         assert!(OFL.contains("SIL OPEN FONT LICENSE"));
