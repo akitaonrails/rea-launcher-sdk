@@ -30,6 +30,14 @@ mod imp {
     use std::os::unix::process::CommandExt;
 
     pub fn spawn_tied(cmd: &mut Command) -> io::Result<Child> {
+        tie(cmd);
+        cmd.spawn()
+    }
+
+    /// Makes the child `cmd` starts die with this process
+    /// (`PR_SET_PDEATHSIG`), or refuse to start when this one is already
+    /// gone.
+    pub fn tie(cmd: &mut Command) {
         let parent = std::process::id();
         // SAFETY: the closure runs between fork and exec and only makes
         // async-signal-safe calls (prctl, getppid) on plain integers.
@@ -47,9 +55,11 @@ mod imp {
                 Ok(())
             });
         }
-        cmd.spawn()
     }
 }
+
+#[cfg(all(target_os = "linux", feature = "group"))]
+pub(crate) use imp::tie;
 
 #[cfg(windows)]
 mod imp {

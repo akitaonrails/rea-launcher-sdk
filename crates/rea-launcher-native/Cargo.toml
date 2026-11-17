@@ -20,6 +20,18 @@ default = ["child"]
 child = []
 # `sdl`: devices, wheels, pads, haptics and rumble through SDL2.
 sdl = ["dep:sdl2", "dep:rea-launcher"]
+# `group` and `supervise`: a game session's processes started, watched and
+# stopped as one group, tied to the launcher (the TeknoParrot hubs).
+group = [
+    "child",
+    "dep:rea-launcher",
+    "windows-sys/Win32_System_Diagnostics_ToolHelp",
+    "windows-sys/Win32_System_SystemInformation",
+    "windows-sys/Win32_UI_WindowsAndMessaging",
+]
+# `feeder`: the input thread that feeds a game's input pipe from SDL
+# wheels and pads and plays its force feedback.
+feeder = ["sdl", "group"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
@@ -32,3 +44,8 @@ features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ]
+
+# The Windows group test's stand-in game window.
+[target.'cfg(windows)'.dev-dependencies.windows-sys]
+workspace = true
+features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"]
