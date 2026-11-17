@@ -17,7 +17,7 @@ tested on any host in `policy`.
 | `sdl` | `sdl` | `Sdl` (hints, no video), `Devices` (rescan throttle that keeps plug events, spare interfaces skipped, force feedback of the wheel in use), `Device` (axes, buttons, hat, the pad view of a pad, `nav_bits`, rate-limited `rumble`), `Haptic` (constant + damper + friction, keepalive, revive) |
 | `group` | `group` | A game session's processes as one: `Group::spawn(cmd, &Tag)`, `terminate` (Linux `SIGTERM` to the group, Windows `WM_CLOSE` to the leader's windows), `kill`, `any_left`, `exited`/`wait_exit` (no reaping), `finish` (reap, kill and count the leftovers); Linux `terminate_one`, `members`; Windows `windows` (`Window::hide`/`focus`/`close`), `kill_under`, `Tag::cpus`, `logical_processor_information` |
 | `supervise` | `group` | `run(group, feed, watcher, Options)`: one game run, 10 ms poll, output to the log and a `Watcher`, stop → polite stop → grace → kill, leftovers; `Feed` and `Hold` (input kept open), `Outcome::ended_early` |
-| `feeder` | `feeder` (`sdl` + `group`) | The hubs' input thread: `InputService::start(pad_map, paddles)`, `Command::{Attach, Output, Detach}`, `Wire` (a game's line format; force feedback in `rea_launcher::wal::Ffb`), `Tuning`, `Snapshot`, `find_wheel`; feeds `Feeding` and `Scripted` |
+| `feeder` | `feeder` (`sdl` + `group`) | The hubs' input thread: `InputService::start(pad_map, paddles)`, `Command::{Attach, Output, Detach}`, `Wire` (a game's line format; force feedback in `rea_launcher::wal::Ffb`), `Tuning`, `Snapshot` (`nav`: the menu buttons down, for `hub::Input::from_pad`), `find_wheel`; feeds `Feeding` and `Scripted` |
 | `policy` | always | `Rescan`, `Retry`, `RumbleLimit`, `HapticPolicy`, `effect_params` ("from the west") |
 
 The pure halves live in `rea-launcher`: `wheel` (known wheels,
@@ -111,7 +111,11 @@ impl Wire for Wal {
 let input = InputService::start(PadMap::<Button>::default(), None);
 // one run's feed, handed to supervise::run
 let feed = Feeding::new(input.sender(), Box::new(Wal), Tuning::default());
-# let _ = feed; }
+# let _ = feed;
+// the hub's pad navigation, in HubBackend::pad (pad_nav: a pad::PadNav):
+let mut pad_nav = rea_launcher::pad::PadNav::default();
+let steps = rea_launcher::hub::Input::from_pad(&mut pad_nav, input.snapshot().nav);
+# let _ = steps; }
 # #[cfg(not(feature = "feeder"))] fn main() {}
 ```
 
@@ -132,19 +136,24 @@ assert!(push_right.direction[0] < 0 && push_right.level > 0);
 - `cargo test -p rea-launcher-native --features sdl` starts SDL headless.
 - `cargo test -p rea-launcher-native --features group` (Linux): a stand-in
   gamescope (a shell script) starts its game in a session of its own; the
-  stop finds and kills it, a killed launcher takes the session with it,
+  stop finds and kills it, a killed launcher takes the session with it
+  (the game that left the group too),
   and decoy processes the test owns (untagged, or tagged for another
   session) are never signalled. `supervise` runs shell scripts as games:
-  the log, the feed, the input held open, the grace, the watcher.
+  the log, the feed, the input held open (with the caller's sink too),
+  the grace, the watcher.
 - `cargo test -p rea-launcher-native --features feeder`: the input thread
   with and without SDL (its device loop only on a machine without
   controllers: it would play force feedback on a real wheel), a broken
-  input let go, the two feeds.
+  input let go, a drop that doesn't wait for live senders, the two feeds.
 - `scripts/wine-test --target x86_64-pc-windows-gnu -p rea-launcher-native
   --features group` runs the job-object tests under Wine: the leader's
   first child is held by the job, `finish` ends what the leader left,
   `kill_under` spares a process started before the session, and the polite
-  stop closes a window that saves first (`terminate`, `supervise::run`).
+  stop closes a window that saves first (`terminate`, `supervise::run`);
+  unit tests: a process is ended only at its exact creation time, a
+  dropped group without a job ends its game, a big job's ids are all
+  listed, a stale window handle is left alone.
 
 ## Migration
 
@@ -152,7 +161,9 @@ v0.10.0: `group`, `supervise` and `feeder` are new, behind features of
 their own; nothing changes for a launcher that doesn't turn them on. A
 TeknoParrot hub replaces its `proc.rs`, `win32.rs`, the run loop of
 `session.rs` and `input.rs` with them; what its players see change: a
-killed launcher takes its Linux game along, a stop on Windows asks
+killed launcher takes its whole Linux session along (Wine's processes
+too: a small sentinel shell started with the session kills every tagged
+process once the launcher is gone), a stop on Windows asks
 Flycast and Dolphin to close their windows (they save) instead of waiting
 8 s and ending them, `--no-input` keeps windowsarcadeloader's input open
 (it quit at once), the force feedback is released when the game's input

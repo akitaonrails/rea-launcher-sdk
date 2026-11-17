@@ -9,6 +9,29 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+### Migration
+
+- `rea_launcher::cfg::Kind` has a new variant, `Decimal { min, max,
+  places }`, and `Value` a new `Decimal(Decimal)`. A `match` on a row's
+  `kind` with no `_` arm needs one more arm (CMR2005's and DiRT Rally's
+  `tests/cli.rs`: `Kind::Decimal { .. } => "0.1"`, or a value inside the
+  row's range); a `match` on `Value` with no `_` arm the same. Verify:
+  `cargo test --locked` builds.
+- `rea_launcher_ui::widgets::Fade` has a new variant, `Left`: a `match`
+  on `Fade` with no `_` arm needs one (no launcher has one today).
+- The UI crate embeds one more font, Barlow Condensed Bold (about
+  110 KB, a family of its own, `theme::condensed_bold`): every launcher
+  that uses `rea-launcher-ui` grows by that much; nothing to do. A
+  launcher that registered its own copy of that face under another name
+  can drop it.
+- `scripts/sdk-sync` now vendors `packaging/build-launcher.sh` and
+  `packaging/sdl2.pins` into every launcher's `sdk/packaging/`: nothing to
+  do for a launcher that doesn't build SDL2 (launcher-check doesn't flag
+  them); a hub launcher deletes its own `packaging/sdl2.pin` and calls
+  `sdk/packaging/build-launcher.sh`.
+- `cfg::read_file` keeps a launcher.cfg in a Windows code page readable,
+  and `HubConfig::save` writes it back as UTF-8 (a BOM is kept).
+
 ### Added
 
 - The TeknoParrot hub launchers' pure code, from their four copies
@@ -33,33 +56,51 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   - `linkfarm` (feature `linkfarm`): a runtime folder of links to a
     read-only dump, by a `Policy`; copies are writable whole-file swaps,
     and a link left where a real folder now goes is replaced, never
-    written through.
+    written through. A linked folder a seed goes into is opened, and
+    `apply` refuses any write whose path inside the runtime passes
+    through a link (it would land in the dump). On Windows a file link's
+    copy is refreshed only while it is the launcher's own, untouched copy
+    (recorded in `<runtime>/.linkfarm-copies`); a file the game wrote
+    there is kept or refused per `Occupied`.
 - `packaging/build-launcher.sh` and `packaging/sdl2.pins`: a native
   launcher's Linux or x86_64 Windows build, SDL2 fetched through
-  `pins.sh` (a download cut short no longer wedges the next build).
+  `pins.sh` (a download cut short no longer wedges the next build); the
+  flags go through `CARGO_ENCODED_RUSTFLAGS`, so a workspace path with
+  spaces builds.
 - `scripts/dev-check` and CI test, lint and Wine-test `rea-launcher` with
   all its features (`zip` was built by no check).
 - `rea-launcher-native` feature `group`: `group::Group`, a game session's
   processes started and stopped as one (the TeknoParrot hubs'
   `proc.rs`). Linux: a process group tied to the launcher
   (`PR_SET_PDEATHSIG`), a tag in every environment for processes that
-  leave the group, the group signalled only while its leader is unreaped
+  leave the group, a sentinel shell that kills every tagged process when
+  the launcher is killed (Wine's processes would run on), the group signalled only while its leader is unreaped
   (`waitid(WNOWAIT)`), tagged processes signalled through pidfds, zombies
   never counted. Windows: the leader starts suspended and joins a
   kill-on-close job before its first instruction (a failed join is a
   warning, the game runs), `terminate` posts `WM_CLOSE` to the leader's
-  windows, descendants and `kill_under` re-checked by creation time;
-  `windows`, `Tag::cpus`, `logical_processor_information`.
+  windows, each descendant ended only at its own creation time
+  (`procs::descendants_at`), `kill_under` re-checked by creation time, a
+  group dropped without `finish` killed even without a job, any number of
+  job processes listed, a `Window` acted on only while its process still
+  owns it; `windows`, `Tag::cpus`, `logical_processor_information`.
 - `rea-launcher-native` `supervise::run`: one game run from start to
   nothing left (10 ms poll, output to the log and a `Watcher`, polite
   stop, grace, kill, leftovers; `Hold` keeps a loader's input open until
-  the stop; `Outcome::ended_early`).
+  the stop, and a caller's `Options::sink` no longer closes the leader's
+  piped input before it; `Outcome::ended_early`).
 - `rea-launcher-native` feature `feeder`: the hubs' SDL input thread
   (`InputService`, a `Wire` per game's line format, `rea_launcher::wal::Ffb`
   for windowsarcadeloader's `out` lines, `Tuning`, `find_wheel`) and the
   `Feeding`/`Scripted` feeds; the force feedback is released when the
-  game's input breaks.
-- `rea_launcher::procs` (`descendants`, `environ_has`, `is_zombie`,
+  game's input breaks; dropping the service ends its thread even while
+  senders live; `Frame::dt` is the time since the last frame;
+  `Snapshot::nav` (every device's menu buttons) feeds
+  `hub::Input::from_pad`, the hub's pad navigation in one line.
+- `rea_launcher::cfg::Kind::Decimal` and `cfg::Decimal`: a number kept to
+  its decimal places within a range (a 0–0.30 dead zone), with its
+  `--help`, template and message texts; `hub::cli` checks it.
+- `rea_launcher::procs` (`descendants`, `descendants_at`, `environ_has`, `is_zombie`,
   `cmdline`, `under_dir`) and `rea_launcher::wheel::Script` (a timed
   input script for headless runs).
 - `rea_launcher::hub`: the pure side of a hub launcher (one launcher for a

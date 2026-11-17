@@ -306,7 +306,10 @@ impl HubBackend for Launcher {
         }))
     }
     fn controls(&self) -> hub::ControlsView { /* from the input thread's snapshot */ }
-    fn pad(&mut self) -> Vec<rea_launcher::hub::Input> { /* Input::from_nav, Y as Settings */ }
+    fn pad(&mut self) -> Vec<rea_launcher::hub::Input> {
+        // the feeder's menu buttons, once per press, Y as Settings
+        rea_launcher::hub::Input::from_pad(&mut self.pad_nav, self.input.snapshot().nav)
+    }
 }
 
 fn window(paths: HubPaths, launcher: Launcher) -> Result<(), String> {

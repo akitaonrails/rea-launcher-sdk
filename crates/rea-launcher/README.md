@@ -17,7 +17,7 @@ made that copy the reference.
 | `saves` | Save mirroring by recorded state, for one file or a folder |
 | `ledger` | SHA-256 record of the components the launcher installed |
 | `ini` | Section-aware INI editing that keeps comments, case, CRLF, BOM, bytes |
-| `cfg` | `launcher.cfg` reading, line editing, value parsers, shared CLI flags; `cfg::spec` option tables |
+| `cfg` | `launcher.cfg` reading, line editing, value parsers, shared CLI flags; `cfg::spec` option tables (`Kind::Decimal { min, max, places }`: a fraction such as a 0–0.30 dead zone, bounds in steps of 10^-places, parsed as `Value::Decimal(Decimal)`) |
 | `wine` | `WINEDLLOVERRIDES` merge, Wine detection from the environment, winebus names |
 | `download` | Pinned, resumable, verified downloads; unpacking with the `zip` feature |
 | `env` | Child environments and the `CreateProcessW` environment block |
@@ -33,7 +33,7 @@ made that copy the reference.
 | `log` | `launcher.log` with a size cap; opt-in `per_run` (previous run kept as `.old`) and `timestamps` |
 | `args` | Windows command-line quoting |
 | `instance` | One launcher at a time without the play helper (native Linux): `instance::single`, a `flock` |
-| `hub` | The pure side of a hub launcher (one launcher, a series of arcade games; drawn by `rea_launcher_ui::hub`): `Model` (pages incl. the launcher's extra page, `Focus`, `Input` incl. Start/Settings and `Input::from_nav`, `Effect`, `World`), `TileState::of(catalog::Support, scanned, found, Option<Need>)`, `HubConfig` (`library` lines plus the launcher's `PathField`s and their old names; `load`/`save` via `cfg::read_file`/`fsx::write_atomic`, keeping comments and unknown keys), `HubPaths::discover(&HubDirs)`, `expand_home`, `typed_path`, `display_path` (this system's separator), `sentence`, `step`/`pick`, `size_name(gamescope::Size)`, and `hub::cli` (`parse(&CliSpec, args)` with `CliSpec::offers` refusing options a game doesn't take, `usage`, `Invocation`, exit codes) |
+| `hub` | The pure side of a hub launcher (one launcher, a series of arcade games; drawn by `rea_launcher_ui::hub`): `Model` (pages incl. the launcher's extra page, `Focus`, `Input` incl. Start/Settings, `Input::from_nav` and `Input::from_pad` (the feeder's `Snapshot::nav` bits), `Effect`, `World`), `TileState::of(catalog::Support, scanned, found, Option<Need>)`, `HubConfig` (`library` lines plus the launcher's `PathField`s and their old names; `load`/`save` via `cfg::read_file`/`fsx::write_atomic`, keeping comments and unknown keys), `HubPaths::discover(&HubDirs)`, `expand_home`, `typed_path`, `display_path` (this system's separator), `sentence`, `step`/`pick`, `size_name(gamescope::Size)`, and `hub::cli` (`parse(&CliSpec, args)` with `CliSpec::offers` refusing options a game doesn't take, `usage`, `Invocation`, exit codes) |
 | `testing` | Golden snapshots for launcher tests: `snapshot!`, version as `<version>`, CRLF-proof |
 | `catalog` | A hub launcher's game table as data: `Title` (id, main file, editions), `Edition` (`Ident::Sha256`/`ChdSha1`), `Support`, `Host::current`, `identify`, `check_table` |
 | `library` | Finding those games in library folders: `Library::scan`/`probe_dir` → `Scan { entries, problems }`, a shared `HashCache`, `Extra` images by extension and size, `chd_sha1` |
@@ -41,7 +41,7 @@ made that copy the reference.
 | `cpus` | Alike CPUs for a game that needs them: `uniform_cpus`, from sysfs (`linux_cpus`) or a Windows `GetLogicalProcessorInformationEx` buffer (`windows_cpus`) |
 | `wal` | windowsarcadeloader's input pipe (`Stick::line`, `buttons` through the launcher's bit table, `button::*`), its outputs (`Out`, `Ffb`) and `free_port_block` |
 | `session` | One game run: `early_end` (a start that failed, with the log's errors), `WindowWatch` (a closed game window, debounced), `strip_ansi`, `default_interface` |
-| `linkfarm` | Feature `linkfarm`: a runtime folder of links to a read-only dump (junctions and kept-in-step copies on Windows): `plan` by a `Policy` of `Place`s, `apply`, `dangling`, `mirror_file`, `write_stored_zip` |
+| `linkfarm` | Feature `linkfarm`: a runtime folder of links to a read-only dump (junctions and kept-in-step copies on Windows): `plan` by a `Policy` of `Place`s (a linked folder a seed goes into is opened), `apply` (refuses a write through a link inside the runtime; on Windows refreshes only its own untouched copies, recorded in `<runtime>/.linkfarm-copies`), `dangling`, `mirror_file`, `write_stored_zip` |
 
 ## Examples
 
@@ -722,7 +722,8 @@ impl Policy for Rally {
 let (dump, rt) = (std::env::temp_dir().join("rea-doc-dump"), std::env::temp_dir().join("rea-doc-farm"));
 std::fs::create_dir_all(dump.join("Rally"))?;
 let ops = linkfarm::plan(&dump, &rt, &Rally, &linkfarm::list)?;
-// a launcher appends its own files: Op::Refresh { from, to, exec }
+// a launcher appends its own files to the same ops (Op::Refresh { from,
+// to, exec }): apply refuses any of them whose path passes through a link
 for gone in linkfarm::dangling(&rt).unwrap_or_default() {
     linkfarm::remove_link(&gone)?;
 }
