@@ -1129,6 +1129,8 @@ pub fn tab_body<R>(
 pub enum Fade {
     /// Clear on the left, solid on the right.
     Right,
+    /// Solid on the left, clear on the right (the hub's text column).
+    Left,
     /// Clear on top, solid at the bottom.
     Down,
 }
@@ -1138,6 +1140,7 @@ pub fn gradient(painter: &Painter, rect: Rect, color: Color32, fade: Fade) {
     let clear = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 0);
     let (a, b, c, d) = match fade {
         Fade::Right => (clear, color, color, clear),
+        Fade::Left => (color, clear, clear, color),
         Fade::Down => (clear, clear, color, color),
     };
     let mut mesh = Mesh::default();
