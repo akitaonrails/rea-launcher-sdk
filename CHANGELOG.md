@@ -142,7 +142,8 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   `hub::cli` (flags from the option table and the path fields, `--list`,
   `--check [game]`, `--play`, `--set` with `--game` as its old name and
   options required, options a game doesn't take refused
-  (`CliSpec::offers`), `--key=value`, the test options, exit codes 0/1/2).
+  (`CliSpec::offers`), a test option's help qualified and the games that
+  ignore it refused with a reason (`CliSpec::test_options`, `TestOption`), `--key=value`, the test options, exit codes 0/1/2).
   A library listed twice in `launcher.cfg` is saved once; a BOM is kept.
 - `rea_launcher_ui::hub`: the hub look (docs/STANDARDS.md, the third
   sanctioned look): `run(HubSpec, impl HubBackend)`, `HubTheme`

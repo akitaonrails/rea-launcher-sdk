@@ -41,7 +41,31 @@ pub struct CliSpec<'a> {
     /// Whether game `id` takes option `key` (the rows its window offers);
     /// `None`: every game takes every option.
     pub offers: Option<fn(id: &str, key: &str) -> bool>,
+    /// The launcher's word on the test options of `--play`: its own help
+    /// text, and the games that ignore one. `&[]`: the SDK's help, every
+    /// game takes every test option.
+    pub test_options: &'a [TestOption<'a>],
 }
+
+/// A test option of `--play` as a launcher qualifies it.
+#[derive(Debug, Clone, Copy)]
+pub struct TestOption<'a> {
+    /// `--headless`, `--no-input`, `--input-script` or `--seconds`.
+    pub flag: &'a str,
+    /// Its `--help` text: "timed inputs (windowsarcadeloader games)".
+    pub help: &'a str,
+    /// Why game `id` doesn't take it (refused on the command line), or
+    /// `None` when it does; `None`: every game takes it.
+    pub refuses: Option<fn(id: &str) -> Option<&'static str>>,
+}
+
+/// The test options of `--play`: flag, its value, the SDK's help.
+const TEST_OPTIONS: [(&str, &str, &str); 4] = [
+    ("--headless", "", "run in an invisible display"),
+    ("--no-input", "", "no controller input"),
+    ("--input-script", " <file>", "timed inputs"),
+    ("--seconds", " <n>", "stop the game after n seconds"),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
@@ -167,13 +191,12 @@ pub fn usage(spec: &CliSpec) -> String {
     lines.iter().for_each(|l| out.push_str(&line(l)));
     out.push_str("\nOptions (saved in that game's settings):\n");
     out.push_str(&crate::cfg::spec::usage(spec.options, spec.style));
-    out.push_str(
-        "\nTest options for --play:\n\
-         \x20 --headless               run in an invisible display\n\
-         \x20 --no-input               no controller input\n\
-         \x20 --input-script <file>    timed inputs\n\
-         \x20 --seconds <n>            stop the game after n seconds\n\n",
-    );
+    out.push_str("\nTest options for --play:\n");
+    for (flag, value, help) in TEST_OPTIONS {
+        let help = test_option(spec, flag).map_or(help, |t| t.help);
+        out.push_str(&format!("  {:25}{help}\n", format!("{flag}{value}")));
+    }
+    out.push('\n');
     out.push_str(&line(&("--help".into(), "this text".into())));
     out
 }
@@ -305,7 +328,31 @@ pub fn parse(spec: &CliSpec, args: impl IntoIterator<Item = String>) -> Result<I
     if inv.test != Test::default() && !matches!(inv.mode, Mode::Play(_)) {
         return Err("the test options go with --play <game>".into());
     }
+    if let Mode::Play(game) = &inv.mode
+        && let Some((flag, why)) = given(&inv.test).find_map(|flag| {
+            let refuses = test_option(spec, flag)?.refuses?;
+            Some((flag, refuses(game)?))
+        })
+    {
+        return Err(format!("{game} doesn't take {flag}: {why}"));
+    }
     Ok(inv)
+}
+
+fn test_option<'a>(spec: &CliSpec<'a>, flag: &str) -> Option<&'a TestOption<'a>> {
+    spec.test_options.iter().find(|t| t.flag == flag)
+}
+
+/// The test options `test` was given, by flag.
+fn given(test: &Test) -> impl Iterator<Item = &'static str> {
+    [
+        (test.headless, "--headless"),
+        (test.no_input, "--no-input"),
+        (test.script.is_some(), "--input-script"),
+        (test.seconds.is_some(), "--seconds"),
+    ]
+    .into_iter()
+    .filter_map(|(set, flag)| set.then_some(flag))
 }
 
 #[cfg(test)]
@@ -344,6 +391,7 @@ mod tests {
         style: KeyStyle::Underscore,
         paths: &[BIOS],
         offers: Some(|game, key| !(game == "or2sdx" && key == "upscaler")),
+        test_options: &[],
     };
 
     fn parse_v(v: &[&str]) -> Result<Invocation, String> {
@@ -515,5 +563,33 @@ mod tests {
             );
         }
         assert!(u.contains("--game") && u.contains("--seconds <n>"));
+    }
+
+    #[test]
+    fn a_launcher_qualifies_a_test_option_and_refuses_it_where_ignored() {
+        let spec = CliSpec {
+            test_options: &[TestOption {
+                flag: "--input-script",
+                help: "timed inputs (windowsarcadeloader games)",
+                refuses: Some(|game| {
+                    (game == "or2sdx").then_some("its loader reads no input lines")
+                }),
+            }],
+            ..SPEC
+        };
+        let u = usage(&spec);
+        assert!(
+            u.contains("  --input-script <file>    timed inputs (windowsarcadeloader games)\n"),
+            "{u}"
+        );
+        assert!(u.contains("  --seconds <n>            stop the game after n seconds\n"));
+        let parse_t = |v: &[&str]| parse(&spec, v.iter().map(|s| s.to_string()));
+        let e = parse_t(&["--play", "or2sdx", "--input-script", "s.txt"]).unwrap_err();
+        assert_eq!(
+            e,
+            "or2sdx doesn't take --input-script: its loader reads no input lines"
+        );
+        assert!(parse_t(&["--play", "sr3", "--input-script", "s.txt"]).is_ok());
+        assert!(parse_t(&["--play", "or2sdx", "--seconds", "5"]).is_ok());
     }
 }
