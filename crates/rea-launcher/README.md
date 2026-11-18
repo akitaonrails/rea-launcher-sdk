@@ -833,6 +833,12 @@ Behaviour not listed here is the same.
 - **`display::game_monitor`** returns `Some(index)` only when a monitor
   other than the primary should be used (CMR4's `choose().output` was
   `index + 1`).
+- **v0.10.0:** `cfg::parse` (so `cfg::spec::parse_file`) warns about a
+  line that is not `key = value`, not a comment, blank or a `[section]`
+  (`launcher.cfg line 5: "resolution 1920x1080" is not a setting (key =
+  value): ignored, kept in the file`); it was dropped silently. A test
+  that parses a template or fixture with such a prose line gets the
+  warning: comment the line out, or expect it.
 
 ### CMR3
 

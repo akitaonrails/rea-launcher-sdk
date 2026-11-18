@@ -29,6 +29,18 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   do for a launcher that doesn't build SDL2 (launcher-check doesn't flag
   them); a hub launcher deletes its own `packaging/sdl2.pin` and calls
   `sdk/packaging/build-launcher.sh`.
+- `cfg::parse` (and `cfg::spec::parse_file`, which every spec-table
+  launcher uses for `launcher.cfg`) reports a line that is not
+  `key = value` instead of dropping it silently: a typo like
+  `resolution 1920x1080` now gives `launcher.cfg line 5: "resolution
+  1920x1080" is not a setting (key = value): ignored, kept in the file`,
+  shown wherever the launcher shows the other parse problems (its
+  `--check`, the settings window's notice, the log). Blank lines, `#`/`;`
+  comments and `[section]` headings stay silent; the line still has no
+  effect and stays in the file. A launcher whose tests parse a text with
+  such a line (a prose line in a template or fixture not starting with
+  `#`) gets one more warning: make the line a comment, or expect the
+  warning. Verify: `cargo test --locked`.
 - `cfg::read_file` keeps a launcher.cfg in a Windows code page readable,
   and `HubConfig::save` writes it back as UTF-8 (a BOM is kept).
 

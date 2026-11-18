@@ -113,28 +113,55 @@ pub fn need<T>(value: Option<T>, what: &str) -> Result<T, Rejected> {
 }
 
 /// Feeds every entry of `text` to `apply`. Returns a warning per line it
-/// could not use (`file_name line n: …`); unknown keys are ignored but
-/// reported, and stay in the file.
+/// could not use (`file_name line n: …`), in line order; unknown keys and
+/// lines that are not `key = value` (a typo like `resolution 1920x1080`)
+/// are ignored but reported, and stay in the file.
 pub fn parse(
     text: &str,
     file_name: &str,
     mut apply: impl FnMut(&str, &str) -> Result<(), Rejected>,
 ) -> Vec<String> {
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<(usize, String)> = not_settings(text)
+        .map(|(n, line)| {
+            let why = format!(
+                "{file_name} line {n}: {line:?} is not a setting (key = value): ignored, kept in the file"
+            );
+            (n, why)
+        })
+        .collect();
     for e in entries(text) {
-        match apply(e.key, e.value) {
-            Ok(()) => {}
-            Err(Rejected::Unknown) => warnings.push(format!(
+        let why = match apply(e.key, e.value) {
+            Ok(()) => continue,
+            Err(Rejected::Unknown) => format!(
                 "{file_name} line {}: unknown setting {:?} (ignored, kept in the file)",
                 e.line, e.key
-            )),
-            Err(Rejected::Needs(what)) => warnings.push(format!(
+            ),
+            Err(Rejected::Needs(what)) => format!(
                 "{file_name} line {}: {} needs {what}, not {:?}",
                 e.line, e.key, e.value
-            )),
-        }
+            ),
+        };
+        warnings.push((e.line, why));
     }
-    warnings
+    warnings.sort_by_key(|w| w.0);
+    warnings.into_iter().map(|w| w.1).collect()
+}
+
+/// The lines of `text` that are neither a setting, a comment, blank nor a
+/// `[section]` heading (1-based numbers, trimmed).
+fn not_settings(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    split_bom(text)
+        .1
+        .lines()
+        .map(str::trim)
+        .enumerate()
+        .filter(|(_, t)| {
+            !(t.is_empty()
+                || t.contains('=')
+                || t.starts_with(['#', ';'])
+                || (t.starts_with('[') && t.ends_with(']')))
+        })
+        .map(|(n, t)| (n + 1, t))
 }
 
 /// The newline `text` uses: CRLF when it has any (Notepad), else LF.
@@ -537,6 +564,21 @@ mod tests {
             "launcher.cfg line 3: display_mode needs fullscreen, windowed or borderless, not \"wide\""
         );
         assert!(warnings[3].contains("unknown setting \"future\""));
+    }
+
+    #[test]
+    fn a_line_without_an_equals_sign_is_reported_with_its_number() {
+        let text =
+            "\u{feff}[display]\n# a comment\n\n  ; another\nresolution 1920x1080\nfov = 90\n= 3\n";
+        let (s, warnings) = file(text);
+        assert_eq!(s.fov, Some(90), "the other lines still apply");
+        assert_eq!(s.resolution, None);
+        assert_eq!(
+            warnings,
+            [
+                "launcher.cfg line 5: \"resolution 1920x1080\" is not a setting (key = value): ignored, kept in the file"
+            ]
+        );
     }
 
     #[test]
