@@ -37,7 +37,7 @@ made that copy the reference.
 | `testing` | Golden snapshots for launcher tests: `snapshot!`, version as `<version>`, CRLF-proof |
 | `catalog` | A hub launcher's game table as data: `Title` (id, main file, editions), `Edition` (`Ident::Sha256`/`ChdSha1`), `Support`, `Host::current`, `identify`, `check_table` |
 | `library` | Finding those games in library folders: `Library::scan`/`probe_dir` → `Scan { entries, problems }`, a shared `HashCache`, `Extra` images by extension and size, `chd_sha1` |
-| `gamescope` | `Size`, `fit`, `Upscaler`, `Crt`, the gamescope arguments (`Picture::args`, headless → `linear`), the ReShade `effect_home`, `CommandLine` (gamescope → bubblewrap read-only binds → `taskset` → game) |
+| `gamescope` | `Size`, `fit`, `Upscaler`, `Crt`, the gamescope arguments (`Picture::args`, headless → `linear`), the ReShade `effect_home`, `CommandLine` (gamescope → bubblewrap read-only binds, a missing folder skipped, the session's `writable` folders inside them bound back → `taskset` → game) |
 | `cpus` | Alike CPUs for a game that needs them: `uniform_cpus`, from sysfs (`linux_cpus`) or a Windows `GetLogicalProcessorInformationEx` buffer (`windows_cpus`) |
 | `wal` | windowsarcadeloader's input pipe (`Stick::line`, `buttons` through the launcher's bit table, `button::*`), its outputs (`Out`, `Ffb`) and `free_port_block` |
 | `session` | One game run: `early_end` (a start that failed, with the log's errors), `WindowWatch` (a closed game window, debounced), `strip_ansi`, `default_interface` |
@@ -662,7 +662,8 @@ let picture = Picture {
 let line = CommandLine {
     gamescope: picture.args(false), // true: headless, for tests
     homes: None,                    // Some((effect_home(rt), player's HOME)) with a CRT look
-    read_only: Some(vec!["/games".into()]), // None when bwrap is missing
+    read_only: Some(vec!["/games".into()]), // None when bwrap is missing; a missing one is skipped
+    writable: vec!["/games/.rea".into()],   // the session's folders, bound back inside a read-only one
     cpus: None,                     // Some(cpus::taskset_list(&set))
 };
 let argv = line.argv(Path::new("/c/wal/arcade-launcher"), &["run".into()]);
@@ -924,7 +925,10 @@ What changes when a hub launcher swaps its copy for the SDK's module:
   `Upscaler::parse` accepts any case (Sega's; Initial D, Nintendo and
   Wangan were exact). `gamescope_args` → `Picture { .. }.args(headless)`;
   `session::command_line` → `gamescope::CommandLine::argv` (Initial D's
-  `HOME` pair is `homes`, Sega's CPU list `cpus`); the CRT link is
+  `HOME` pair is `homes`, Sega's CPU list `cpus`; the launcher's data,
+  runtime and prefix folders go in `writable`, so `--library ~` leaves
+  them writable; a library folder that is missing, an unplugged drive, no
+  longer stops every game: bubblewrap's `--ro-bind-try`); the CRT link is
   `effect_link(&effect_home(rt), shaders, effect)`.
 - Sega's `launch::{Cpu, cpu_list, uniform_cpus, windows_cpus}` and the
   sysfs reader → `cpus` (`linux_cpus(Path::new("/sys"))`, `taskset_list`).

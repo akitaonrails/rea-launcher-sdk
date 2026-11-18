@@ -242,9 +242,14 @@ pub struct CommandLine {
     /// gamescope's `HOME` ([`effect_home`]) and the player's, which the
     /// game gets back; `None`: both keep the launcher's.
     pub homes: Option<(PathBuf, String)>,
-    /// Folders bubblewrap binds read-only around the game; `None`: no
-    /// bubblewrap (it is not installed).
+    /// Folders bubblewrap binds read-only around the game, each only if
+    /// it is there (an unplugged drive in the library list doesn't stop
+    /// the game); `None`: no bubblewrap (it is not installed).
     pub read_only: Option<Vec<PathBuf>>,
+    /// Folders the session writes (the launcher's data, runtime, prefix):
+    /// one inside a read-only folder (`--library ~`) is bound back
+    /// writable after them, so it must exist before the start.
+    pub writable: Vec<PathBuf>,
     /// `taskset -c` CPU list (`8,9,10,11`).
     pub cpus: Option<String>,
 }
@@ -264,9 +269,17 @@ impl CommandLine {
         }
         if let Some(folders) = &self.read_only {
             v.extend(["bwrap", "--dev-bind", "/", "/"].map(String::from));
-            for f in folders {
+            let mut bind = |how: &str, f: &Path| {
                 let f = f.to_string_lossy().into_owned();
-                v.extend(["--ro-bind".into(), f.clone(), f]);
+                v.extend([how.into(), f.clone(), f]);
+            };
+            for f in folders {
+                bind("--ro-bind-try", f);
+            }
+            for w in &self.writable {
+                if folders.iter().any(|f| w.starts_with(f)) {
+                    bind("--bind", w);
+                }
             }
         }
         if let Some(cpus) = &self.cpus {
@@ -414,12 +427,13 @@ mod tests {
             gamescope: picture().args(false),
             homes: None,
             read_only: Some(vec!["/lib".into(), "/naomi".into()]),
+            writable: vec!["/d/rt".into()],
             cpus: None,
         };
         let s = line.argv(program, &args).join(" ");
         assert!(s.starts_with("gamescope -w 1360 -h 768 "), "{s}");
         assert!(
-            s.ends_with(" -f -- bwrap --dev-bind / / --ro-bind /lib /lib --ro-bind /naomi /naomi /c/wal/arcade-launcher run /d/rt"),
+            s.ends_with(" -f -- bwrap --dev-bind / / --ro-bind-try /lib /lib --ro-bind-try /naomi /naomi /c/wal/arcade-launcher run /d/rt"),
             "{s}"
         );
         line.read_only = None;
@@ -443,5 +457,63 @@ mod tests {
             "{s}"
         );
         assert!(s.contains(" -- env HOME=/home/p bwrap "), "{s}");
+    }
+
+    #[test]
+    fn a_writable_folder_inside_a_read_only_one_is_bound_back() {
+        // `--library ~`: the launcher's data folder is inside it
+        let line = CommandLine {
+            read_only: Some(vec!["/home/p".into(), "/gone".into()]),
+            writable: vec!["/home/p/.local/share/rea".into(), "/d/rt".into()],
+            ..CommandLine::default()
+        };
+        let s = line.argv(Path::new("game"), &[]).join(" ");
+        assert!(
+            s.ends_with(
+                " -- bwrap --dev-bind / / --ro-bind-try /home/p /home/p --ro-bind-try /gone /gone \
+                 --bind /home/p/.local/share/rea /home/p/.local/share/rea game"
+            ),
+            "{s}"
+        );
+        // without bubblewrap, nothing to bind back
+        let line = CommandLine {
+            read_only: None,
+            ..line
+        };
+        assert!(!line.argv(Path::new("game"), &[]).join(" ").contains("bind"));
+    }
+
+    /// The real bubblewrap, when it is installed (STANDARDS "Test
+    /// behaviour"): a missing library folder doesn't stop the game, a
+    /// read-only one can't be written, the session's folder inside it can.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn bubblewrap_runs_with_a_missing_folder_and_a_writable_one_inside() {
+        let t = crate::test_dir("gamescope-bwrap");
+        let (lib, rw) = (t.join("lib"), t.join("lib/data"));
+        std::fs::create_dir_all(&rw).unwrap();
+        let line = CommandLine {
+            read_only: Some(vec![t.join("unplugged"), lib.clone()]),
+            writable: vec![rw.clone()],
+            ..CommandLine::default()
+        };
+        let script = format!(
+            "touch '{}/saved' && ! touch '{}/dump' 2>/dev/null",
+            rw.display(),
+            lib.display()
+        );
+        let argv = line.argv(Path::new("sh"), &["-c".into(), script]);
+        let bwrap = &argv[argv.iter().position(|a| a == "--").unwrap() + 1..];
+        match std::process::Command::new(&bwrap[0])
+            .args(&bwrap[1..])
+            .output()
+        {
+            Ok(o) => assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr)),
+            Err(_) => eprintln!("bwrap not installed: skipped"),
+        }
+        if rw.join("saved").exists() {
+            assert!(!lib.join("dump").exists());
+        }
+        std::fs::remove_dir_all(t).unwrap();
     }
 }

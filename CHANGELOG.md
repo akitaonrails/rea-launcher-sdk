@@ -45,7 +45,11 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
     images found by extension are hashed only within a size range.
   - `gamescope`: picture sizes, upscalers, the CRT look, `fit`, the
     gamescope arguments (a headless run scales `linear`) and the command
-    line through bubblewrap's read-only library binds and `taskset`.
+    line through bubblewrap's read-only library binds and `taskset`. A
+    library folder that is missing (an unplugged drive) is skipped
+    (`--ro-bind-try`: bubblewrap failed and no game started), and
+    `CommandLine::writable`, the session's own folders, are bound back
+    writable when a read-only folder holds them (`--library ~`).
   - `cpus`: one cache domain of alike cores, from sysfs or Windows'
     processor records (Sega's F355 boards).
   - `wal`: windowsarcadeloader's `p1` input lines from a launcher's bit
