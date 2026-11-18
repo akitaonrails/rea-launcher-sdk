@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use @CRATE_SNAKE@::cli::{self, Invocation, Mode};
 use @CRATE_SNAKE@::config::{self, OPTIONS, Settings};
 use @CRATE_SNAKE@::edition;
-use rea_launcher::cfg::{Kind, Resolution};
+use rea_launcher::cfg::{Decimal, Kind, Resolution};
 use rea_launcher::identify;
 
 fn parse(args: &[&str]) -> Result<Invocation, String> {
@@ -73,6 +73,10 @@ fn every_option_has_a_working_flag() {
             Kind::Size { .. } => "1280x720",
             Kind::Range { min, .. } => {
                 number = min.to_string();
+                &number
+            }
+            Kind::Decimal { min, places, .. } => {
+                number = Decimal::new(min, places).to_string();
                 &number
             }
             Kind::Path | Kind::Text => "C:\\Games\\Some Game",
