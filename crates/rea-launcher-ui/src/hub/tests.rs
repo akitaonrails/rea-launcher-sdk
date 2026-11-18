@@ -1217,9 +1217,12 @@ fn the_controls_page_shows_the_devices_and_live_readings() {
         ],
         feeding: true,
         error: None,
+        lines: vec![("Gear".into(), "3".into())],
     };
     h.run_steps(3);
     assert!(says(&h, "A game is running: it reads these controls."));
+    // a game's own reading (Wangan's gear), with its accessible name
+    assert!(h.query_by_label("Gear: 3").is_some());
     assert!(says(&h, "Wheel: Test Wheel (drives the car)"));
     assert!(says(&h, "Pad: Test Pad"));
     assert!(h.query_by_label_contains("Test Pad (drives").is_none());
@@ -1270,6 +1273,19 @@ fn every_control_fits(size: egui::Vec2, layout: HubLayout) {
     check(&mut h, "hub, a long title");
     open_tab(&mut h, Tab::Controls);
     check(&mut h, "controls");
+    h.state_mut().backend_mut().controls = ControlsView {
+        buttons: ["Start", "Coin", "View", "Shift up", "Shift down", "Test"]
+            .map(|label| ButtonView {
+                key: label,
+                label: label.into(),
+                pressed: false,
+            })
+            .into(),
+        feeding: true,
+        lines: vec![("Gear".into(), "3".into())],
+        ..ControlsView::default()
+    };
+    check(&mut h, "controls with a game's reading");
     open_tab(&mut h, Tab::Settings);
     check(&mut h, "settings");
     click_button(&mut h, "Folders and BIOS");

@@ -904,6 +904,28 @@ impl<B: HubBackend> HubApp<B> {
             );
             y += 44.0;
         }
+        for (k, (label, value)) in c.lines.iter().enumerate() {
+            let lr = pen.text(
+                pos2(ix, y + 12.0),
+                Align2::LEFT_CENTER,
+                label,
+                semibold(size::LABEL),
+                t.ink,
+            );
+            let vr = pen.ellipsized(
+                pos2(ix + label_w, y + 2.0),
+                value,
+                body(size::BODY),
+                t.ink,
+                iw - label_w,
+            );
+            pen.say(
+                &format!("line-{k}"),
+                lr.union(vr),
+                &format!("{label}: {value}"),
+            );
+            y += 32.0;
+        }
         y += 8.0;
         pen.text(
             pos2(ix, y),

@@ -135,7 +135,8 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 - `rea_launcher_ui::hub`: the hub look (docs/STANDARDS.md, the third
   sanctioned look): `run(HubSpec, impl HubBackend)`, `HubTheme`
   (`contrast_problems`), `HubLayout`, `HubWords`, the `HubBackend` and
-  `HubForm` traits, `Session`/`Reporter`, `ControlsView`, `ExtraPage`,
+  `HubForm` traits, `Session`/`Reporter`, `ControlsView` (with `lines`,
+  a game's own readings such as Wangan's gear), `ExtraPage`,
   `fatal`; pad navigation paused while a game runs, settings rows the
   Linux helper owns shown off on Windows with the reason, the focused
   row's whole note shown when its row cuts it, a double click counted on

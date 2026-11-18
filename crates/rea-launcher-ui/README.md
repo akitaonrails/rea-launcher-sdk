@@ -238,7 +238,9 @@ The SDK's third sanctioned look (docs/STANDARDS.md, "Three sanctioned
 looks"), from the TeknoParrot launchers (Initial D, Nintendo, Sega,
 Wangan): full screen, pad first, a hero picture with a solid column for
 the text and a row of tiles, laid out for 720 lines and zoomed to the
-window (F11 toggles full screen). The pages: the hub, Controls, Settings
+window (F11 toggles full screen). The pages: the hub, Controls (devices,
+pad layout, live bars and buttons, plus the game's own readings from
+`ControlsView::lines`, e.g. Wangan's `("Gear", "3")`), Settings
 (one row per option of the launcher's `cfg::spec` table, `◀ value ▶`),
 the setup page (library folders plus the launcher's path fields) and an
 optional extra page for something a game still needs (Wangan's board

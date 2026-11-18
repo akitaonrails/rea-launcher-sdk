@@ -161,6 +161,9 @@ pub struct ControlsView {
     pub buttons: Vec<ButtonView>,
     /// A game is running and reads these controls.
     pub feeding: bool,
+    /// The game's own readings under the bars, `(label, value)`, e.g.
+    /// `("Gear", "3")`; read as "Gear: 3".
+    pub lines: Vec<(String, String)>,
 }
 
 /// How a checklist line on the extra page reads.
