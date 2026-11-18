@@ -57,8 +57,9 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
     read-only dump, by a `Policy`; copies are writable whole-file swaps,
     and a link left where a real folder now goes is replaced, never
     written through. A linked folder a seed goes into is opened, and
-    `apply` refuses any write whose path inside the runtime passes
-    through a link (it would land in the dump). On Windows a file link's
+    `apply(rt, ops, occupied)` refuses any op (a link too) outside the
+    runtime folder `rt` or whose path inside it passes through a link (it
+    would land in the dump); an `Op::Dir` is never a root of its own. On Windows a file link's
     copy is refreshed only while it is the launcher's own, untouched copy
     (recorded in `<runtime>/.linkfarm-copies`); a file the game wrote
     there is kept or refused per `Occupied`.

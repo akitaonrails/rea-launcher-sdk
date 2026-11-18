@@ -41,7 +41,7 @@ made that copy the reference.
 | `cpus` | Alike CPUs for a game that needs them: `uniform_cpus`, from sysfs (`linux_cpus`) or a Windows `GetLogicalProcessorInformationEx` buffer (`windows_cpus`) |
 | `wal` | windowsarcadeloader's input pipe (`Stick::line`, `buttons` through the launcher's bit table, `button::*`), its outputs (`Out`, `Ffb`) and `free_port_block` |
 | `session` | One game run: `early_end` (a start that failed, with the log's errors), `WindowWatch` (a closed game window, debounced), `strip_ansi`, `default_interface` |
-| `linkfarm` | Feature `linkfarm`: a runtime folder of links to a read-only dump (junctions and kept-in-step copies on Windows): `plan` by a `Policy` of `Place`s (a linked folder a seed goes into is opened), `apply` (refuses a write through a link inside the runtime; on Windows refreshes only its own untouched copies, recorded in `<runtime>/.linkfarm-copies`), `dangling`, `mirror_file`, `write_stored_zip` |
+| `linkfarm` | Feature `linkfarm`: a runtime folder of links to a read-only dump (junctions and kept-in-step copies on Windows): `plan` by a `Policy` of `Place`s (a linked folder a seed goes into is opened), `apply(rt, ops, occupied)` (refuses an op outside the runtime folder `rt` or through a link inside it; on Windows refreshes only its own untouched copies, recorded in `<runtime>/.linkfarm-copies`), `dangling`, `mirror_file`, `write_stored_zip` |
 
 ## Examples
 
@@ -723,11 +723,12 @@ let (dump, rt) = (std::env::temp_dir().join("rea-doc-dump"), std::env::temp_dir(
 std::fs::create_dir_all(dump.join("Rally"))?;
 let ops = linkfarm::plan(&dump, &rt, &Rally, &linkfarm::list)?;
 // a launcher appends its own files to the same ops (Op::Refresh { from,
-// to, exec }): apply refuses any of them whose path passes through a link
+// to, exec }); apply refuses any op outside `rt` or whose path inside `rt`
+// passes through a link (every apply call names the runtime folder)
 for gone in linkfarm::dangling(&rt).unwrap_or_default() {
     linkfarm::remove_link(&gone)?;
 }
-linkfarm::apply(&ops, Occupied::Refuse)?;
+linkfarm::apply(&rt, &ops, Occupied::Refuse)?;
 assert!(rt.join("Rally").is_dir());
 # std::fs::remove_dir_all(dump)?; std::fs::remove_dir_all(rt)?;
 # }
@@ -941,9 +942,11 @@ What changes when a hub launcher swaps its copy for the SDK's module:
   `Policy::place` (+ `seed`); Nintendo's `Mirror` op is `Place::Open` for
   the folders on the way to the program; Wangan's `TreeOnce` is
   `Place::CopyOnce` on a folder and its save folders `Place::Empty`; Sega's
-  `Archive` stays (its `zipstore` and `crc32fast` go). `apply(ops,
+  `Archive` stays (its `zipstore` and `crc32fast` go). `apply(rt, ops,
   Occupied::Refuse)` for Initial D, Nintendo and Sega, `Occupied::Keep` for
-  Wangan. Behaviour that changes: every copy is writable (a read-only file
+  Wangan; `rt` is the runtime folder, and every op must lie inside it (a
+  launcher's own links into it too: no `Op::Dir` of a parent stands in
+  for the runtime). Behaviour that changes: every copy is writable (a read-only file
   in a dump broke the next refresh on Windows); an `Op::Dir` where an
   older launcher left a link replaces the link (writes went into the dump
   through it); `CopyOnce` replaces a leftover link (Wangan kept it) and
