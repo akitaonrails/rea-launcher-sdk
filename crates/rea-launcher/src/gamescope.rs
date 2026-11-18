@@ -508,11 +508,11 @@ mod tests {
             .args(&bwrap[1..])
             .output()
         {
-            Ok(o) => assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr)),
+            Ok(o) => {
+                assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+                assert!(rw.join("saved").exists() && !lib.join("dump").exists());
+            }
             Err(_) => eprintln!("bwrap not installed: skipped"),
-        }
-        if rw.join("saved").exists() {
-            assert!(!lib.join("dump").exists());
         }
         std::fs::remove_dir_all(t).unwrap();
     }
