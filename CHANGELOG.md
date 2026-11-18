@@ -84,11 +84,13 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   never counted. Windows: the leader starts suspended and joins a
   kill-on-close job before its first instruction (a failed join is a
   warning, the game runs), `terminate` posts `WM_CLOSE` to the leader's
-  windows, each descendant ended only at its own creation time
+  windows and to the visible windows of the session's other processes
+  (windowsarcadeloader's and OpenParrotLoader64's game window is a
+  child's: a stop no longer waits the whole grace and kills), each descendant ended only at its own creation time
   (`procs::descendants_at`), `kill_under` re-checked by creation time, a
   group dropped without `finish` killed even without a job, any number of
-  job processes listed, a `Window` acted on only while its process still
-  owns it; `windows`, `Tag::cpus`, `logical_processor_information`.
+  job processes listed, a `Window` acted on only while its process (by id
+  and creation time) still owns it; `windows`, `Tag::cpus`, `logical_processor_information`.
 - `rea-launcher-native` `supervise::run`: one game run from start to
   nothing left (10 ms poll, output to the log and a `Watcher`, polite
   stop, grace, kill, leftovers; `Hold` keeps a loader's input open until

@@ -2,8 +2,9 @@
 //! x86_64-pc-windows-gnu -p rea-launcher-native --features group`). This
 //! test binary plays every part: the test; a "leader" that starts a
 //! "sleeper" as its very first act (the child a late job would miss) and
-//! waits; and a "window" leader whose hidden window saves and quits on
-//! `WM_CLOSE`, as Flycast and Dolphin do. A sleeper the test starts itself
+//! waits; a "window" leader whose hidden window saves and quits on
+//! `WM_CLOSE`, as Flycast and Dolphin do; and a "parent" leader whose
+//! child shows that window (windowsarcadeloader, OpenParrotLoader64). A sleeper the test starts itself
 //! is the decoy: it must survive. The tests run one at a time: `kill_under`
 //! looks at every process the test binary runs.
 #![cfg(all(feature = "group", windows))]
@@ -43,7 +44,11 @@ fn role_helper() {
             let _ = child.wait();
         }
         Ok("sleeper") => beat(&dir.join(format!("beat-{}", std::process::id()))),
-        Ok("window") => window::run(&dir.join("closed")),
+        Ok("window") => window::run(&dir.join("closed"), false),
+        Ok("shown-window") => window::run(&dir.join("closed"), true),
+        Ok("parent") => {
+            let _ = helper("shown-window", &dir).status();
+        }
         _ => {}
     }
 }
@@ -182,14 +187,39 @@ fn terminate_asks_the_leaders_window_to_close() {
     let _ = fs::remove_dir_all(&d);
 }
 
-/// A hidden window that writes "saved" and quits on `WM_CLOSE`.
+#[test]
+fn terminate_asks_a_childs_window_to_close() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let d = dir("child-window");
+    let mut g = Group::spawn(&mut helper("parent", &d), &Tag::new("UNUSED", "x")).unwrap();
+    wait_for(&d.join("ready"));
+    let windows = g.windows();
+    assert!(
+        windows.iter().any(|w| w.pid != g.id() && w.visible),
+        "{windows:?}"
+    );
+    g.terminate();
+    let started = Instant::now();
+    while g.exited().unwrap().is_none() && started.elapsed() < Duration::from_secs(20) {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        g.exited().unwrap().is_some(),
+        "the child's window got no WM_CLOSE"
+    );
+    g.finish().unwrap();
+    assert_eq!(wait_for(&d.join("closed")), "saved");
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// A window (hidden, or shown) that writes "saved" and quits on `WM_CLOSE`.
 mod window {
     use std::path::Path;
     use std::sync::OnceLock;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG, PostQuitMessage,
-        RegisterClassW, WM_CLOSE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+        RegisterClassW, WM_CLOSE, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     static SAVE_TO: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -203,7 +233,7 @@ mod window {
         unsafe { DefWindowProcW(h, msg, w, l) }
     }
 
-    pub fn run(save_to: &Path) {
+    pub fn run(save_to: &Path, shown: bool) {
         SAVE_TO.set(save_to.to_path_buf()).unwrap();
         let class: Vec<u16> = "rea-group-test\0".encode_utf16().collect();
         unsafe {
@@ -215,7 +245,7 @@ mod window {
                 0,
                 class.as_ptr(),
                 class.as_ptr(),
-                WS_OVERLAPPEDWINDOW,
+                WS_OVERLAPPEDWINDOW | if shown { WS_VISIBLE } else { 0 },
                 0,
                 0,
                 320,

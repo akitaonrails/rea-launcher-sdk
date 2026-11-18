@@ -111,10 +111,31 @@ impl Group {
         self.child.wait()
     }
 
+    /// `WM_CLOSE` to the leader's windows, hidden ones too, and to the
+    /// visible windows of the session's other processes (a loader whose
+    /// game window is its child's).
     pub fn terminate(&self) {
-        for w in windows_of(&snapshot(), &[self.id()]) {
-            w.close();
+        let snap = snapshot();
+        for w in windows_of(&snap, &self.processes(&snap)) {
+            if w.pid == self.id() || w.visible {
+                w.close();
+            }
         }
+    }
+
+    /// The session's processes with their creation times: the leader, its
+    /// descendants, and whatever else the job holds.
+    fn processes(&self, snap: &Snapshot) -> Vec<(u32, u64)> {
+        let mut v: Vec<(u32, u64)> = self.created.map(|at| (self.id(), at)).into_iter().collect();
+        v.extend(self.descendants(snap));
+        for pid in self.job.as_ref().map(Job::processes).unwrap_or_default() {
+            if !v.iter().any(|&(p, _)| p == pid)
+                && let Some(at) = created(pid)
+            {
+                v.push((pid, at));
+            }
+        }
+        v
     }
 
     /// The leader's descendants with their creation times, from one
@@ -170,9 +191,7 @@ impl Group {
 
     pub fn windows(&self) -> Vec<Window> {
         let snap = snapshot();
-        let mut pids = vec![self.id()];
-        pids.extend(self.descendants(&snap).iter().map(|d| d.0));
-        windows_of(&snap, &pids)
+        windows_of(&snap, &self.processes(&snap))
     }
 
     pub fn kill_under(&self, dir: &Path) -> usize {
@@ -448,6 +467,8 @@ fn image(pid: u32) -> Option<String> {
 pub struct Window {
     hwnd: HWND,
     pub pid: u32,
+    /// When `pid` was created: a reused id is never taken for it.
+    born: u64,
     pub visible: bool,
     /// Big enough to be a game's window (not a tooltip or an IME box).
     pub big: bool,
@@ -456,9 +477,10 @@ pub struct Window {
 // SAFETY: a window handle is a plain identifier, usable from any thread.
 unsafe impl Send for Window {}
 
-/// Each call first checks that the window still belongs to `pid`: a
-/// window handle is reused once its window is gone, and a stale one must
-/// never close, hide or raise another program's window.
+/// Each call first checks that the window still belongs to `pid`, the
+/// process created at that same time: a window handle (and a process id)
+/// is reused once its window (process) is gone, and a stale one must never
+/// close, hide or raise another program's window.
 impl Window {
     /// Asks it to close, as its close button does.
     pub fn close(&self) {
@@ -486,13 +508,14 @@ impl Window {
     fn owned(&self) -> bool {
         let mut pid = 0u32;
         // SAFETY: plain out-parameter; a gone window returns 0.
-        unsafe { GetWindowThreadProcessId(self.hwnd, &mut pid) != 0 && pid == self.pid }
+        let owner = unsafe { GetWindowThreadProcessId(self.hwnd, &mut pid) };
+        owner != 0 && pid == self.pid && created(pid) == Some(self.born)
     }
 }
 
-/// The top-level windows of the processes `pids`, hidden ones too, found
-/// through their threads (never by title).
-fn windows_of(snap: &Snapshot, pids: &[u32]) -> Vec<Window> {
+/// The top-level windows of the processes `pids` (with their creation
+/// times), hidden ones too, found through their threads (never by title).
+fn windows_of(snap: &Snapshot, pids: &[(u32, u64)]) -> Vec<Window> {
     unsafe extern "system" fn each(hwnd: HWND, out: LPARAM) -> BOOL {
         // SAFETY: `out` is the Vec passed below, alive for the call.
         let out = unsafe { &mut *(out as *mut Vec<HWND>) };
@@ -500,7 +523,10 @@ fn windows_of(snap: &Snapshot, pids: &[u32]) -> Vec<Window> {
         1
     }
     let mut out = Vec::new();
-    for &(tid, pid) in snap.threads.iter().filter(|(_, pid)| pids.contains(pid)) {
+    for &(tid, owner) in &snap.threads {
+        let Some(&(pid, born)) = pids.iter().find(|p| p.0 == owner) else {
+            continue;
+        };
         let mut hwnds: Vec<HWND> = Vec::new();
         // SAFETY: the callback only pushes into `hwnds`, alive for the call.
         unsafe { EnumThreadWindows(tid, Some(each), &mut hwnds as *mut Vec<HWND> as LPARAM) };
@@ -516,6 +542,7 @@ fn windows_of(snap: &Snapshot, pids: &[u32]) -> Vec<Window> {
             out.push(Window {
                 hwnd,
                 pid,
+                born,
                 // SAFETY: as above.
                 visible: unsafe { IsWindowVisible(hwnd) } != 0,
                 big: r.right - r.left >= 200 && r.bottom - r.top >= 150,
@@ -691,19 +718,24 @@ mod tests {
         };
         assert!(!hwnd.is_null());
         let me = unsafe { GetCurrentProcessId() };
-        let window = |pid| Window {
+        let born = created(me).unwrap();
+        let window = |pid, born| Window {
             hwnd,
             pid,
+            born,
             visible: false,
             big: false,
         };
         // the handle now names another process's window: left alone
-        window(me + 4).close();
+        window(me + 4, born).close();
         assert!(!closed(), "closed a window of another process");
-        window(me).close();
+        // the same id, but an older process's
+        window(me, born - 1).close();
+        assert!(!closed(), "closed a window of a reused process id");
+        window(me, born).close();
         assert!(closed());
         unsafe { DestroyWindow(hwnd) };
-        window(me).close();
+        window(me, born).close();
         assert!(!closed(), "a gone window");
     }
 }

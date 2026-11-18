@@ -167,7 +167,8 @@ process once the launcher is gone, each one's tag read again right before
 its kill; one that ends early is a `# …` warning in the session log; the
 tag's value must be unique per session, the runtime folder under the
 instance lock), a stop on Windows asks
-Flycast and Dolphin to close their windows (they save) instead of waiting
+Flycast and Dolphin to close their windows (they save), and the game
+window of a loader's child (windowsarcadeloader, OpenParrotLoader64), instead of waiting
 8 s and ending them, `--no-input` keeps windowsarcadeloader's input open
 (it quit at once), the force feedback is released when the game's input
 breaks, a failed job attach is a `# …` warning in the session log instead

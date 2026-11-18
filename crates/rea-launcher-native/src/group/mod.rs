@@ -23,8 +23,10 @@
 //!   also found by parent and creation time
 //!   ([`rea_launcher::procs::descendants_at`]), each ended only while its
 //!   handle shows that same creation time. [`Group::terminate`] asks
-//!   politely: `WM_CLOSE` to the leader's windows (Flycast and Dolphin
-//!   save, then quit; a console loader has none and ends when its input
+//!   politely: `WM_CLOSE` to the leader's windows and to the visible
+//!   windows of the session's other processes (Flycast and Dolphin save,
+//!   then quit; windowsarcadeloader's and OpenParrotLoader64's game window
+//!   is their child's; a console loader has none and ends when its input
 //!   closes).
 //!
 //! Spawn from the thread that waits for the session (Linux ties the leader
@@ -167,7 +169,8 @@ impl Group {
     }
 
     /// Asks the session to end: Linux `SIGTERM` to the group, Windows
-    /// `WM_CLOSE` to the leader's windows.
+    /// `WM_CLOSE` to the leader's windows (hidden ones too) and to the
+    /// visible windows of the session's other processes.
     pub fn terminate(&self) {
         self.0.terminate()
     }
@@ -198,8 +201,8 @@ impl Group {
         self.0.members()
     }
 
-    /// The top-level windows of the leader and the processes it started,
-    /// hidden ones too.
+    /// The top-level windows of the session's processes (the leader, its
+    /// descendants, the job's), hidden ones too.
     #[cfg(windows)]
     pub fn windows(&self) -> Vec<Window> {
         self.0.windows()
