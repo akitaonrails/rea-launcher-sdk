@@ -831,6 +831,32 @@ mod tests {
         fs::symlink_metadata(p).is_ok_and(|m| super::is_link(&m))
     }
 
+    /// Whether this system shows a directory junction as a link. Wine
+    /// before 10 (Ubuntu's 9.0, which CI installs) creates junctions but
+    /// reports them as plain folders; Windows and newer Wine show them as
+    /// links. The tests that need real links skip themselves where links
+    /// can't be seen, and say so.
+    fn links_work(test: &str) -> bool {
+        #[cfg(windows)]
+        {
+            let d = test_dir(&format!("linkfarm-probe-{test}"));
+            let (target, at) = (d.join("target"), d.join("at"));
+            fs::create_dir_all(&target).unwrap();
+            let ok = junction::create(&target, &at).is_ok() && is_link(&at);
+            if !ok {
+                eprintln!(
+                    "{test}: skipped, this system shows junctions as plain folders (Wine before 10)"
+                );
+            }
+            ok
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = test;
+            true
+        }
+    }
+
     /// Sega's rules: small files are copied (code never), the loader's
     /// marker and drives skipped at the top, the folders the game writes
     /// into opened, Wangan's save folder made empty and its tree copied,
@@ -973,6 +999,9 @@ mod tests {
 
     #[test]
     fn small_files_are_copied_once_and_then_belong_to_the_game() {
+        if !links_work("small_files_are_copied_once_and_then_belong_to_the_game") {
+            return;
+        }
         let t = test_dir("linkfarm-copy-once");
         let (src, rt) = (dump(&t), t.join("rt"));
         let ops = plan(&src, &rt, &Rules, &list).unwrap();
@@ -1048,6 +1077,9 @@ mod tests {
 
     #[test]
     fn apply_links_relinks_and_refuses_or_keeps_real_files() {
+        if !links_work("apply_links_relinks_and_refuses_or_keeps_real_files") {
+            return;
+        }
         let t = test_dir("linkfarm-relink");
         let (a, b, rt) = (t.join("a"), t.join("b"), t.join("rt"));
         fs::create_dir_all(&a).unwrap();
@@ -1082,6 +1114,9 @@ mod tests {
 
     #[test]
     fn a_link_where_a_real_folder_now_goes_is_replaced_not_followed() {
+        if !links_work("a_link_where_a_real_folder_now_goes_is_replaced_not_followed") {
+            return;
+        }
         let t = test_dir("linkfarm-open-link");
         let (src, rt) = (dump(&t), t.join("rt"));
         // an older run linked the whole folder
@@ -1114,6 +1149,9 @@ mod tests {
 
     #[test]
     fn seeds_fill_an_empty_folder_once() {
+        if !links_work("seeds_fill_an_empty_folder_once") {
+            return;
+        }
         let t = test_dir("linkfarm-seed");
         let (src, rt) = (dump(&t), t.join("rt"));
         let ops = plan(&src, &rt, &Rules, &list).unwrap();
@@ -1134,6 +1172,9 @@ mod tests {
 
     #[test]
     fn a_seed_into_a_linked_folder_opens_it_instead_of_writing_into_the_dump() {
+        if !links_work("a_seed_into_a_linked_folder_opens_it_instead_of_writing_into_the_dump") {
+            return;
+        }
         let t = test_dir("linkfarm-seed-through-link");
         let (src, rt) = (dump(&t), t.join("rt"));
         // the dump has the seed's target folder too: by default a link
@@ -1159,6 +1200,9 @@ mod tests {
 
     #[test]
     fn no_write_goes_through_a_link_in_the_runtime() {
+        if !links_work("no_write_goes_through_a_link_in_the_runtime") {
+            return;
+        }
         let t = test_dir("linkfarm-through-link");
         let (src, rt) = (dump(&t), t.join("rt"));
         let (ini, data) = (src.join("a.ini"), src.join("data"));
@@ -1219,6 +1263,9 @@ mod tests {
 
     #[test]
     fn a_link_under_a_linked_folder_is_refused() {
+        if !links_work("a_link_under_a_linked_folder_is_refused") {
+            return;
+        }
         let t = test_dir("linkfarm-link-through-link");
         let (src, rt) = (dump(&t), t.join("rt"));
         let ops = [
@@ -1240,6 +1287,9 @@ mod tests {
 
     #[test]
     fn a_folder_op_is_no_root_of_its_own_and_nothing_goes_outside_the_runtime() {
+        if !links_work("a_folder_op_is_no_root_of_its_own_and_nothing_goes_outside_the_runtime") {
+            return;
+        }
         let t = test_dir("linkfarm-runtime-root");
         let (src, rt) = (dump(&t), t.join("rt"));
         let data = Op::Link {
@@ -1351,6 +1401,9 @@ mod tests {
 
     #[test]
     fn dangling_links_are_found_inside_real_folders_too() {
+        if !links_work("dangling_links_are_found_inside_real_folders_too") {
+            return;
+        }
         let t = test_dir("linkfarm-dangling");
         let rt = t.join("rt");
         let (gone, kept) = (t.join("gone"), t.join("kept"));
@@ -1485,6 +1538,9 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn on_windows_a_linked_file_is_a_copy_kept_in_step() {
+        if !links_work("on_windows_a_linked_file_is_a_copy_kept_in_step") {
+            return;
+        }
         let t = test_dir("linkfarm-windows");
         let (src, at) = (t.join("game.exe"), t.join("rt-game.exe"));
         fs::write(&src, b"v1").unwrap();
