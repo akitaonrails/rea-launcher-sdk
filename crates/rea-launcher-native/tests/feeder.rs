@@ -77,6 +77,14 @@ impl Write for Broken {
     }
 }
 
+/// SDL starts once per process and tests run in parallel: every test that
+/// starts it (directly or through an [`InputService`]) holds this first.
+static SDL: Mutex<()> = Mutex::new(());
+
+fn sdl_lock() -> std::sync::MutexGuard<'static, ()> {
+    SDL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn until(what: impl Fn() -> bool) -> bool {
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(5) {
@@ -116,6 +124,7 @@ fn feeds_and_lets_go(s: &InputService) {
 
 #[test]
 fn the_input_thread_feeds_with_and_without_sdl() {
+    let _sdl_lock = sdl_lock();
     let snap = |s: &InputService| -> Snapshot { s.snapshot() };
     let service = InputService::start(PadMap::<Button>::default(), None);
     std::thread::sleep(Duration::from_millis(200));
@@ -172,10 +181,11 @@ fn a_script_writes_its_steps_then_quits() {
 
 #[test]
 fn dropping_the_service_ends_its_thread_while_senders_live() {
+    let _sdl_lock = sdl_lock();
     let service = InputService::start(PadMap::<Button>::default(), None);
     let kept = service.sender();
     std::thread::sleep(Duration::from_millis(100));
-    // no pad here (or SDL held by another test): no menu buttons down
+    // no pad here: no menu buttons down
     assert_eq!(service.snapshot().nav, 0);
     let (done, dropped) = mpsc::channel();
     std::thread::spawn(move || {
