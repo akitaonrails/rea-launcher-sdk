@@ -33,8 +33,9 @@
 //! what the caller asks for by name ([`Group::terminate_one`], and
 //! [`Group::kill_under`]: any program inside a folder, started after the
 //! leader). The one look-then-kill without a held handle is the Linux
-//! sentinel's, after the launcher died: a pid reused within those
-//! microseconds could be hit.
+//! sentinel's, after the launcher died: it reads each pid's tag again right
+//! before the kill, and a pid reused within those few milliseconds could
+//! be hit.
 
 use std::io;
 use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
@@ -53,7 +54,11 @@ pub use windows::{Window, logical_processor_information};
 
 /// What marks a session's processes: on Linux the environment variable
 /// `var` set to `value` (a launcher's own name, e.g. `SEGA_SESSION`, and
-/// something unique to the session, e.g. its runtime folder).
+/// something unique to the session). Every process carrying the same tag
+/// is treated as this session's and killed with it, so `value` must be
+/// unique per session: the hubs use the session's runtime folder, and the
+/// launcher's instance lock ([`rea_launcher::instance`]) is what keeps two
+/// sessions with that folder from running at once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tag {
     var: &'static str,
@@ -140,7 +145,8 @@ impl Group {
     }
 
     /// Why the session is less tied than it should be (Windows: the job
-    /// couldn't take the leader), for the session log.
+    /// couldn't take the leader; Linux: no sentinel, or it ended early,
+    /// noticed by [`Group::exited`]), for the session log.
     pub fn warning(&self) -> Option<&str> {
         self.0.warning()
     }

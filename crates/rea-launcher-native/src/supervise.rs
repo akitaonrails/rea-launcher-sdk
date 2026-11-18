@@ -139,9 +139,15 @@ pub fn run(
 ) -> std::io::Result<Outcome> {
     let start = Instant::now();
     let pipes = group.take_pipes();
-    if let Some(w) = group.warning() {
-        log(&opts.log, &format!("# {w}"));
-    }
+    // logged once, when it appears (the Linux sentinel's may come later)
+    let mut warned = false;
+    let mut warn = |group: &Group| {
+        if !warned && let Some(w) = group.warning() {
+            log(&opts.log, &format!("# {w}"));
+            warned = true;
+        }
+    };
+    warn(&group);
     let lines = Lines::read(pipes.stdout, pipes.stderr, feed.outputs());
     let stdin = pipes.stdin.map(|s| Box::new(s) as Box<dyn Write + Send>);
     // with a sink of its own, the leader's piped input is held until the
@@ -159,6 +165,7 @@ pub fn run(
         if let Some(st) = group.exited()? {
             break st;
         }
+        warn(&group);
         let why = if opts.stop.load(Ordering::SeqCst) {
             Some(Ended::Stopped)
         } else {

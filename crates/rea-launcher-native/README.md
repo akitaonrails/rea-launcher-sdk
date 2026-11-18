@@ -163,7 +163,10 @@ TeknoParrot hub replaces its `proc.rs`, `win32.rs`, the run loop of
 `session.rs` and `input.rs` with them; what its players see change: a
 killed launcher takes its whole Linux session along (Wine's processes
 too: a small sentinel shell started with the session kills every tagged
-process once the launcher is gone), a stop on Windows asks
+process once the launcher is gone, each one's tag read again right before
+its kill; one that ends early is a `# …` warning in the session log; the
+tag's value must be unique per session, the runtime folder under the
+instance lock), a stop on Windows asks
 Flycast and Dolphin to close their windows (they save) instead of waiting
 8 s and ending them, `--no-input` keeps windowsarcadeloader's input open
 (it quit at once), the force feedback is released when the game's input

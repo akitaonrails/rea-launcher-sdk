@@ -74,8 +74,12 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
   processes started and stopped as one (the TeknoParrot hubs'
   `proc.rs`). Linux: a process group tied to the launcher
   (`PR_SET_PDEATHSIG`), a tag in every environment for processes that
-  leave the group, a sentinel shell that kills every tagged process when
-  the launcher is killed (Wine's processes would run on), the group signalled only while its leader is unreaped
+  leave the group (unique per session: the hubs use the runtime folder,
+  kept to one session by the instance lock), a sentinel shell that kills
+  every tagged process when the launcher is killed (Wine's processes
+  would run on), each pid's tag read again right before its kill, a
+  sentinel that ends early reported by `Group::warning` (and logged by
+  `supervise::run`), the group signalled only while its leader is unreaped
   (`waitid(WNOWAIT)`), tagged processes signalled through pidfds, zombies
   never counted. Windows: the leader starts suspended and joins a
   kill-on-close job before its first instruction (a failed join is a

@@ -19,7 +19,7 @@ pub struct Group {
     reaped: bool,
     warning: Option<String>,
     /// Dropped last, once the session has ended in the launcher.
-    _sentinel: Option<Sentinel>,
+    sentinel: Option<Sentinel>,
 }
 
 impl Group {
@@ -38,7 +38,7 @@ impl Group {
             status: None,
             reaped: false,
             warning,
-            _sentinel: sentinel.ok(),
+            sentinel: sentinel.ok(),
         })
     }
 
@@ -59,6 +59,7 @@ impl Group {
     }
 
     pub fn exited(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.check_sentinel();
         if self.status.is_none() {
             self.status = peek_exit(self.id(), false)?;
         }
@@ -73,6 +74,22 @@ impl Group {
             peek_exit(self.id(), true)?.ok_or_else(|| io::Error::other("waitid: no status"))?;
         self.status = Some(st);
         Ok(st)
+    }
+
+    /// A sentinel that has ended (it only does when told to, at the drop)
+    /// was killed: the session is no longer ended with a killed launcher.
+    fn check_sentinel(&mut self) {
+        let ended = self
+            .sentinel
+            .as_ref()
+            .is_some_and(|s| peek_exit(s.child.id(), false).is_ok_and(|st| st.is_some()));
+        if ended {
+            self.sentinel = None;
+            self.warning = Some(
+                "the sentinel ended early: processes that leave the group may outlive a killed launcher"
+                    .into(),
+            );
+        }
     }
 
     /// The group's id is the leader's pid, which can't be reused while the
@@ -173,8 +190,11 @@ impl Drop for Group {
 /// and the shell quits;
 /// the pipe closing without it means the launcher died, and the shell
 /// kills every process carrying the tag until none is left. It finds them
-/// by pid, so a pid reused between its look and its kill could be hit:
-/// a window of a few microseconds, after the launcher died.
+/// by pid and reads each one's tag again right before its kill, so only a
+/// pid reused between that read and the kill could be hit: a window of a
+/// few milliseconds (a `grep`), after the launcher died. A sentinel that
+/// ends while the session runs (killed by someone) becomes a
+/// [`Group::warning`].
 struct Sentinel {
     child: Child,
     done: ChildStdin,
@@ -186,7 +206,10 @@ n=0
 while [ "$n" -lt 50 ]; do
   pids=$(grep -lzxF -- "$1=$2" /proc/[0-9]*/environ 2>/dev/null | sed 's|^/proc/||; s|/environ$||')
   [ -n "$pids" ] || exit 0
-  for p in $pids; do kill -9 "$p" 2>/dev/null; done
+  for p in $pids; do
+    # its tag again right before the kill: the pid may be another's by now
+    grep -qzxF -- "$1=$2" "/proc/$p/environ" 2>/dev/null && kill -9 "$p" 2>/dev/null
+  done
   n=$((n + 1))
   sleep 0.1
 done"#;
@@ -286,6 +309,98 @@ fn wait_status(code: i32, status: i32) -> ExitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    fn wait_for(child: &mut Child, secs: u64) -> Option<ExitStatus> {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(secs) {
+            if let Some(st) = child.try_wait().unwrap() {
+                return Some(st);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
+    }
+
+    #[test]
+    fn a_sentinel_that_ends_early_becomes_a_warning() {
+        let tag = Tag::new("REA_SENTINEL_TEST", format!("early-{}", std::process::id()));
+        let mut g = Group::spawn(Command::new("sleep").arg("5"), &tag).unwrap();
+        assert!(g.warning().is_none());
+        let sentinel = g.sentinel.as_ref().unwrap().child.id();
+        // SAFETY: a plain syscall; the pid is our unreaped child.
+        unsafe { libc::kill(sentinel as i32, libc::SIGKILL) };
+        let started = Instant::now();
+        while g.warning().is_none() && started.elapsed() < Duration::from_secs(5) {
+            assert!(g.exited().unwrap().is_none());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let w = g.warning().unwrap_or_default().to_string();
+        assert!(w.contains("sentinel ended"), "{w}");
+        g.kill();
+        g.finish().unwrap();
+    }
+
+    /// A pid the sentinel found tagged that is someone else's by the time
+    /// it kills: its environment is read again first. A fake `/proc` whose
+    /// one entry, a live process of ours, reads tagged only the first time.
+    #[test]
+    fn the_sentinel_checks_the_tag_again_right_before_each_kill() {
+        let root = std::env::temp_dir().join(format!("rea-sentinel-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut decoy = Command::new("sleep").arg("30").spawn().unwrap();
+        let dir = root.join(decoy.id().to_string());
+        fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("environ");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: a plain syscall on a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (stop, fifo) = (stop.clone(), fifo.clone());
+            std::thread::spawn(move || {
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut reads = 0;
+                while !stop.load(Ordering::SeqCst) {
+                    let opened = fs::OpenOptions::new()
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&fifo);
+                    let Ok(mut f) = opened else {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    };
+                    let body: &[u8] = if reads == 0 {
+                        b"REA_T=abc\0"
+                    } else {
+                        b"REA_T=other\0"
+                    };
+                    let _ = f.write_all(body);
+                    reads += 1;
+                    drop(f);
+                    // let this reader see the end before the next one opens
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+            })
+        };
+        let script = SENTINEL.replace("/proc", root.to_str().unwrap());
+        let mut sentinel = Command::new("/bin/sh")
+            .args(["-c", &script, "rea-session-sentinel", "REA_T", "abc"])
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let ended = wait_for(&mut sentinel, 10);
+        stop.store(true, Ordering::SeqCst);
+        writer.join().unwrap();
+        let decoy_lives = decoy.try_wait().unwrap().is_none();
+        let _ = decoy.kill();
+        let _ = decoy.wait();
+        fs::remove_dir_all(&root).unwrap();
+        assert!(ended.is_some_and(|st| st.success()), "the sentinel quit");
+        assert!(decoy_lives, "a process no longer tagged was killed");
+    }
 
     #[test]
     fn waitid_codes_become_exit_statuses() {
