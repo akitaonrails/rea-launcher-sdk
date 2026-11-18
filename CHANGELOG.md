@@ -9,6 +9,8 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-17
+
 ### Migration
 
 - `rea_launcher::cfg::Kind` has a new variant, `Decimal { min, max,
@@ -1455,6 +1457,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.10.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.0...v0.8.1
