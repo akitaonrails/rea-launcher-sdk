@@ -70,6 +70,11 @@ impl HubPaths {
     pub fn config_file(&self) -> PathBuf {
         self.data.join("launcher.cfg")
     }
+
+    /// The player's pad layout ([`super::bindings::Bindings`]).
+    pub fn controls_file(&self) -> PathBuf {
+        self.data.join("controls.cfg")
+    }
     /// A game's settings file.
     pub fn settings(&self, slug: &str) -> PathBuf {
         self.data.join("settings").join(format!("{slug}.cfg"))

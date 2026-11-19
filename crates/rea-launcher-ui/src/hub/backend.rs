@@ -12,7 +12,7 @@ use std::sync::mpsc::Sender;
 use rea_launcher::catalog::Support;
 use rea_launcher::cfg::OptionSpec;
 use rea_launcher::hub::{HubConfig, Input, Need};
-use rea_launcher::wheel::Kind;
+use rea_launcher::wheel::{Kind, PadInput};
 
 /// One game of the hub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,6 +284,35 @@ pub trait HubBackend: 'static {
     /// runs, so the game's pad presses never move the hub.
     fn pad(&mut self) -> Vec<Input> {
         Vec::new()
+    }
+
+    /// The pad now, for the Controls page: the menu buttons down on any
+    /// pad (`feeder::Snapshot::nav`) and the first input held
+    /// (`Snapshot::held`). With it, the Controls page gives the pad to its
+    /// live check (Back and Start together give it back to the menu) and
+    /// can wait for a press to rebind. `None` (the default): the pad moves
+    /// the menu on every page.
+    fn pad_now(&self) -> Option<(u16, Option<PadInput>)> {
+        None
+    }
+
+    /// The rows of [`ControlsView::layout`] the player can bind again, in
+    /// order (`rea_launcher::hub::bindings::Bindings::rebindable`); none by
+    /// default.
+    fn rebindable(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    /// Binds layout row `row` to `input` alone, saves the layout and hands
+    /// it to the input thread; the note says what changed or why not.
+    fn rebind(&mut self, _row: usize, _input: PadInput) -> Note {
+        Note::error("This launcher's buttons can't be changed.")
+    }
+
+    /// Back to the launcher's pad layout, saved and handed to the input
+    /// thread.
+    fn reset_bindings(&mut self) -> Note {
+        Note::error("This launcher's buttons can't be changed.")
     }
 
     /// The extra page for a game that [`HubBackend::need`]s something.

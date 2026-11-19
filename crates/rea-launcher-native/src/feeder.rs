@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 use rea_launcher::ffb::FfbOutput;
 use rea_launcher::wal::{Ffb, Out};
 use rea_launcher::wheel::{
-    Control, Controls, Kind, PadMap, PadSettings, PedalAxis, Script, SteeringLock, WheelProfile,
-    WheelSettings, dinput::NoButtons, read_pad,
+    Control, Controls, Kind, PadInput, PadMap, PadSettings, PedalAxis, Script, SteeringLock,
+    WheelProfile, WheelSettings, dinput::NoButtons, read_pad,
 };
 
 use crate::policy::HapticPolicy;
@@ -120,6 +120,10 @@ pub enum Command {
     Output(String),
     /// Stop feeding; the sink is closed and the force feedback released.
     Detach,
+    /// A new pad layout: the `PadMap<B>` of the buttons the thread was
+    /// started with ([`InputService::set_pad_map`]); another type is
+    /// ignored.
+    PadMap(Box<dyn std::any::Any + Send>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,6 +171,9 @@ pub struct Snapshot {
     /// ([`rea_launcher::pad`]; a wheel's d-pad too), for the hub's pad
     /// navigation: `hub::Input::from_pad(&mut pad_nav, snapshot.nav)`.
     pub nav: u16,
+    /// The first pad input held now on any pad (a trigger past half way
+    /// counts), for the hub's rebinding (`PadCapture::tick_held`).
+    pub held: Option<PadInput>,
 }
 
 /// The input thread.
@@ -201,6 +208,12 @@ impl InputService {
 
     pub fn sender(&self) -> Sender<Command> {
         self.tx.clone()
+    }
+
+    /// Reads pads with `map` from now on (the player changed the layout);
+    /// `B` must be the buttons the thread was started with.
+    pub fn set_pad_map<B: Control + Send>(&self, map: PadMap<B>) {
+        let _ = self.tx.send(Command::PadMap(Box::new(map)));
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -298,6 +311,11 @@ fn run<B: Control>(
                     fed = None;
                     devices.release_force_feedback();
                 }
+                Ok(Command::PadMap(map)) => {
+                    if let Ok(map) = map.downcast::<PadMap<B>>() {
+                        pads.map = *map;
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
@@ -346,6 +364,10 @@ fn run<B: Control>(
             feeding: false,
             error: None,
             nav: list.iter().fold(0, |bits, d| bits | d.nav_bits()),
+            held: list
+                .iter()
+                .filter_map(|d| d.pad)
+                .find_map(|p| PadInput::held(&p)),
         };
         let frame = Frame {
             controls,
@@ -388,7 +410,7 @@ fn idle_without_sdl(rx: Receiver<Command>, shared: &Mutex<Snapshot>, quit: &Atom
         match rx.recv_timeout(REFRESH) {
             Ok(Command::Attach { sink, wire, .. }) => fed = Some(Fed::new(sink, wire, 0.0)),
             Ok(Command::Detach) => fed = None,
-            Ok(Command::Output(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(Command::Output(_) | Command::PadMap(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
         let neutral = Frame {

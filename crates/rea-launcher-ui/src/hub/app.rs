@@ -15,6 +15,8 @@ use rea_launcher::hub::{
     typed_path,
 };
 use rea_launcher::log::Log;
+use rea_launcher::pad;
+use rea_launcher::wheel::pad_map::{CAPTURE_TIMEOUT_MS, Capture, PadCapture};
 
 use super::backend::{
     ControlsView, ExtraPage, HubBackend, HubForm, Note, Progress, Reporter, Stage,
@@ -30,6 +32,14 @@ pub(crate) struct Running {
     pub progress: Receiver<Progress>,
     /// Asks the session to stop the game.
     pub stop: Arc<AtomicBool>,
+}
+
+/// The Controls page waiting for the pad input of a changeable row.
+pub(crate) struct Capturing {
+    /// The row, an index into [`HubBackend::rebindable`].
+    pub n: usize,
+    cap: PadCapture,
+    pub remaining_ms: u64,
 }
 
 /// A message over the window, dismissed with OK.
@@ -87,6 +97,16 @@ pub struct HubApp<B: HubBackend> {
     /// soon after plays (egui's double click counts any two widgets).
     last_tile_click: Option<(usize, f64)>,
     pub(crate) controls: ControlsView,
+    /// The Controls page gives the pad to its live check, not the menu
+    /// (when the backend reports the pad: [`HubBackend::pad_now`]).
+    pub(crate) pad_testing: bool,
+    /// Back and Start were both down last frame.
+    combo: bool,
+    /// The page the last frame showed (opening Controls starts the test).
+    last_page: Page,
+    pub(crate) capture: Option<Capturing>,
+    /// The last rebind or reset.
+    pub(crate) binding_note: Option<Note>,
 }
 
 /// A mouse click, turned into the same model inputs the keyboard sends.
@@ -157,6 +177,11 @@ impl<B: HubBackend> HubApp<B> {
             close_after_stop: false,
             last_tile_click: None,
             controls: ControlsView::default(),
+            pad_testing: false,
+            combo: false,
+            last_page: Page::Hub,
+            capture: None,
+            binding_note: None,
             spec,
             backend,
         };
@@ -278,6 +303,8 @@ impl<B: HubBackend> HubApp<B> {
             playable: state.playable() && self.running.is_none(),
             has_library: !self.config.libraries.is_empty(),
             needs: matches!(state, TileState::Needs(_)),
+            bindings: self.backend.rebindable().len(),
+            pad_test: self.backend.pad_now().is_some(),
         }
     }
 
@@ -420,6 +447,14 @@ impl<B: HubBackend> HubApp<B> {
         if self.running.is_some() {
             return vec![];
         }
+        let pads = self.pad_for_menu(pads, ctx);
+        if self.capture.is_some() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.capture = None;
+                self.binding_note = Some(Note::ok("Not changed."));
+            }
+            return vec![];
+        }
         let typing = self.model.page.has_fields() && matches!(self.model.focus, Focus::Field(_));
         let mut out = pads;
         ctx.input(|i| {
@@ -451,6 +486,58 @@ impl<B: HubBackend> HubApp<B> {
             }
         });
         out
+    }
+
+    /// The pad's menu inputs `pads`, unless the Controls page has the pad:
+    /// its live check (until Back and Start are pressed together), or a
+    /// rebind waiting for a press.
+    fn pad_for_menu(&mut self, pads: Vec<Input>, ctx: &egui::Context) -> Vec<Input> {
+        if self.model.page != self.last_page {
+            self.last_page = self.model.page;
+            self.capture = None;
+            self.binding_note = None;
+            self.pad_testing = self.model.page == Page::Controls;
+        }
+        let Some((bits, held)) = self.backend.pad_now() else {
+            self.capture = None;
+            return pads;
+        };
+        let both = bits & pad::BACK != 0 && bits & pad::START != 0;
+        let together = both && !self.combo;
+        self.combo = both;
+        if let Some(c) = &mut self.capture {
+            let now_ms = (ctx.input(|i| i.time) * 1000.0) as u64;
+            match c.cap.tick_held(now_ms, held) {
+                Capture::Got(input) => {
+                    let n = c.n;
+                    self.capture = None;
+                    let note = match self.backend.rebindable().get(n) {
+                        Some(&row) => self.backend.rebind(row, input),
+                        None => Note::error("That row can't be changed."),
+                    };
+                    self.log.line(&format!("controls: {}", note.text));
+                    self.binding_note = Some(note);
+                }
+                Capture::TimedOut => {
+                    self.capture = None;
+                    self.binding_note = Some(Note::ok("No button was pressed: not changed."));
+                }
+                Capture::Waiting { remaining_ms } => c.remaining_ms = remaining_ms,
+                Capture::Releasing => {}
+            }
+            return vec![];
+        }
+        if self.model.page == Page::Controls && self.pad_testing {
+            if together {
+                self.pad_testing = false;
+                if matches!(self.model.focus, Focus::Tab(_)) {
+                    let w = self.world();
+                    self.model.input(Input::Down, w);
+                }
+            }
+            return vec![];
+        }
+        pads
     }
 
     fn handle(&mut self, input: Input, ctx: &egui::Context) {
@@ -495,6 +582,20 @@ impl<B: HubBackend> HubApp<B> {
             Effect::OpenedSetup => self.opened_setup(),
             Effect::OpenedExtra => self.opened_extra(),
             Effect::SubmitExtra => self.submit_extra(),
+            Effect::Rebind(n) => {
+                self.binding_note = None;
+                self.capture = Some(Capturing {
+                    n,
+                    cap: PadCapture::default(),
+                    remaining_ms: CAPTURE_TIMEOUT_MS,
+                });
+            }
+            Effect::ResetBindings => {
+                let note = self.backend.reset_bindings();
+                self.log.line(&format!("controls: {}", note.text));
+                self.binding_note = Some(note);
+            }
+            Effect::TestPad => self.pad_testing = true,
         }
     }
 

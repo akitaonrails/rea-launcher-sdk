@@ -158,6 +158,14 @@ pub enum Focus {
     Submit(usize),
     /// The setup page's last stop.
     Done,
+    /// The Controls page: the `n`th row of the pad layout the player can
+    /// change ([`World::bindings`] of them).
+    Binding(usize),
+    /// The Controls page: back to the launcher's pad layout.
+    ResetBindings,
+    /// The Controls page: the pad's presses go to the live check again
+    /// instead of the menu.
+    TestPad,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +189,14 @@ pub enum Effect {
     OpenedExtra,
     /// Use what is typed on the extra page.
     SubmitExtra,
+    /// Wait for the pad input that the `n`th changeable row of the pad
+    /// layout gets.
+    Rebind(usize),
+    /// Back to the launcher's pad layout.
+    ResetBindings,
+    /// The pad's presses go to the Controls page's live check, not the
+    /// menu, until Back and Start are pressed together.
+    TestPad,
 }
 
 /// What the model needs to know about the world to move the focus.
@@ -193,6 +209,12 @@ pub struct World {
     /// The selected game waits for something the extra page adds (the
     /// hub's first button opens it).
     pub needs: bool,
+    /// How many rows of the Controls page's pad layout the player can
+    /// change (0: the launcher doesn't let them).
+    pub bindings: usize,
+    /// The Controls page can give the pad to its live check
+    /// ([`Effect::TestPad`]).
+    pub pad_test: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,7 +288,7 @@ impl Model {
         match self.page {
             Page::Hub => self.on_hub(input, w),
             Page::Settings => self.on_settings(input),
-            Page::Controls => Effect::None,
+            Page::Controls => self.on_controls(input, w),
             Page::Setup => self.on_setup(input, w),
             Page::Extra => self.on_extra(input),
         }
@@ -314,6 +336,10 @@ impl Model {
                 self.focus = match self.page {
                     Page::Hub => Self::hub_button(w),
                     Page::Settings => Focus::Item(0),
+                    Page::Controls => Self::controls_stops(w)
+                        .first()
+                        .copied()
+                        .unwrap_or(self.focus),
                     _ => self.focus,
                 }
             }
@@ -371,6 +397,40 @@ impl Model {
                 self.open(Page::Setup);
                 return Effect::OpenedSetup;
             }
+            _ => {}
+        }
+        Effect::None
+    }
+
+    /// The Controls page's stops below the top bar: each changeable row of
+    /// the pad layout and the reset button, then the pad test.
+    fn controls_stops(w: World) -> Vec<Focus> {
+        let mut stops: Vec<Focus> = (0..w.bindings).map(Focus::Binding).collect();
+        if w.bindings > 0 {
+            stops.push(Focus::ResetBindings);
+        }
+        if w.pad_test {
+            stops.push(Focus::TestPad);
+        }
+        stops
+    }
+
+    fn on_controls(&mut self, input: Input, w: World) -> Effect {
+        let stops = Self::controls_stops(w);
+        if stops.is_empty() {
+            return Effect::None;
+        }
+        let Some(at) = stops.iter().position(|f| *f == self.focus) else {
+            self.focus = stops[0];
+            return Effect::None;
+        };
+        match (self.focus, input) {
+            (_, Input::Up) if at == 0 => self.focus = Focus::Tab(Tab::Controls),
+            (_, Input::Up) => self.focus = stops[at - 1],
+            (_, Input::Down) if at + 1 < stops.len() => self.focus = stops[at + 1],
+            (Focus::Binding(n), Input::Press) => return Effect::Rebind(n),
+            (Focus::ResetBindings, Input::Press) => return Effect::ResetBindings,
+            (Focus::TestPad, Input::Press) => return Effect::TestPad,
             _ => {}
         }
         Effect::None
@@ -517,25 +577,65 @@ mod tests {
         playable: true,
         has_library: true,
         needs: false,
+        bindings: 0,
+        pad_test: false,
     };
     const NOT_READY: World = World {
         playable: false,
         has_library: true,
         needs: false,
+        bindings: 0,
+        pad_test: false,
     };
     const NEEDS: World = World {
         playable: false,
         has_library: true,
         needs: true,
+        bindings: 0,
+        pad_test: false,
     };
     const NONE: World = World {
         playable: false,
         has_library: false,
         needs: false,
+        bindings: 0,
+        pad_test: false,
     };
 
     fn hub() -> Model {
         Model::new(GAMES, &KEYS, 1, true)
+    }
+
+    #[test]
+    fn the_controls_page_steps_through_its_bindings_then_reset() {
+        let w = World {
+            bindings: 2,
+            pad_test: true,
+            ..READY
+        };
+        let mut m = hub();
+        m.open(Page::Controls);
+        assert_eq!(m.input(Input::Down, w), Effect::None);
+        assert_eq!(m.focus, Focus::Binding(0));
+        assert_eq!(m.input(Input::Press, w), Effect::Rebind(0));
+        m.input(Input::Down, w);
+        assert_eq!(m.input(Input::Press, w), Effect::Rebind(1));
+        m.input(Input::Down, w);
+        assert_eq!(m.focus, Focus::ResetBindings);
+        assert_eq!(m.input(Input::Press, w), Effect::ResetBindings);
+        m.input(Input::Down, w);
+        assert_eq!(m.focus, Focus::TestPad);
+        assert_eq!(m.input(Input::Down, w), Effect::None, "the last stop");
+        assert_eq!(m.input(Input::Press, w), Effect::TestPad);
+        for _ in 0..4 {
+            m.input(Input::Up, w);
+        }
+        assert_eq!(m.focus, Focus::Tab(Tab::Controls));
+        // a launcher without rebinding: the page has no stops
+        let mut plain = hub();
+        plain.open(Page::Controls);
+        plain.input(Input::Down, READY);
+        assert_eq!(plain.focus, Focus::Tab(Tab::Controls));
     }
 
     #[test]

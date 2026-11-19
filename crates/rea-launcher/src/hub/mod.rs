@@ -3,8 +3,10 @@
 //! draws it): the window's model ([`Model`]: pages, focus, what each input
 //! does), what a tile says ([`TileState`]), `launcher.cfg` ([`HubConfig`]
 //! with the launcher's [`PathField`]s), the folders ([`HubPaths`]), the
-//! command line ([`cli`]), and small helpers for the settings rows.
+//! command line ([`cli`]), the player's pad layout ([`bindings`]), and
+//! small helpers for the settings rows.
 
+pub mod bindings;
 pub mod cli;
 mod config;
 mod dirs;

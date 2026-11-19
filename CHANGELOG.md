@@ -9,6 +9,46 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+### Migration
+
+- `rea_launcher_native::feeder::Snapshot` has a new field, `held` (the
+  first pad input held now). A `Snapshot { … }` literal without
+  `..Snapshot::default()` needs `held: None` (the Initial D launcher's
+  `ui/tests.rs`). Verify: `cargo test --locked` builds.
+- `rea_launcher::hub::World` has two new fields, `bindings` and
+  `pad_test`; a literal needs them or `..World::default()`. No launcher
+  builds one (the window does). `Focus` (`Binding`, `ResetBindings`,
+  `TestPad`), `Effect` (`Rebind`, `ResetBindings`, `TestPad`) and
+  `feeder::Command` (`PadMap`) have new variants: a `match` with no `_`
+  arm needs them.
+- Optional, for the hub launchers: the Controls page can test the pad
+  and let the player change its buttons. Implement `HubBackend::pad_now`
+  (`Some((snapshot.nav, snapshot.held))`), `rebindable`, `rebind` and
+  `reset_bindings` over a `hub::bindings::Bindings` loaded from
+  `HubPaths::controls_file()`, start the input thread with its map (also
+  for `--play`), hand changes over with `InputService::set_pad_map`, and
+  build `ControlsView::layout` from `Bindings::layout`. The Initial D,
+  Nintendo and Wangan launchers show how. A launcher that doesn't keeps
+  today's page. Verify: the golden snapshots of the Controls page change
+  only by the layout rows becoming "Change" buttons, the Reset button and
+  the pad test line.
+
+### Added
+
+- Hub Controls page: the pad tests the controls there. Its presses light
+  the live check and no longer move the menu (LB/RB switched pages,
+  B left the page while a player tried the buttons:
+  rea-teknoparrot-wangan-series#1). Back and Start pressed together give
+  the pad to the menu; "Test the pad" gives it back. Keyboard and mouse
+  work as before.
+- Hub Controls page: each pad layout row but steering is a button that
+  waits up to 6 s for the next pad button or trigger and binds it there
+  alone (Esc keeps the row as it was); Reset goes back to the launcher's
+  layout. `hub::bindings::Bindings` keeps the rows and saves the layout in
+  the data folder's `controls.cfg` (`pad_<action> = <inputs>`).
+  `PadInput::held`, `PadCapture::tick_held`, `InputService::set_pad_map`,
+  `Snapshot::held`, `HubPaths::controls_file`.
+
 ### Fixed
 
 - `wheel::classify`: PXN wheels are wheels. PXN's own USB vendor ID
