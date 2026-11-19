@@ -24,7 +24,14 @@ const LOGITECH: u16 = 0x046d;
 const THRUSTMASTER: u16 = 0x044f;
 const FANATEC: u16 = 0x0eb7;
 const MOZA: u16 = 0x346e;
-const SIMAGIC: u16 = 0x11ff;
+/// Lite Star, the vendor ID of PXN's older wheels (V10, V12; Linux
+/// `hid-ids.h` `USB_VENDOR_ID_LITE_STAR`). It used to be labelled Simagic
+/// here.
+const LITE_STAR_PXN: u16 = 0x11ff;
+/// PXN's own vendor ID, on its direct-drive wheel bases (the VD6 is
+/// `36e6:400f`; SDL added it to its wheel list in March 2026, after the
+/// SDL2 we ship).
+const PXN: u16 = 0x36e6;
 const SIMUCUBE: u16 = 0x16d0;
 
 const fn w(vid: u16, pid: u16, name: &'static str, rotation: u16, up: u8, down: u8) -> KnownWheel {
@@ -77,7 +84,7 @@ pub fn lookup(vid: u16, pid: u16) -> Option<&'static KnownWheel> {
 pub fn wheel_vendor(vid: u16) -> bool {
     matches!(
         vid,
-        LOGITECH | THRUSTMASTER | FANATEC | MOZA | SIMAGIC | SIMUCUBE
+        LOGITECH | THRUSTMASTER | FANATEC | MOZA | LITE_STAR_PXN | PXN | SIMUCUBE
     )
 }
 
@@ -112,5 +119,7 @@ mod tests {
         assert!(wheel_vendor(0x046d));
         assert!(wheel_vendor(0x16d0));
         assert!(!wheel_vendor(0x045e)); // Microsoft (Xbox pads)
+        assert!(wheel_vendor(0x11ff)); // PXN V10 / V12
+        assert!(wheel_vendor(0x36e6)); // PXN VD6
     }
 }
