@@ -12,7 +12,7 @@ made that copy the reference.
 | Module | What it does |
 |---|---|
 | `fsx` | Whole-file swaps (temp + rename) that never write through a hard link; stale temp cleanup |
-| `paths` | `resolve`, the runtime/game overlap check, `native`, `\\?\` stripping; `data_dir`, a portable-first data folder |
+| `paths` | `resolve`, the runtime/game overlap check, `native`, `\\?\` stripping; `data_dir`, a portable-first data folder; `portable_dir` (opt-in with `portable.txt`) and `relative_to` |
 | `runtime` | The private runtime copy: list, plan, sync (with progress), restore, manifest |
 | `saves` | Save mirroring by recorded state, for one file or a folder |
 | `ledger` | SHA-256 record of the components the launcher installed |
@@ -427,6 +427,28 @@ let data = paths::data_dir(exe_dir, None, names, &|k| std::env::var_os(k));
 // The first line is always this run's; the previous run is launcher.log.old.
 let log = Log::new(data.join("launcher.log")).per_run().timestamps(true);
 log.line(concat!("Rad Mobile launcher ", env!("CARGO_PKG_VERSION")));
+```
+
+### Opt-in portable mode
+
+A launcher that already keeps its data under `%LOCALAPPDATA%` can't switch
+to [`data_dir`] without moving every player's settings, copy and saves.
+`portable_dir` moves them only when the player put `portable.txt` beside
+the executable. Paths the launcher remembers in `launcher.cfg` are then
+written relative to its folder (`relative_to`) and read back with
+`exe_dir.join(..)`, so the folder can go to another PC or drive letter.
+
+```rust,no_run
+use rea_launcher::paths;
+# let exe_dir = std::path::Path::new("C:/Games/OutRunLauncher");
+# let usual = std::path::PathBuf::from("C:/Users/me/AppData/Local/OutRunLauncher");
+let home = paths::portable_dir(exe_dir, "data").unwrap_or(usual);
+let game = std::path::Path::new("C:/Games/OutRun 2006");
+// `..\OutRun 2006` on the same drive; another drive stays absolute.
+let stored = paths::relative_to(game, exe_dir).unwrap_or_else(|| game.to_path_buf());
+// Read back: the stored path joined to the launcher's folder.
+let _read = exe_dir.join(&stored);
+# let _ = home;
 ```
 
 ## One table for the window and the command line

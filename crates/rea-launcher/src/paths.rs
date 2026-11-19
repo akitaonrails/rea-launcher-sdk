@@ -321,6 +321,70 @@ fn is_writable(dir: &Path) -> bool {
     ok
 }
 
+/// The file that turns a launcher's portable mode on: `portable.txt`
+/// beside the executable (any case).
+pub const PORTABLE_MARKER: &str = "portable.txt";
+
+/// The folder `exe_dir/folder` that holds everything a launcher writes,
+/// when the player opted into portable mode by putting [`PORTABLE_MARKER`]
+/// beside the executable; `None` otherwise, and the launcher keeps its
+/// usual places. Unlike [`data_dir`], nothing moves until the player asks,
+/// so an existing install keeps its settings, copy and saves.
+pub fn portable_dir(exe_dir: &Path, folder: &str) -> Option<PathBuf> {
+    find_ignoring_case(exe_dir, PORTABLE_MARKER).filter(|marker| marker.is_file())?;
+    Some(exe_dir.join(folder))
+}
+
+/// `path` written relative to `base` (`..\Games\OutRun`), by text after
+/// [`normalize`], so a portable install can be moved with the folders
+/// around it; `base.join(relative)` reads it back. `None` when either is
+/// not absolute or they are on different roots (another drive): those
+/// stay absolute. Windows volumes ignore case, so there the parts
+/// compare without it.
+pub fn relative_to(path: &Path, base: &Path) -> Option<PathBuf> {
+    relative_to_on(cfg!(windows), path, base)
+}
+
+fn relative_to_on(windows: bool, path: &Path, base: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() || !base.is_absolute() {
+        return None;
+    }
+    let (path, base) = (normalize(path), normalize(base));
+    let key = |c: &Component| -> OsString {
+        if windows {
+            c.as_os_str().to_string_lossy().to_lowercase().into()
+        } else {
+            c.as_os_str().to_os_string()
+        }
+    };
+    let to: Vec<_> = path.components().collect();
+    let from: Vec<_> = base.components().collect();
+    let is_root = |c: &&Component| matches!(c, Component::Prefix(_) | Component::RootDir);
+    let roots = from.iter().take_while(is_root).count();
+    if to.iter().take_while(is_root).count() != roots {
+        return None;
+    }
+    let common = to
+        .iter()
+        .zip(&from)
+        .take_while(|(a, b)| key(a) == key(b))
+        .count();
+    if common < roots {
+        return None;
+    }
+    let mut relative = PathBuf::new();
+    for _ in common..from.len() {
+        relative.push("..");
+    }
+    for part in &to[common..] {
+        relative.push(part.as_os_str());
+    }
+    if relative.as_os_str().is_empty() {
+        relative.push(".");
+    }
+    Some(relative)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +405,67 @@ mod tests {
                 .find(|(name, _)| name == k)
                 .map(|(_, v)| v.clone())
         }
+    }
+
+    #[test]
+    fn portable_mode_is_only_on_when_the_player_asks() {
+        let exe = test_dir("portable-marker");
+        assert_eq!(portable_dir(&exe, "data"), None, "no marker");
+        std::fs::create_dir_all(exe.join(PORTABLE_MARKER)).unwrap();
+        assert_eq!(
+            portable_dir(&exe, "data"),
+            None,
+            "a folder isn't the marker"
+        );
+        std::fs::remove_dir(exe.join(PORTABLE_MARKER)).unwrap();
+        std::fs::write(exe.join("Portable.TXT"), b"").unwrap();
+        assert_eq!(portable_dir(&exe, "data"), Some(exe.join("data")));
+        assert!(!exe.join("data").exists(), "only named, never created");
+        std::fs::remove_dir_all(exe).unwrap();
+    }
+
+    #[test]
+    fn a_path_is_written_relative_to_the_launchers_folder() {
+        // absolute on both hosts: `C:/g` under Windows (Wine), `/g` elsewhere
+        let abs = |p: &str| {
+            let root = if cfg!(windows) && p.starts_with('/') {
+                "C:"
+            } else {
+                ""
+            };
+            PathBuf::from(format!("{root}{p}"))
+        };
+        let rel = |p: &str, b: &str| relative_to_on(false, &abs(p), &abs(b));
+        let own = |s: &str| Some(PathBuf::from(s));
+        assert_eq!(rel("/g/OutRun", "/g/Launcher"), own("../OutRun"));
+        assert_eq!(rel("/g/Launcher/game", "/g/Launcher"), own("game"));
+        assert_eq!(rel("/g/Launcher", "/g/Launcher"), own("."));
+        assert_eq!(rel("/a/b/c", "/x/y"), own("../../a/b/c"));
+        assert_eq!(rel("/g/L/../OutRun/.", "/g/L"), own("../OutRun"));
+        // case counts outside Windows, not on it
+        assert_eq!(rel("/G/OutRun", "/g/L"), own("../../G/OutRun"));
+        assert_eq!(
+            relative_to_on(true, &abs("/G/OutRun"), &abs("/g/L")),
+            own("../OutRun")
+        );
+        // a relative path stays as it is
+        assert_eq!(rel("OutRun", "/g/L"), None);
+        assert_eq!(rel("/g/OutRun", "L"), None);
+        // read back by joining
+        let back = abs("/g/Launcher").join(rel("/g/OutRun", "/g/Launcher").unwrap());
+        assert_eq!(normalize(&back), abs("/g/OutRun"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn another_drive_stays_absolute_on_windows() {
+        let rel = |p: &str, b: &str| relative_to(Path::new(p), Path::new(b));
+        assert_eq!(rel(r"D:\Games\OutRun", r"C:\Launcher"), None);
+        assert_eq!(
+            rel(r"c:\games\OutRun", r"C:\Games\Launcher"),
+            Some(PathBuf::from(r"..\OutRun"))
+        );
+        assert_eq!(rel(r"\\nas\share\OutRun", r"C:\Launcher"), None);
     }
 
     #[test]
