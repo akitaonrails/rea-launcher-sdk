@@ -9,6 +9,28 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+### Migration
+
+- `gamescope::CommandLine::argv` starts the game with
+  `env ENABLE_GAMESCOPE_WSI=0 DISABLE_GAMESCOPE_WSI=1` ([`gamescope::NO_WSI`])
+  after gamescope's `--`, every time: the hub launchers' games no longer
+  get gamescope's Vulkan WSI layer and present through its Xwayland. A
+  launcher that set either variable itself (Sega's `Route::Wal`,
+  Nintendo's windowsarcadeloader and Dolphin) can drop its own copy.
+  Golden dumps of the command line change by those words. Verify:
+  `cargo test --locked`, then a game on Linux (headless: no
+  `[Gamescope WSI]` lines in the session log).
+
+### Fixed
+
+- Linux, hub launchers: gamescope 3.17 on NVIDIA under Wayland crashed
+  (`SIGSEGV` 3 to 6 s in, `vkImportSemaphoreFdKHR failed`) when a game
+  presented through its WSI layer: 32-bit DXVK under windowsarcadeloader
+  (Sega Rally 3, SEGA Racing Classic, Daytona USA; Initial D and Wangan
+  run the same way) and Dolphin (F-Zero AX). Sega 0.4.0 and Nintendo 0.3.0
+  each fixed their own routes; `gamescope::CommandLine` now keeps the
+  layer out for every hub launcher.
+
 ## [0.11.1] - 2026-11-19
 
 ### Fixed

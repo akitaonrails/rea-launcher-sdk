@@ -234,6 +234,18 @@ impl Picture {
     }
 }
 
+/// The environment that keeps gamescope's Vulkan WSI layer out of the
+/// game: the game presents through gamescope's Xwayland instead. Through
+/// the layer, gamescope 3.17 on NVIDIA under Wayland crashed (`SIGSEGV`
+/// 3 to 6 s in, `vkImportSemaphoreFdKHR failed`) with 32-bit DXVK
+/// (windowsarcadeloader) and with Dolphin, seen by the Sega and Nintendo
+/// launchers. Both names, since the layer's manifest is enabled by the one
+/// and disabled by the other depending on gamescope's version.
+pub const NO_WSI: [(&str, &str); 2] = [
+    ("ENABLE_GAMESCOPE_WSI", "0"),
+    ("DISABLE_GAMESCOPE_WSI", "1"),
+];
+
 /// The Linux command line around a game.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandLine {
@@ -255,7 +267,9 @@ pub struct CommandLine {
 }
 
 impl CommandLine {
-    /// gamescope `ARGS -- [env HOME=…] [bwrap …] [taskset -c …] program args`.
+    /// gamescope `ARGS -- env [HOME=…] NO_WSI [bwrap …] [taskset -c …]
+    /// program args`; the game never gets gamescope's WSI layer
+    /// ([`NO_WSI`]).
     pub fn argv(&self, program: &Path, args: &[String]) -> Vec<String> {
         let mut v = Vec::new();
         if let Some((home, _)) = &self.homes {
@@ -263,10 +277,11 @@ impl CommandLine {
         }
         v.push("gamescope".into());
         v.extend(self.gamescope.iter().cloned());
-        v.push("--".into());
+        v.extend(["--".into(), "env".into()]);
         if let Some((_, player)) = &self.homes {
-            v.extend(["env".into(), format!("HOME={player}")]);
+            v.push(format!("HOME={player}"));
         }
+        v.extend(NO_WSI.iter().map(|(k, val)| format!("{k}={val}")));
         if let Some(folders) = &self.read_only {
             v.extend(["bwrap", "--dev-bind", "/", "/"].map(String::from));
             let mut bind = |how: &str, f: &Path| {
@@ -433,7 +448,7 @@ mod tests {
         let s = line.argv(program, &args).join(" ");
         assert!(s.starts_with("gamescope -w 1360 -h 768 "), "{s}");
         assert!(
-            s.ends_with(" -f -- bwrap --dev-bind / / --ro-bind-try /lib /lib --ro-bind-try /naomi /naomi /c/wal/arcade-launcher run /d/rt"),
+            s.ends_with(" -f -- env ENABLE_GAMESCOPE_WSI=0 DISABLE_GAMESCOPE_WSI=1 bwrap --dev-bind / / --ro-bind-try /lib /lib --ro-bind-try /naomi /naomi /c/wal/arcade-launcher run /d/rt"),
             "{s}"
         );
         line.read_only = None;
@@ -442,7 +457,7 @@ mod tests {
         line.cpus = Some("8,9,10,11".into());
         let s = line.argv(program, &args).join(" ");
         assert!(
-            s.contains(" -- taskset -c 8,9,10,11 /c/wal/arcade-launcher run "),
+            s.contains(" -- env ENABLE_GAMESCOPE_WSI=0 DISABLE_GAMESCOPE_WSI=1 taskset -c 8,9,10,11 /c/wal/arcade-launcher run "),
             "{s}"
         );
         // the CRT effect: gamescope with the runtime's HOME, the game with the player's
@@ -456,7 +471,28 @@ mod tests {
             s.starts_with("env HOME=/d/rt/gamescope-home gamescope "),
             "{s}"
         );
-        assert!(s.contains(" -- env HOME=/home/p bwrap "), "{s}");
+        assert!(
+            s.contains(
+                " -- env HOME=/home/p ENABLE_GAMESCOPE_WSI=0 DISABLE_GAMESCOPE_WSI=1 bwrap "
+            ),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn the_game_never_gets_gamescopes_wsi_layer() {
+        let argv = CommandLine::default().argv(Path::new("game"), &[]);
+        assert_eq!(
+            argv,
+            [
+                "gamescope",
+                "--",
+                "env",
+                "ENABLE_GAMESCOPE_WSI=0",
+                "DISABLE_GAMESCOPE_WSI=1",
+                "game"
+            ]
+        );
     }
 
     #[test]
@@ -470,7 +506,8 @@ mod tests {
         let s = line.argv(Path::new("game"), &[]).join(" ");
         assert!(
             s.ends_with(
-                " -- bwrap --dev-bind / / --ro-bind-try /home/p /home/p --ro-bind-try /gone /gone \
+                " -- env ENABLE_GAMESCOPE_WSI=0 DISABLE_GAMESCOPE_WSI=1 bwrap --dev-bind / / \
+                 --ro-bind-try /home/p /home/p --ro-bind-try /gone /gone \
                  --bind /home/p/.local/share/rea /home/p/.local/share/rea game"
             ),
             "{s}"
@@ -503,7 +540,7 @@ mod tests {
             lib.display()
         );
         let argv = line.argv(Path::new("sh"), &["-c".into(), script]);
-        let bwrap = &argv[argv.iter().position(|a| a == "--").unwrap() + 1..];
+        let bwrap = &argv[argv.iter().position(|a| a == "bwrap").unwrap()..];
         match std::process::Command::new(&bwrap[0])
             .args(&bwrap[1..])
             .output()
