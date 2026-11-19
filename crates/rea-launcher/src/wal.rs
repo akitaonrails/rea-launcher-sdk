@@ -15,6 +15,7 @@
 //! and Nintendo a fixed one.
 
 use crate::ffb::FfbOutput;
+use crate::pad;
 use crate::wheel::{Control, Controls};
 
 /// The virtual stick's button bits (`wal_protocol::button`).
@@ -45,6 +46,20 @@ pub fn buttons<B: Control>(pressed: u32, bit: impl Fn(B) -> u32) -> u32 {
         .iter()
         .filter(|b| pressed & b.bit() != 0)
         .fold(0, |acc, &b| acc | bit(b))
+}
+
+/// XInput d-pad bits ([`pad::DPAD_UP`]..[`pad::DPAD_RIGHT`]) as
+/// windowsarcadeloader virtual stick direction bits (`button::UP`..`RIGHT`).
+pub fn dpad(bits: u16) -> u32 {
+    [
+        (pad::DPAD_UP, button::UP),
+        (pad::DPAD_DOWN, button::DOWN),
+        (pad::DPAD_LEFT, button::LEFT),
+        (pad::DPAD_RIGHT, button::RIGHT),
+    ]
+    .into_iter()
+    .filter(|(in_bit, _)| bits & in_bit != 0)
+    .fold(0, |acc, (_, out_bit)| acc | out_bit)
 }
 
 /// One player's virtual stick: buttons, sticks −1..1, pedals 0..1.
@@ -223,6 +238,19 @@ mod tests {
             0x10
         );
         assert_eq!(buttons(0, ringedge), 0);
+    }
+
+    #[test]
+    fn dpad_bits_become_virtual_stick_directions_only() {
+        assert_eq!(dpad(0), 0);
+        assert_eq!(dpad(pad::DPAD_UP), button::UP);
+        assert_eq!(dpad(pad::DPAD_DOWN), button::DOWN);
+        assert_eq!(dpad(pad::DPAD_LEFT), button::LEFT);
+        assert_eq!(dpad(pad::DPAD_RIGHT), button::RIGHT);
+        assert_eq!(
+            dpad(pad::DPAD_UP | pad::DPAD_RIGHT | pad::A | pad::START),
+            button::UP | button::RIGHT
+        );
     }
 
     #[test]

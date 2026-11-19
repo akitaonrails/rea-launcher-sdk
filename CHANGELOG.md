@@ -9,6 +9,21 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-19
+
+### Migration
+
+- `rea_launcher_native::feeder::Frame` gained a `dpad: u16` field. Struct
+  literals that set every field by hand (without `..Frame::default()`) need
+  `dpad: 0`.
+
+### Added
+
+- `rea_launcher_native::feeder::Frame::dpad` carries the d-pad or wheel hat
+  alone (never the left stick) in XInput `pad::DPAD_*` bits, backed by
+  `PadState::dpad_bits`, `Device::dpad_bits`, and `rea_launcher::wal::dpad` so
+  driving cabinets with menu buttons receive d-pad directions.
+
 ## [0.11.2] - 2026-11-19
 
 ### Migration

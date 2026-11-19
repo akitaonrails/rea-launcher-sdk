@@ -77,6 +77,20 @@ impl PadState {
         .filter(|(down, _)| *down)
         .fold(0, |bits, (_, bit)| bits | bit)
     }
+
+    /// The pad's d-pad alone (never the left stick), in XInput bits
+    /// ([`pad::DPAD_UP`]..[`pad::DPAD_RIGHT`]).
+    pub fn dpad_bits(&self) -> u16 {
+        [
+            (self.dpad_up, pad::DPAD_UP),
+            (self.dpad_down, pad::DPAD_DOWN),
+            (self.dpad_left, pad::DPAD_LEFT),
+            (self.dpad_right, pad::DPAD_RIGHT),
+        ]
+        .into_iter()
+        .filter(|(down, _)| *down)
+        .fold(0, |bits, (_, bit)| bits | bit)
+    }
 }
 
 /// A wheel's hat, (x, y) each −1, 0 or 1 with y down, as d-pad bits.
@@ -746,5 +760,20 @@ mod tests {
         assert_eq!(hat_bits((0, 0)), 0);
         assert_eq!(hat_bits((-1, -1)), pad::DPAD_LEFT | pad::DPAD_UP);
         assert_eq!(hat_bits((1, 1)), pad::DPAD_RIGHT | pad::DPAD_DOWN);
+    }
+
+    #[test]
+    fn dpad_bits_excludes_the_left_stick_and_face_buttons() {
+        let p = PadState {
+            dpad_up: true,
+            dpad_left: true,
+            left_x: 32_767,
+            left_y: 32_767,
+            a: true,
+            start: true,
+            ..Default::default()
+        };
+        assert_eq!(p.dpad_bits(), pad::DPAD_UP | pad::DPAD_LEFT);
+        assert_eq!(PadState::default().dpad_bits(), 0);
     }
 }

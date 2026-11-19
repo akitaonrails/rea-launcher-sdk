@@ -46,6 +46,10 @@ pub struct Frame {
     /// The first pad's left stick, up/down (−1 up … 1 down), dead zone
     /// applied: Dolphin's handle pitch, a gun's crosshair height.
     pub pitch: f32,
+    /// The d-pad or hat switch on any connected pad or wheel (never the
+    /// left stick), in XInput bits ([`rea_launcher::pad::DPAD_UP`]..
+    /// [`rea_launcher::pad::DPAD_RIGHT`]), for cabinets with menu buttons.
+    pub dpad: u16,
     /// Seconds since the last frame.
     pub dt: f32,
 }
@@ -372,6 +376,7 @@ fn run<B: Control>(
         let frame = Frame {
             controls,
             pitch,
+            dpad: list.iter().fold(0, |bits, d| bits | d.dpad_bits()),
             dt: since(&mut last),
         };
         if let Some(f) = fed.as_mut() {
@@ -523,6 +528,7 @@ impl supervise::Feed for Scripted {
         let frame = Frame {
             controls,
             pitch,
+            dpad: 0,
             dt: (ran - self.at).as_secs_f32(),
         };
         self.at = ran;

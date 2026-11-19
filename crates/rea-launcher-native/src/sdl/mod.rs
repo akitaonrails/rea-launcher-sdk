@@ -326,6 +326,12 @@ impl Device {
         self.pad.map_or(0, |p| p.nav_bits()) | pad_map::hat_bits(self.hat)
     }
 
+    /// The d-pad or hat switch alone (never the left stick), in XInput bits
+    /// ([`rea_launcher::pad::DPAD_UP`]..[`rea_launcher::pad::DPAD_RIGHT`]).
+    pub fn dpad_bits(&self) -> u16 {
+        self.pad.map_or(0, |p| p.dpad_bits()) | pad_map::hat_bits(self.hat)
+    }
+
     /// Pad rumble, both motors at `strength` (0..1). Called every tick, it
     /// reaches the pad only on a start, a stop, or every
     /// [`RUMBLE_EVERY`](crate::policy::RUMBLE_EVERY).
