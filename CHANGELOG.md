@@ -9,6 +9,17 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-19
+
+### Fixed
+
+- `group::Group::kill` on Windows ends the leader before its descendants
+  (after the snapshot that finds them). Ending the child first let a
+  leader that only waits on it exit 0 before its own end landed, so a
+  stopped session could report success; CI's Wine run of
+  `the_job_holds_the_first_child_and_only_the_session_is_ended` caught it
+  once on v0.11.0.
+
 ## [0.11.0] - 2026-11-19
 
 ### Migration
@@ -1524,6 +1535,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.11.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.8.2...v0.9.0
