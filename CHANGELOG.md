@@ -9,6 +9,15 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+### Added
+
+- `upstream-watch.yml`: the watch list's third field may be a pattern with
+  `*` wildcards (`innoextract-*-windows.zip`), for releases that upload
+  several files under one prefix. A field without `*` is a prefix as
+  before. The bare `innoextract-` compared innoextract's Linux tarball
+  with CMR4's pinned Windows zip and reported it changed every week
+  (rea-colin-mcrae-4#2).
+
 ## [0.10.0] - 2026-11-17
 
 ### Migration

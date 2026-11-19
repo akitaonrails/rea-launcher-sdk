@@ -272,19 +272,26 @@ cat > "$U/packaging/third-party.txt" <<PINS
 tool https://github.com/up/tool/releases/download/v1/tool-1.zip $same
 arch https://github.com/up/arch/archive/0123abcd.tar.gz $(printf 'archive\n' | sha256sum | cut -d' ' -f1)
 newer https://github.com/up/newer/releases/download/v1/newer-1.zip $same
+zip https://github.com/up/multi/releases/download/v1/multi-1-windows.zip $same
+first https://github.com/up/multi/releases/download/v1/multi-1-windows.zip $same
 PINS
-printf 'tool up/tool tool-\narch up/arch arch-\nnewer up/newer newer-\n' > "$U/packaging/upstream-watch.txt"
+# multi uploads its Linux tarball before the Windows zip both pins are of.
+printf 'tool up/tool tool-\narch up/arch arch-\nnewer up/newer newer-\nzip up/multi multi-*-windows.zip\nfirst up/multi multi-\n' > "$U/packaging/upstream-watch.txt"
 cat > "$U/bin/gh" <<'FAKE'
 #!/bin/sh
 # gh api repos/OWNER/REPO/releases/latest
 repo=${2#repos/}; repo=${repo%/releases/latest}; n=${repo#*/}
-printf '{"tag_name":"v2","assets":[{"name":"%s-2.zip","browser_download_url":"https://github.com/%s/releases/download/v2/%s-2.zip"}]}\n' "$n" "$repo" "$n"
+if [ "$n" = multi ]; then
+  printf '{"tag_name":"v2","assets":[{"name":"multi-2-linux.tar.xz","browser_download_url":"https://github.com/up/multi/releases/download/v2/multi-2-linux.tar.xz"},{"name":"multi-2-windows.zip","browser_download_url":"https://github.com/up/multi/releases/download/v2/multi-2-windows.zip"}]}\n'
+else
+  printf '{"tag_name":"v2","assets":[{"name":"%s-2.zip","browser_download_url":"https://github.com/%s/releases/download/v2/%s-2.zip"}]}\n' "$n" "$repo" "$n"
+fi
 FAKE
 cat > "$U/bin/curl" <<FAKE
 #!/bin/sh
-# Every asset is "same" except newer's.
+# Every asset is "same" except newer's and multi's Linux tarball.
 while [ \$# -gt 1 ]; do case \$1 in -o) out=\$2; shift ;; esac; shift; done
-case \$1 in *newer*) printf 'changed\n' > "\$out" ;; *) cp "$U/asset" "\$out" ;; esac
+case \$1 in *newer*|*linux*) printf 'changed\n' > "\$out" ;; *) cp "$U/asset" "\$out" ;; esac
 FAKE
 chmod +x "$U/bin/gh" "$U/bin/curl"
 S=$(step upstream-watch.yml "Compare upstream latest with the pins") || exit 1
@@ -297,6 +304,10 @@ grep -q '^tool ' "$r" && bad "upstream watch: an unchanged release file is repor
 if grep -q '^arch' "$r"; then bad "upstream watch: a commit-archive pin is reported as an update: $(cat "$r")"
 elif grep -q 'arch: the pin is not a release file of up/arch' "$U/summary"; then ok "upstream watch: a commit-archive pin is skipped with a warning"
 else bad "upstream watch: the skip is not in the summary: $(cat "$U/summary" "$T/out")"; fi
+grep -q '^zip unchanged' "$T/out" && ! grep -q '^zip' "$r" && ok "upstream watch: a * pattern compares the file it names" \
+  || bad "upstream watch: a * pattern: $(cat "$r" "$T/out")"
+grep -q '^first changed.*multi-2-linux.tar.xz' "$r" && ok "upstream watch: a prefix compares the first matching file" \
+  || bad "upstream watch: prefix: $(cat "$r" "$T/out")"
 
 # No status-swallowing "check && echo" anywhere in the workflows.
 if grep -n '&& echo' "$WF"/*.yml; then bad "no '&& echo' checks in workflows"; else ok "no '&& echo' checks in workflows"; fi

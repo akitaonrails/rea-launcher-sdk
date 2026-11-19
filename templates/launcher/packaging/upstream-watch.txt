@@ -1,6 +1,10 @@
 # Components the weekly watch-upstream workflow checks, one per line:
 #
-#   name owner/repo asset-name-prefix
+#   name owner/repo asset
+#
+# `asset` picks the release file to compare: a name prefix, or a pattern
+# with * wildcards when the release uploads several files under one prefix
+# (innoextract-*-windows.zip). The first matching file must be the pinned one.
 #
 # `name` is a pin in packaging/third-party.txt whose url is a file that
 # owner/repo's releases upload (https://github.com/owner/repo/releases/download/…).

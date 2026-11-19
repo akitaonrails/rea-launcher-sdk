@@ -59,10 +59,15 @@ Every file is pinned by URL and SHA-256 in a pin file (`packaging/third-party.tx
 - **Watch upstream** with the SDK's `upstream-watch.yml`: it opens an issue
   when a pinned project publishes something new, so updating stays a
   deliberate, tested change. The scaffold has `.github/workflows/watch-upstream.yml`
-  and `packaging/upstream-watch.txt` (`name owner/repo asset-prefix`); every
+  and `packaging/upstream-watch.txt` (`name owner/repo asset`); every
   pin of a GitHub release goes in the list (`launcher-check` rules
   `watch-pins`, `unwatched-pins`). CMR4 bundled Xidi 4.3.1 unwatched while
-  Xidi 5 changed its files and settings.
+  Xidi 5 changed its files and settings. `asset` is a name prefix or a
+  pattern with `*` wildcards, and the watch compares the first matching
+  file: when a release uploads several files under one prefix, name the
+  pinned one (`innoextract-*-windows.zip`; the bare `innoextract-` compared
+  the Linux tarball with CMR4's Windows zip and reported an update every
+  week).
 - **Moving a pin to a new version** (after playing with it):
   1. read the release notes for changed file names and settings (Xidi 5
      added `Xidi.32.dll` next to `dinput8.dll` and rejects an `[Import]`

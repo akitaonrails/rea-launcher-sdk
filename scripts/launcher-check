@@ -195,7 +195,7 @@ rule() {
       FIX='pin the file the release uploads (https://github.com/OWNER/REPO/releases/download/TAG/FILE), or take the component out of the watch list when its releases upload nothing (sdk/docs/playbooks/community-components.md)' ;;
     unwatched-pins) SEV=warn
       WHY='A pinned component nobody watches falls behind silently: CMR4 still bundles Xidi 4.3.1 while Xidi 5 changed its files and settings, and only CMR3, which runs the watch, heard of it.'
-      FIX='add the component to packaging/upstream-watch.txt (name owner/repo asset-prefix) and call the SDK upstream-watch.yml from .github/workflows/watch-upstream.yml (templates/launcher has both)' ;;
+      FIX='add the component to packaging/upstream-watch.txt (name owner/repo asset, where asset is a prefix or a * pattern) and call the SDK upstream-watch.yml from .github/workflows/watch-upstream.yml (templates/launcher has both)' ;;
     innoextract) SEV=error
       WHY='A launcher that unpacks a game'"'"'s installer runs the bundled innoextract.exe (docs/playbooks/installers.md). Without its pins the package ships without it (or with an unverified copy), and without a THIRD_PARTY.md entry its zlib licence and the Boost, liblzma and libstdc++ texts go uncredited.'
       FIX='add the two pin lines (innoextract and innoextract-exe; sdk/packaging/innoextract.sh innoextract_pins prints them) to packaging/third-party.txt, bundle it with innoextract_bundle, and list innoextract 1.9 with its licences in THIRD_PARTY.md' ;;
