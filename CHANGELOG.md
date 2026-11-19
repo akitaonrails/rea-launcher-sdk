@@ -9,6 +9,8 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-11-19
+
 ### Migration
 
 - `gamescope::CommandLine::argv` starts the game with
@@ -1557,6 +1559,7 @@ and OutRun 2006, each piece the reviewed best version across them
   `upstream-watch.yml`; `scripts/sdk-sync` to vendor and drift-check the
   shell and packaging files; `templates/deny.toml`.
 
+[0.11.2]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/akitaonrails/rea-launcher-sdk/compare/v0.9.0...v0.10.0
