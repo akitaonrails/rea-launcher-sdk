@@ -991,6 +991,13 @@ mod tests {
                 Kind::Wheel,
                 "new Fanatec",
             ),
+            // rea-teknoparrot-initial-d-series#2: SDL 2 neither calls the
+            // VD6 a wheel nor maps it as a pad
+            (
+                facts(0x36e6, 0x400f, false, false, 6),
+                Kind::Wheel,
+                "PXN VD6",
+            ),
             (facts(0x045e, 0x0b12, false, true, 6), Kind::Pad, "Xbox pad"),
             (
                 facts(0x2dc8, 0x310b, false, false, 0),

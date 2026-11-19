@@ -25,6 +25,16 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 - `paths::relative_to`: a path written relative to another (`..\OutRun`)
   by text, case-insensitive on Windows, `None` across drives, so a
   portable install's `launcher.cfg` survives a move to another PC.
+### Fixed
+
+- `wheel::classify`: PXN wheels are wheels. PXN's own USB vendor ID
+  (`0x36e6`, the VD6 direct-drive base `36e6:400f`) joins the wheel
+  vendors, so a VD6 with axes is a wheel and drives the car; before, SDL 2
+  neither called it a wheel nor mapped it as a pad, and it showed as
+  "Other" with "No controller" in the hub's top bar
+  (rea-teknoparrot-initial-d-series#2). The vendor ID `0x11ff` was
+  labelled Simagic; it is Lite Star, PXN's older wheels (V10, V12), and
+  stays a wheel vendor.
 
 ## [0.10.0] - 2026-11-17
 
