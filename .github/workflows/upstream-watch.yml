@@ -6,8 +6,12 @@ name: upstream-watch
 # opens (or comments on) one issue per component; moving a pin stays a
 # human decision, made in a PR after playing with the new release.
 #
-# Watch list, one per line (# comments): name owner/repo asset-name-prefix
-# where name is a pin in the pin file (sdk/packaging/pins.sh format).
+# Watch list, one per line (# comments): name owner/repo asset
+# where name is a pin in the pin file (sdk/packaging/pins.sh format) and
+# asset picks the release file to compare: a name prefix, or a pattern
+# with * wildcards for releases that upload several files under one prefix
+# (innoextract-*-windows.zip: innoextract uploads its Linux tarball first).
+# The first matching file is compared.
 # Names without a pin, pins that aren't a file the watched repository's
 # releases upload (a commit or tag archive), malformed lines and
 # unreachable repositories are skipped with a warning in the run summary,
@@ -79,9 +83,13 @@ jobs:
             esac
             latest=$(gh api "repos/$repo/releases/latest") || { skip "$name: cannot read the latest release of $repo"; continue; }
             tag=$(printf '%s' "$latest" | jq -r .tag_name)
-            url=$(printf '%s' "$latest" | jq -r --arg p "$prefix" \
-              '[.assets[] | select(.name | startswith($p)) | .browser_download_url][0] // empty')
-            [ -n "$url" ] || { echo "$name: no asset starting with '$prefix' in $repo $tag" >> "$report"; continue; }
+            # A pattern without * is a prefix; * matches anything, every
+            # other character only itself.
+            url=$(printf '%s' "$latest" | jq -r --arg p "$prefix" '
+              ($p | if test("[*]") then . else . + "*" end
+                  | gsub("(?<c>[.+?^${}()|\\[\\]\\\\])"; "\\\(.c)") | gsub("[*]"; ".*")) as $re
+              | [.assets[] | select(.name | test("^" + $re + "$")) | .browser_download_url][0] // empty')
+            [ -n "$url" ] || { echo "$name: no asset matching '$prefix' in $repo $tag" >> "$report"; continue; }
             rm -f "$RUNNER_TEMP/latest.bin"
             curl -fsSL --proto '=https' --retry 2 --max-time 300 -o "$RUNNER_TEMP/latest.bin" "$url" \
               || { echo "$name: download failed: $url" >> "$report"; continue; }
