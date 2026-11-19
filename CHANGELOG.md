@@ -9,22 +9,6 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
-### Added
-
-- `upstream-watch.yml`: the watch list's third field may be a pattern with
-  `*` wildcards (`innoextract-*-windows.zip`), for releases that upload
-  several files under one prefix. A field without `*` is a prefix as
-  before. The bare `innoextract-` compared innoextract's Linux tarball
-  with CMR4's pinned Windows zip and reported it changed every week
-  (rea-colin-mcrae-4#2).
-- `paths::portable_dir` and `paths::PORTABLE_MARKER`: an opt-in portable
-  mode. A `portable.txt` beside the executable names a folder beside it
-  for everything the launcher writes; without it nothing changes (unlike
-  `data_dir`, which is portable-first). For launchers that keep their data
-  under `%LOCALAPPDATA%` today (rea-outrun-2006 #6).
-- `paths::relative_to`: a path written relative to another (`..\OutRun`)
-  by text, case-insensitive on Windows, `None` across drives, so a
-  portable install's `launcher.cfg` survives a move to another PC.
 ### Migration
 
 - `rea_launcher_native::feeder::Snapshot` has a new field, `held` (the
@@ -51,6 +35,20 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ### Added
 
+- `upstream-watch.yml`: the watch list's third field may be a pattern with
+  `*` wildcards (`innoextract-*-windows.zip`), for releases that upload
+  several files under one prefix. A field without `*` is a prefix as
+  before. The bare `innoextract-` compared innoextract's Linux tarball
+  with CMR4's pinned Windows zip and reported it changed every week
+  (rea-colin-mcrae-4#2).
+- `paths::portable_dir` and `paths::PORTABLE_MARKER`: an opt-in portable
+  mode. A `portable.txt` beside the executable names a folder beside it
+  for everything the launcher writes; without it nothing changes (unlike
+  `data_dir`, which is portable-first). For launchers that keep their data
+  under `%LOCALAPPDATA%` today (rea-outrun-2006 #6).
+- `paths::relative_to`: a path written relative to another (`..\OutRun`)
+  by text, case-insensitive on Windows, `None` across drives, so a
+  portable install's `launcher.cfg` survives a move to another PC.
 - Hub Controls page: the pad tests the controls there. Its presses light
   the live check and no longer move the menu (LB/RB switched pages,
   B left the page while a player tried the buttons:
