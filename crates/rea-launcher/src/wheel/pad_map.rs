@@ -192,6 +192,12 @@ impl PadInput {
         Some((f32::from(raw.max(0)) / RAW_MAX).min(1.0))
     }
 
+    /// The first input held on `pad` (a trigger pulled past half way
+    /// counts), in [`PadInput::ALL`] order.
+    pub fn held(pad: &PadState) -> Option<PadInput> {
+        PadInput::ALL.into_iter().find(|i| i.is_down(pad))
+    }
+
     pub fn is_down(self, pad: &PadState) -> bool {
         if let Some(pull) = self.trigger(pad) {
             return pull > TRIGGER_PRESS;
@@ -433,11 +439,14 @@ pub enum Capture<T> {
 impl PadCapture {
     /// Feed every pad's state; `now_ms` is a monotonic clock.
     pub fn tick(&mut self, now_ms: u64, pads: &[PadState]) -> Capture<PadInput> {
+        self.tick_held(now_ms, pads.iter().find_map(PadInput::held))
+    }
+
+    /// [`Self::tick`] from the input held now on any pad (an input
+    /// thread's snapshot: `feeder::Snapshot::held`).
+    pub fn tick_held(&mut self, now_ms: u64, held: Option<PadInput>) -> Capture<PadInput> {
         let started = *self.started_ms.get_or_insert(now_ms);
         let elapsed = now_ms.saturating_sub(started);
-        let held = pads
-            .iter()
-            .find_map(|pad| PadInput::ALL.into_iter().find(|i| i.is_down(pad)));
         if !self.released {
             if held.is_some() {
                 return if elapsed >= CAPTURE_TIMEOUT_MS {
@@ -577,6 +586,22 @@ mod tests {
         assert_eq!(
             cap.tick(20, &[idle, lb]),
             Capture::Got(PadInput::LeftShoulder)
+        );
+    }
+
+    #[test]
+    fn a_pulled_trigger_is_held_and_captured() {
+        let rt = PadState {
+            right_trigger: 30_000,
+            ..Default::default()
+        };
+        assert_eq!(PadInput::held(&rt), Some(PadInput::RightTrigger));
+        assert_eq!(PadInput::held(&PadState::default()), None);
+        let mut cap = PadCapture::default();
+        assert!(matches!(cap.tick_held(0, None), Capture::Waiting { .. }));
+        assert_eq!(
+            cap.tick_held(5, PadInput::held(&rt)),
+            Capture::Got(PadInput::RightTrigger)
         );
     }
 

@@ -315,7 +315,7 @@ assert_eq!(nav.update(pad::DPAD_DOWN | pad::A), []); // held: nothing more
 use rea_launcher::hub::{self, Effect, Input, Model, Page, World};
 // eleven games, two settings rows, one path field besides the library
 let mut m = Model::new(11, &["render", "deadzone"], 1, true);
-let ready = World { playable: true, has_library: true, needs: false };
+let ready = World { playable: true, has_library: true, ..World::default() };
 assert_eq!(m.input(Input::Press, ready), Effect::Play);
 assert_eq!(m.input(Input::Settings, ready), Effect::OpenedSettings);
 assert_eq!(m.input(Input::Right, ready), Effect::Adjust("render", 1, false));
@@ -323,6 +323,35 @@ assert_eq!(m.input(Input::Start, ready), Effect::None);
 assert_eq!(m.page, Page::Hub);
 assert_eq!(hub::sentence("gamescope is missing."), "Gamescope is missing");
 assert_eq!(hub::pick(&[1, 2, 3], 3, 1, true), 1);
+```
+
+The player's pad layout on the Controls page (`hub::bindings`): steering
+fixed, then gas, brake and the launcher's bound buttons; a change moves
+the input to its new row and is saved in `controls.cfg`.
+
+```rust
+use rea_launcher::hub::bindings::Bindings;
+use rea_launcher::wheel::{Action, Control, PadInput, PadMap};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Button { View }
+impl Control for Button {
+    const ALL: &'static [Button] = &[Button::View];
+    fn key(self) -> &'static str { "view" }
+    fn label(self) -> &'static str { "View change" }
+    fn bit(self) -> u32 { 1 }
+}
+let defaults = PadMap::with(&[
+    (Action::Accelerate, &[PadInput::RightTrigger]),
+    (Action::Brake, &[PadInput::LeftTrigger]),
+    (Action::Press(Button::View), &[PadInput::Y]),
+]);
+let mut b = Bindings::new(defaults.clone());
+assert_eq!(b.rebindable(), [1, 2, 3]); // all but "Steer"
+assert_eq!(b.rebind(1, PadInput::A).as_deref(), Some("Gas: A"));
+assert_eq!(b.layout()[1], ("Gas".to_string(), "A".to_string()));
+let text = b.to_cfg(""); // controls.cfg
+assert!(text.contains("pad_accel = a"));
+assert_eq!(Bindings::from_cfg(&text, defaults).layout()[1].1, "A");
 ```
 
 ### log

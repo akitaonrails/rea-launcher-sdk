@@ -239,6 +239,12 @@ struct Fake {
     next: Option<Session>,
     controls: ControlsView,
     pads: Vec<Input>,
+    /// What `pad_now` reports; `None`: a launcher without it.
+    pad_now: Option<(u16, Option<rea_launcher::wheel::PadInput>)>,
+    /// Layout rows the player can change, and the changes asked for.
+    rebindable: Vec<usize>,
+    rebinds: Vec<(usize, rea_launcher::wheel::PadInput)>,
+    resets: usize,
     extra_reads: std::cell::Cell<usize>,
     ended: usize,
     /// Scans started, shared with the scan threads (the launcher's hash cache).
@@ -254,6 +260,10 @@ impl Fake {
             next: None,
             controls: ControlsView::default(),
             pads: Vec::new(),
+            pad_now: None,
+            rebindable: Vec::new(),
+            rebinds: Vec::new(),
+            resets: 0,
             extra_reads: std::cell::Cell::new(0),
             ended: 0,
             scans: Default::default(),
@@ -352,6 +362,24 @@ impl HubBackend for Fake {
     }
     fn pad(&mut self) -> Vec<Input> {
         std::mem::take(&mut self.pads)
+    }
+    fn pad_now(&self) -> Option<(u16, Option<rea_launcher::wheel::PadInput>)> {
+        self.pad_now
+    }
+    fn rebindable(&self) -> Vec<usize> {
+        self.rebindable.clone()
+    }
+    fn rebind(&mut self, row: usize, input: rea_launcher::wheel::PadInput) -> Note {
+        self.rebinds.push((row, input));
+        Note::ok(format!(
+            "{}: {}",
+            self.controls.layout[row].0,
+            input.label()
+        ))
+    }
+    fn reset_bindings(&mut self) -> Note {
+        self.resets += 1;
+        Note::ok("Back to the launcher's layout.")
     }
     fn extra(&self, game: usize) -> Option<ExtraPage> {
         // counted: the window must not ask every frame
@@ -752,6 +780,110 @@ fn the_pad_moves_the_hub_and_y_opens_settings() {
     h.state_mut().backend_mut().pads = vec![Input::Start];
     h.run_steps(2);
     assert_eq!(h.state().model().page, Page::Hub);
+}
+
+/// A hub whose backend reports the pad, with a three-row layout whose gas
+/// and brake rows can change, on the Controls page.
+fn controls_hub(name: &str) -> (PathBuf, H) {
+    let (t, mut h) = hub(name);
+    {
+        let b = h.state_mut().backend_mut();
+        b.pad_now = Some((0, None));
+        b.rebindable = vec![1, 2];
+        b.controls.layout = vec![
+            ("Steer".into(), "Left stick".into()),
+            ("Gas".into(), "RT".into()),
+            ("Brake".into(), "LT".into()),
+        ];
+        b.pads = vec![Input::NextTab];
+    }
+    h.run_steps(3);
+    assert_eq!(h.state().model().page, Page::Controls);
+    (t, h)
+}
+
+#[test]
+fn the_controls_page_keeps_the_pads_presses_for_its_live_check() {
+    // rea-teknoparrot-wangan-series#1: testing a button switched the page
+    let (_t, mut h) = controls_hub("pad-test");
+    assert!(says(&h, "only light up here"));
+    h.state_mut().backend_mut().pads = vec![Input::NextTab, Input::Back, Input::Start];
+    h.run_steps(3);
+    assert_eq!(h.state().model().page, Page::Controls, "the pad tests");
+    // the keyboard still moves the menu
+    press(&mut h, egui::Key::ArrowDown);
+    assert_eq!(h.state().model().focus, Focus::Binding(0));
+    // Back and Start together give the pad to the menu
+    let both = rea_launcher::pad::BACK | rea_launcher::pad::START;
+    h.state_mut().backend_mut().pad_now = Some((both, None));
+    h.run_steps(2);
+    h.state_mut().backend_mut().pad_now = Some((0, None));
+    assert!(says(&h, "Your pad moves through the menu."));
+    h.state_mut().backend_mut().pads = vec![Input::Down, Input::Down, Input::Down];
+    h.run_steps(3);
+    assert_eq!(h.state().model().focus, Focus::TestPad);
+    h.state_mut().backend_mut().pads = vec![Input::Press];
+    h.run_steps(3);
+    assert!(says(&h, "only light up here"), "Test the pad gives it back");
+    // back to the menu, then the pad leaves the page as on any other
+    h.state_mut().backend_mut().pad_now = Some((both, None));
+    h.run_steps(2);
+    h.state_mut().backend_mut().pad_now = Some((0, None));
+    h.state_mut().backend_mut().pads = vec![Input::NextTab];
+    h.run_steps(3);
+    assert_eq!(h.state().model().page, Page::Settings);
+}
+
+#[test]
+fn a_binding_waits_for_the_next_press_and_reset_goes_back() {
+    use rea_launcher::wheel::PadInput;
+    let (t, mut h) = controls_hub("rebind");
+    // the pad to the menu (Back and Start together), then A on the gas row
+    let both = rea_launcher::pad::BACK | rea_launcher::pad::START;
+    h.state_mut().backend_mut().pad_now = Some((both, None));
+    h.run_steps(2);
+    assert_eq!(h.state().model().focus, Focus::Binding(0));
+    h.state_mut().backend_mut().pad_now = Some((rea_launcher::pad::A, Some(PadInput::A)));
+    h.state_mut().backend_mut().pads = vec![Input::Press];
+    h.run_steps(2);
+    assert!(says(&h, "Press the pad button or trigger for Gas"));
+    h.run_steps(2);
+    assert!(
+        h.state().backend().rebinds.is_empty(),
+        "A, still held, waits"
+    );
+    h.state_mut().backend_mut().pad_now = Some((0, None));
+    h.run_steps(2);
+    h.state_mut().backend_mut().pad_now = Some((0, Some(PadInput::B)));
+    h.run_steps(2);
+    h.state_mut().backend_mut().pad_now = Some((0, None));
+    h.run_steps(2);
+    assert_eq!(h.state().backend().rebinds, [(1, PadInput::B)]);
+    assert!(says(&h, "Gas: B"));
+    assert!(log_of(&t).contains("controls: Gas: B"));
+    // Esc keeps a binding as it is
+    h.get_by_role_and_label(Role::Button, "Brake: LT. Change")
+        .click();
+    h.run_steps(2);
+    press(&mut h, egui::Key::Escape);
+    assert!(says(&h, "Not changed."));
+    assert_eq!(h.state().model().page, Page::Controls, "Esc only cancelled");
+    assert_eq!(h.state().backend().rebinds.len(), 1);
+    click_button(&mut h, "Reset");
+    assert_eq!(h.state().backend().resets, 1);
+    assert!(says(&h, "Back to the launcher's layout."));
+}
+
+#[test]
+fn without_the_pads_state_the_controls_page_moves_with_the_pad() {
+    let (_t, mut h) = hub("pad-plain");
+    h.state_mut().backend_mut().pads = vec![Input::NextTab];
+    h.run_steps(3);
+    assert_eq!(h.state().model().page, Page::Controls);
+    assert!(!says(&h, "Test the pad"));
+    h.state_mut().backend_mut().pads = vec![Input::NextTab];
+    h.run_steps(3);
+    assert_eq!(h.state().model().page, Page::Settings);
 }
 
 #[test]

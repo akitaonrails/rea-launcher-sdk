@@ -43,7 +43,7 @@ impl<B: HubBackend> HubApp<B> {
         match self.model.page {
             Page::Hub => self.draw_hub(pen, r, &mut clicks),
             Page::Settings => self.draw_settings(pen, r, &mut clicks),
-            Page::Controls => self.draw_controls(pen, r),
+            Page::Controls => self.draw_controls(pen, r, &mut clicks),
             Page::Setup => self.draw_setup(pen, r, &mut clicks),
             Page::Extra => self.draw_extra(pen, r, &mut clicks),
         }
@@ -760,7 +760,7 @@ impl<B: HubBackend> HubApp<B> {
         y
     }
 
-    fn draw_controls(&self, pen: Pen, r: Rect) {
+    fn draw_controls(&self, pen: Pen, r: Rect, clicks: &mut Vec<Click>) {
         let t = pen.t;
         self.draw_page_heading(
             pen,
@@ -827,18 +827,27 @@ impl<B: HubBackend> HubApp<B> {
         let y = pen.card_heading(lay, "Pad layout") + 10.0;
         let ix = lay.left() + 20.0;
         let colw = (lay.width() - 40.0) / 2.0;
+        let rebindable = self.backend.rebindable();
         for (k, (what, keys)) in c.layout.iter().enumerate() {
             let at = pos2(ix + (k / 6) as f32 * colw, y + (k % 6) as f32 * 28.0);
+            let binding = rebindable.iter().position(|&row| row == k);
+            let waiting = binding.is_some() && self.capture.as_ref().map(|c| c.n) == binding;
+            let shown = if waiting { "?" } else { keys.as_str() };
             let kf = semibold(size::NOTE);
-            let kw = pen.width(keys, kf.clone()) + 14.0;
+            let kw = pen.width(shown, kf.clone()) + 14.0;
             let kr = Rect::from_min_size(at, vec2(kw.max(36.0), 22.0));
-            pen.p.rect_stroke(
-                kr,
-                CornerRadius::same(4),
-                Stroke::new(1.5, t.line),
-                StrokeKind::Inside,
-            );
-            pen.text(kr.center(), Align2::CENTER_CENTER, keys, kf, t.ink);
+            let (stroke, fill) = if waiting {
+                (Stroke::new(2.0, t.lamp), Some(t.lamp))
+            } else {
+                (Stroke::new(1.5, t.line), None)
+            };
+            if let Some(f) = fill {
+                pen.p.rect_filled(kr, CornerRadius::same(4), f);
+            }
+            pen.p
+                .rect_stroke(kr, CornerRadius::same(4), stroke, StrokeKind::Inside);
+            let ink = if waiting { t.base } else { t.ink };
+            pen.text(kr.center(), Align2::CENTER_CENTER, shown, kf, ink);
             let wr = pen.ellipsized(
                 pos2(kr.right() + 10.0, at.y + 2.0),
                 what,
@@ -846,22 +855,115 @@ impl<B: HubBackend> HubApp<B> {
                 t.ink,
                 colw - kr.width() - 18.0,
             );
-            pen.say(
-                &format!("layout-{k}"),
-                wr.union(kr),
-                &format!("{what}: {keys}"),
-            );
+            let row = wr.union(kr);
+            match binding {
+                Some(j) => {
+                    let words = if waiting {
+                        format!("{what}: press the new button")
+                    } else {
+                        format!("{what}: {keys}. Change")
+                    };
+                    let hit = Rect::from_min_size(at, vec2(colw - 12.0, 24.0));
+                    let resp = pen.semantic(
+                        pen.id(("binding", k)),
+                        hit,
+                        Sense::click(),
+                        Semantics::new(Role::Button, &words),
+                    );
+                    if resp.hovered() {
+                        pen.ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                    if resp.clicked() {
+                        clicks.push(Click::Focus(Focus::Binding(j), Some(Input::Press)));
+                    }
+                    if self.model.focus == Focus::Binding(j) {
+                        pen.focus_ring(row, 4);
+                    }
+                }
+                None => pen.say(&format!("layout-{k}"), row, &format!("{what}: {keys}")),
+            }
         }
-        pen.wrapped(
-            pos2(ix, y + 6.0 * 28.0 + 8.0),
-            &c.layout_note,
-            body(size::NOTE),
-            t.muted,
-            lay.width() - 40.0,
-        );
+        let note_at = pos2(ix, y + 6.0 * 28.0 + 8.0);
+        let mut note_w = lay.width() - 40.0;
+        if !rebindable.is_empty() {
+            let reset = Button {
+                id: "reset-bindings",
+                label: "Reset",
+                style: ButtonStyle::Outline,
+                enabled: true,
+                focused: self.model.focus == Focus::ResetBindings,
+                why_not: None,
+            };
+            let br = Rect::from_min_size(
+                pos2(lay.right() - 20.0 - 120.0, lay.bottom() - 52.0),
+                vec2(120.0, 38.0),
+            );
+            if pen.button(br, reset).clicked() {
+                clicks.push(Click::Focus(Focus::ResetBindings, Some(Input::Press)));
+            }
+            note_w -= 140.0;
+        }
+        match (&self.capture, &self.binding_note) {
+            (Some(cap), _) => {
+                let what = rebindable
+                    .get(cap.n)
+                    .and_then(|&row| c.layout.get(row))
+                    .map_or("it", |(what, _)| what.as_str());
+                let words = format!(
+                    "Press the pad button or trigger for {what} ({} s). Esc: keep it as it is.",
+                    cap.remaining_ms.div_ceil(1000)
+                );
+                let nr = pen.wrapped(note_at, &words, body(size::NOTE), t.ink, note_w);
+                pen.say("binding-wait", nr, &words);
+            }
+            (None, Some(note)) => {
+                let color = if note.error { t.error } else { t.ink };
+                let nr = pen.wrapped(note_at, &note.text, body(size::NOTE), color, note_w);
+                pen.say("binding-note", nr, &note.text);
+            }
+            (None, None) => {
+                pen.wrapped(note_at, &c.layout_note, body(size::NOTE), t.muted, note_w);
+            }
+        }
 
         let live = Rect::from_min_max(pos2(split + 24.0, top), pos2(r.right() - MARGIN, bottom));
         self.draw_live_check(pen, live);
+        if self.backend.pad_now().is_some() {
+            self.draw_pad_test(pen, live, clicks);
+        }
+    }
+
+    /// The live check's last line: whether the pad tests the controls or
+    /// moves the menu, and the button that gives it to the test.
+    fn draw_pad_test(&self, pen: Pen, live: Rect, clicks: &mut Vec<Click>) {
+        let t = pen.t;
+        let ix = live.left() + 20.0;
+        let row = live.bottom() - 52.0;
+        let test = Button {
+            id: "test-pad",
+            label: "Test the pad",
+            style: ButtonStyle::Outline,
+            enabled: !self.pad_testing,
+            focused: self.model.focus == Focus::TestPad,
+            why_not: Some("The pad is being tested."),
+        };
+        let br = Rect::from_min_size(pos2(ix, row), vec2(190.0, 38.0));
+        if pen.button(br, test).clicked() && !self.pad_testing {
+            clicks.push(Click::Focus(Focus::TestPad, Some(Input::Press)));
+        }
+        let words = if self.pad_testing {
+            "Your pad's buttons only light up here now. Press Back and Start together to move through the menu with it."
+        } else {
+            "Your pad moves through the menu."
+        };
+        let wr = pen.wrapped(
+            pos2(br.right() + 16.0, row),
+            words,
+            body(size::NOTE),
+            t.ink,
+            live.right() - 20.0 - br.right() - 16.0,
+        );
+        pen.say("pad-test", wr, words);
     }
 
     fn draw_live_check(&self, pen: Pen, live: Rect) {
@@ -1190,6 +1292,12 @@ impl<B: HubBackend> HubApp<B> {
             Page::Settings => vec![
                 (ARROWS, "Change"),
                 ("Enter", "Next choice"),
+                ("Esc", "Back"),
+                ("PgUp PgDn", "Switch page"),
+            ],
+            Page::Controls if !self.backend.rebindable().is_empty() => vec![
+                ("Up Down", "Move"),
+                ("Enter", "Change"),
                 ("Esc", "Back"),
                 ("PgUp PgDn", "Switch page"),
             ],
