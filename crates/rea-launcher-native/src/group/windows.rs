@@ -163,16 +163,20 @@ impl Group {
         v
     }
 
+    /// The leader goes first, after the snapshot that finds its
+    /// descendants: a leader that only waits on its child would otherwise
+    /// see that child end and exit 0 before its own end lands.
     pub fn kill(&self) {
-        for (pid, born) in self.descendants(&snapshot()) {
+        let descendants = self.descendants(&snapshot());
+        // SAFETY: the child's handle is open while `child` lives.
+        unsafe { TerminateProcess(self.child.as_raw_handle(), 1) };
+        for (pid, born) in descendants {
             end(pid, born);
         }
         if let Some(job) = &self.job {
             // SAFETY: the job handle is open while self lives.
             unsafe { TerminateJobObject(job.0, 1) };
         }
-        // SAFETY: the child's handle is open while `child` lives.
-        unsafe { TerminateProcess(self.child.as_raw_handle(), 1) };
     }
 
     pub fn any_left(&self) -> bool {
