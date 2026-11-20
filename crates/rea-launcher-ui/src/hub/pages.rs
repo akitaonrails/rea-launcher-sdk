@@ -243,6 +243,34 @@ impl<B: HubBackend> HubApp<B> {
         );
         pen.say("meta", meta, &line2);
 
+        if let Some(blurb) = self.backend.blurb(sel).filter(|s| !s.trim().is_empty()) {
+            let pad_x = 16.0;
+            let pad_y = 12.0;
+            let card_w = (r.width() * 0.28).clamp(280.0, 360.0);
+            let g = pen.p.layout(
+                blurb.to_string(),
+                body(size::BODY),
+                t.ink,
+                card_w - pad_x * 2.0,
+            );
+            let card_h = g.size().y + pad_y * 2.0;
+            let card_r = Rect::from_min_size(
+                pos2(r.right() - MARGIN - card_w, r.top() + BAR_H + 24.0),
+                vec2(card_w, card_h),
+            );
+            pen.p
+                .rect_filled(card_r, CornerRadius::same(8), alpha(t.base, t.scrim));
+            pen.p.rect_stroke(
+                card_r,
+                CornerRadius::same(8),
+                Stroke::new(1.0, alpha(t.line, 180)),
+                StrokeKind::Inside,
+            );
+            pen.p
+                .galley(pos2(card_r.left() + pad_x, card_r.top() + pad_y), g, t.ink);
+            pen.say("blurb", card_r, blurb);
+        }
+
         let chip_y = r.top() + 372.0;
         let (fill, color) = match state {
             TileState::Ready | TileState::Unverified(_) => (Some(t.sign), t.ink),

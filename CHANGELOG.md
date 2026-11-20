@@ -9,6 +9,14 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-20
+
+### Added
+
+- `rea_launcher_ui::hub::HubBackend::blurb`: optional per-game trivia or
+  context shown in a high-contrast card over the top-right quarter of the
+  hero art on the Games page.
+
 ## [0.12.0] - 2026-11-19
 
 ### Migration

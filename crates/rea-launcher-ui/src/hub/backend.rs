@@ -249,6 +249,12 @@ pub trait HubBackend: 'static {
     fn note(&self, _game: usize, _config: &HubConfig) -> Option<Note> {
         None
     }
+    /// Short context or trivia about `game` (release context, what sets
+    /// this entry apart), drawn in a card over the top-right quarter of
+    /// the hero art on the Games page.
+    fn blurb(&self, _game: usize) -> Option<&str> {
+        None
+    }
 
     /// A scan of `roots` for the scan thread. Keep the digests between
     /// scans in it (`rea_launcher::library::Library::with_cache` over one
