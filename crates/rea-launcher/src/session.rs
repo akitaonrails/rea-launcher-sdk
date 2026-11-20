@@ -16,19 +16,33 @@ pub const EARLY_END: Duration = Duration::from_secs(20);
 /// A run that ended by itself `after` its start, with `status`: when that
 /// was too soon to have started, why (the end, then the last four error
 /// lines of its session `log`, where the loaders write theirs).
+///
+/// If `status` looks like a clean exit (`exit code: 0`) but `log` records a
+/// non-zero child exit (e.g. `winhost: game exited (exit code: 0xc0000005)`),
+/// that exit code is surfaced in the summary instead of hiding the crash.
 pub fn early_end(after: Duration, status: &str, log: &str) -> Option<String> {
     if after >= EARLY_END {
         return None;
     }
+    let game_exit = log.lines().rev().find_map(nonzero_game_exit);
     let errors: Vec<&str> = log
         .lines()
         .filter(|l| {
-            let l = l.to_ascii_lowercase();
-            l.starts_with("error") || l.contains("missing") || l.contains("failed")
+            let lower = l.to_ascii_lowercase();
+            lower.starts_with("error")
+                || lower.starts_with("crash:")
+                || lower.contains("access violation")
+                || lower.contains("missing")
+                || lower.contains("failed")
+                || nonzero_game_exit(l).is_some()
         })
         .collect();
+    let shown_status = match (status, game_exit) {
+        ("exit code: 0" | "exit status: 0", Some(code)) => code,
+        _ => status,
+    };
     let mut why = format!(
-        "the game closed by itself {} s after starting ({status})",
+        "the game closed by itself {} s after starting ({shown_status})",
         after.as_secs()
     );
     if !errors.is_empty() {
@@ -36,6 +50,17 @@ pub fn early_end(after: Duration, status: &str, log: &str) -> Option<String> {
         why.push_str(&errors[errors.len().saturating_sub(4)..].join("\n"));
     }
     Some(why)
+}
+
+/// Extracts a non-zero exit status from a `game exited (exit code: ...)` line
+/// logged by `winhost` / `arcade-launcher`.
+fn nonzero_game_exit(line: &str) -> Option<&str> {
+    let (_, rest) = line.split_once("game exited (")?;
+    let code = rest.strip_suffix(')')?;
+    if matches!(code, "exit code: 0" | "exit status: 0" | "0") {
+        return None;
+    }
+    Some(code)
 }
 
 /// How often [`WindowWatch::look`] looks.
@@ -147,6 +172,22 @@ mod tests {
             why.ends_with(":\nerror 3\nerror 4\nerror 5\nerror 6"),
             "{why}"
         );
+    }
+
+    #[test]
+    fn early_end_surfaces_masked_game_crash_and_exit_code() {
+        let log = "wal_ringedge.dll queued at entry point 0xcc3825\n\
+            crash: access violation (reading 0x4) at 0x4b1dbf  d1a.exe+0xb1dbf\n\
+            winhost: game exited (exit code: 0xc0000005)\n";
+        let why = early_end(Duration::from_secs(3), "exit code: 0", log).unwrap();
+        assert!(
+            why.starts_with(
+                "the game closed by itself 3 s after starting (exit code: 0xc0000005):\n"
+            ),
+            "{why}"
+        );
+        assert!(why.contains("crash: access violation"), "{why}");
+        assert!(why.contains("0xc0000005"), "{why}");
     }
 
     #[test]

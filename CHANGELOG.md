@@ -9,6 +9,24 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-20
+
+### Fixed
+
+- `rea_launcher::linkfarm` on Windows (#2): never attempts a directory
+  junction for UNC paths, verifies every created or existing folder link
+  with `fs::read_dir` (catching mapped-network-drive junctions that
+  create successfully but fail traversal with `ERROR_INVALID_REPARSE_DATA`),
+  removes broken junctions and falls back to `symlink_dir`, and falls back
+  to mirroring the folder with a notice to stderr when neither link works
+  (e.g. Windows Developer Mode off).
+- `rea_launcher::session::early_end`: surfaces `crash:` / `access violation`
+  lines and non-zero `game exited (exit code: ...)` lines from `session.log`,
+  and replaces a masked `exit code: 0` summary status with the child's
+  actual non-zero exit code.
+- `packaging/smoke-package.sh`: rejects Windows `.zip` packages containing
+  entry names with Windows-illegal characters (`<>:"|?*`).
+
 ## [0.12.1] - 2026-11-20
 
 ### Added

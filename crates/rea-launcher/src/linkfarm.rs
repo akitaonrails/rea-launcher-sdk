@@ -448,7 +448,27 @@ fn link(target: &Path, at: &Path, occupied: Occupied) -> io::Result<()> {
     }
 }
 
-/// Windows: a folder is a directory junction, a file a copy kept in step.
+/// True when `path` is a Windows UNC share (`\\server\share` or
+/// `\\?\UNC\server\share`). A directory junction can never target a network
+/// share, so UNC paths go straight to a directory symlink.
+pub fn is_unc_path(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    s.starts_with(r"\\") && !s.starts_with(r"\\?\")
+        || s.starts_with(r"\\?\UNC\")
+        || s.starts_with(r"\\?\unc\")
+}
+
+/// Windows: a folder is a directory junction (or a directory symlink when
+/// `target` is on a network share, which a junction cannot reach), a file a
+/// copy kept in step. Every created or existing folder link is verified by
+/// opening it with [`fs::read_dir`]: on a mapped network drive (`T:\...`),
+/// `junction::create` succeeds but traversal fails with
+/// `ERROR_INVALID_REPARSE_DATA`, so verifying catches it immediately, removes
+/// the broken junction, and falls back to `symlink_dir` (which passes
+/// `SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE` in Rust's std). If
+/// `symlink_dir` is also refused (e.g. Developer Mode is off), the folder is
+/// copied instead and a note is printed to stderr.
+///
 /// A real file where a file's copy goes is mirrored over only when it is
 /// the copy the launcher made, untouched since (`copies`), or already the
 /// same as the game folder's file (an older launcher's copy); anything else
@@ -458,12 +478,17 @@ fn link(target: &Path, at: &Path, occupied: Occupied, copies: &mut Copies) -> io
     let existing = fs::symlink_metadata(at).ok();
     let real = existing.as_ref().filter(|m| !is_link(m));
     let ours = |m: &fs::Metadata| {
-        m.is_file()
-            && (copies.made(at, m)
+        if m.is_file() {
+            copies.made(at, m)
                 || fs::metadata(target)
-                    .is_ok_and(|src| mirror_action(&src, Some(m)) == Mirror::Keep))
+                    .is_ok_and(|src| mirror_action(&src, Some(m)) == Mirror::Keep)
+        } else if m.is_dir() {
+            copies.made_dir(at)
+        } else {
+            false
+        }
     };
-    if real.is_some_and(|m| target.is_dir() || !ours(m)) {
+    if real.is_some_and(|m| !ours(m)) {
         return match occupied {
             Occupied::Keep => Ok(()),
             Occupied::Refuse => Err(real_where_a_link_goes(at)),
@@ -474,24 +499,57 @@ fn link(target: &Path, at: &Path, occupied: Occupied, copies: &mut Copies) -> io
         copies.record(at);
         return Ok(());
     }
+    if real.is_some_and(|m| m.is_dir() && copies.made_dir(at)) {
+        // Previously fell back to copying this network folder; keep it in step.
+        mirror_dir(target, at)?;
+        return Ok(());
+    }
     if existing.is_some() {
-        if junction::get_target(at).ok().as_deref() == Some(target) {
+        let points_here = junction::get_target(at).ok().as_deref() == Some(target)
+            || fs::read_link(at).ok().as_deref() == Some(target);
+        if points_here && fs::read_dir(at).is_ok() {
             return Ok(());
         }
         remove_link(at)?;
     }
-    junction::create(target, at).or_else(|e| {
-        std::os::windows::fs::symlink_dir(target, at).map_err(|_| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "cannot link {} into the runtime folder ({e}); a game folder on a \
-                     network share needs Windows developer mode",
-                    target.display()
-                ),
-            )
-        })
-    })
+    if !is_unc_path(target) && junction::create(target, at).is_ok() {
+        if fs::read_dir(at).is_ok() {
+            return Ok(());
+        }
+        let _ = remove_link(at);
+    }
+    if std::os::windows::fs::symlink_dir(target, at).is_ok() {
+        if fs::read_dir(at).is_ok() {
+            return Ok(());
+        }
+        let _ = remove_link(at);
+    }
+    eprintln!(
+        "linkfarm: copying {} into {} (Windows could not link this folder; enable Developer Mode to link network shares without copying)",
+        target.display(),
+        at.display()
+    );
+    mirror_dir(target, at)?;
+    copies.record_dir(at);
+    Ok(())
+}
+
+/// Mirrors a directory tree `from` into `to` (used on Windows only as a last
+/// resort when neither a junction nor a directory symlink can traverse a
+/// network share).
+#[cfg(windows)]
+fn mirror_dir(from: &Path, to: &Path) -> io::Result<()> {
+    fs::create_dir_all(to)?;
+    for e in fs::read_dir(from)? {
+        let e = e?;
+        let (path, dest) = (e.path(), to.join(e.file_name()));
+        if path.is_dir() {
+            mirror_dir(&path, &dest)?;
+        } else {
+            mirror_file(&path, &dest)?;
+        }
+    }
+    Ok(())
 }
 
 /// What [`mirror_file`] does with the runtime's copy of a game file.
@@ -605,12 +663,23 @@ impl Copies {
         Self::stamp(m).is_some_and(|stamp| self.rows.get(&self.key(at)) == Some(&stamp))
     }
 
+    /// Whether `at` is a folder this record copied as a link fallback.
+    fn made_dir(&self, at: &Path) -> bool {
+        self.rows.get(&self.key(at)) == Some(&(u64::MAX, 0))
+    }
+
     /// Records the copy now at `at`.
     fn record(&mut self, at: &Path) {
         if let Some(stamp) = fs::metadata(at).ok().as_ref().and_then(Self::stamp) {
             let key = self.key(at);
             self.changed |= self.rows.insert(key, stamp) != Some(stamp);
         }
+    }
+
+    /// Records a folder copied as a link fallback.
+    fn record_dir(&mut self, at: &Path) {
+        let key = self.key(at);
+        self.changed |= self.rows.insert(key, (u64::MAX, 0)) != Some((u64::MAX, 0));
     }
 
     fn save(&mut self) -> io::Result<()> {
@@ -1562,5 +1631,14 @@ mod tests {
         assert!(is_link(&t.join("junction")));
         remove_link(&t.join("junction")).unwrap();
         fs::remove_dir_all(t).unwrap();
+    }
+
+    #[test]
+    fn unc_paths_are_detected() {
+        assert!(is_unc_path(Path::new(r"\\nas\games\id8")));
+        assert!(is_unc_path(Path::new(r"\\?\UNC\nas\games\id8")));
+        assert!(!is_unc_path(Path::new(r"C:\Games\id8")));
+        assert!(!is_unc_path(Path::new(r"\\?\C:\Games\id8")));
+        assert!(!is_unc_path(Path::new("/mnt/games/id8")));
     }
 }

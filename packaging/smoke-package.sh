@@ -29,6 +29,14 @@ trap 'exit 143' TERM
 if [ -f "$1" ]; then
   case $1 in *.zip) ;; *) die "not a folder or .zip: $1" ;; esac
   command -v unzip >/dev/null 2>&1 || die "unzip is needed for $1"
+  # Windows release zips must not contain filenames with Windows-illegal
+  # characters (<>:"|?*), which make Windows Explorer / Expand-Archive abort.
+  bad_names=$(unzip -Z1 "$1" | grep -E '[<>:"|?*]' || true)
+  if [ -n "$bad_names" ]; then
+    echo "smoke-package: zip contains Windows-illegal filename character(s) (<>:\"|?*):" >&2
+    printf '%s\n' "$bad_names" | sed 's/^/  /' >&2
+    exit 1
+  fi
   unzip -q "$1" -d "$T/zip" || die "cannot unzip $1"
   [ "$(ls -A "$T/zip" | wc -l)" -eq 1 ] || die "the zip must hold exactly one top-level folder"
   set -- "$T"/zip/*

@@ -23,7 +23,7 @@
 #   REA_GAMESCOPE_HEADLESS  1: gamescope --backend headless (no window on
 #                        the desktop; real-game tests)
 
-REA_SDK_VERSION=0.11.2
+REA_SDK_VERSION=0.12.2
 
 # --- configuration -------------------------------------------------------------
 # Every configuration variable the library reads. Sourcing unsets them, so
