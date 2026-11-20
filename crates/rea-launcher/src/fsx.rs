@@ -91,6 +91,14 @@ fn swap_in(
     rename: &mut dyn FnMut(&Path, &Path) -> io::Result<()>,
     wait: Duration,
 ) -> io::Result<()> {
+    #[cfg(windows)]
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        // Wine's MoveFileExW over an existing symlink can leave a stale
+        // reparse attribute on the replacement file (causing later opens to
+        // fail with resolve_reparse_point ENODATA / os error 31). Unlinking
+        // the symlink first never touches its target.
+        fs::remove_file(path)?;
+    }
     match retry_denied(RENAME_TRIES, wait, || rename(tmp, path)) {
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied && exists(path) => {
             let backup = backup_beside(path);

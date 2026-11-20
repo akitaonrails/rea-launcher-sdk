@@ -9,6 +9,18 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-20
+
+### Fixed
+
+- `rea_launcher::runtime`: when `fs::hard_link` fails across volumes for
+  read-only static assets (`Policy::link`, such as Wine's `Z:` to `C:` on
+  Linux / Steam Deck or a second drive on Windows), falls back to a file
+  symbolic link (verified readable) before falling back to copying, avoiding
+  multi-gigabyte data duplication in the private runtime folder.
+  `Policy::present` accepts valid file symlinks for `Policy::link` paths
+  while still replacing symlinks on non-linked/writable paths.
+
 ## [0.12.2] - 2026-11-20
 
 ### Fixed

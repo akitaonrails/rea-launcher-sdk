@@ -72,12 +72,20 @@ pub trait Policy {
     }
 
     /// Whether the runtime already has `rel`, at `path` (its
-    /// [`Policy::runtime_rel`]). By default a regular file that is not a
-    /// symbolic link: a link left by an older launcher (SCR linked into
-    /// the player's folder) counts as missing and is replaced. SRR also
+    /// [`Policy::runtime_rel`]). By default a regular file, or — for
+    /// [`Policy::link`] static data only — a valid symbolic link to a file
+    /// (used when a hard link cannot cross drives, such as Wine's `Z:` to
+    /// `C:`). A symbolic link for a non-linked file (such as a link left by
+    /// an older launcher) still counts as missing and is replaced. SRR also
     /// counts its switched-off `rel.srr-disabled`.
-    fn present(&self, _rel: &str, path: &Path) -> bool {
-        fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+    fn present(&self, rel: &str, path: &Path) -> bool {
+        match fs::symlink_metadata(path) {
+            Ok(m) if m.is_file() => true,
+            Ok(m) if m.file_type().is_symlink() && self.link(rel) => {
+                fs::metadata(path).is_ok_and(|t| t.is_file())
+            }
+            _ => false,
+        }
     }
 
     /// Where `rel` goes in the runtime folder (SCR stages DOS names in
@@ -262,17 +270,23 @@ impl Walk<'_> {
 
 /// Brings one file over as a whole-file swap: a hard link to the real file
 /// when `link` and the original is writable (a read-only original is
-/// copied: the link would share its attribute), else a writable copy with
-/// the source's modification time. Returns true when linked.
+/// copied: the link would share its attribute), falling back to a file
+/// symbolic link when a hard link cannot cross volumes (e.g. Wine `Z:` to
+/// `C:` or a second drive), else a writable copy with the source's
+/// modification time. Returns true when linked.
 pub(crate) fn bring_over(from: &Path, to: &Path, link: bool) -> io::Result<bool> {
     if link
         && fs::metadata(from).is_ok_and(|m| !m.permissions().readonly())
         && let Ok(real) = fs::canonicalize(from)
-        && fsx::put_in_place(to, |tmp| fs::hard_link(&real, tmp)).is_ok()
     {
-        // The link is the original: its time is already the source's, and
-        // setting it would change the player's file.
-        return Ok(true);
+        if fsx::put_in_place(to, |tmp| fs::hard_link(&real, tmp)).is_ok() {
+            // The link is the original: its time is already the source's, and
+            // setting it would change the player's file.
+            return Ok(true);
+        }
+        if try_symlink_file(&real, to) {
+            return Ok(true);
+        }
     }
     let modified = fs::metadata(from).map_err(fsx::at(from))?.modified().ok();
     fsx::install_copy(from, to)?;
@@ -286,6 +300,60 @@ pub(crate) fn bring_over(from: &Path, to: &Path, link: bool) -> io::Result<bool>
             .map_err(fsx::at(to))?;
     }
     Ok(false)
+}
+
+/// Fallback for [`bring_over`] when `fs::hard_link` fails across volumes
+/// (for instance Wine's `Z:` to `C:` on the same Linux disk, or a separate
+/// drive on Windows with Developer Mode / Linux). Verifies the created link
+/// resolves to a regular file; if not, removes it and returns `false` so
+/// `bring_over` falls back to copying.
+fn try_symlink_file(real: &Path, to: &Path) -> bool {
+    let target = clean_symlink_target(real);
+    let created = fsx::put_in_place(to, |tmp| {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(&target, tmp)
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&target, tmp)
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = (&target, tmp);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "symlinks not supported on this platform",
+            ))
+        }
+    });
+    if created.is_err() {
+        return false;
+    }
+    if fs::metadata(to).is_ok_and(|m| m.is_file()) {
+        true
+    } else {
+        let _ = fs::remove_file(to);
+        false
+    }
+}
+
+/// Drops the verbatim `\\?\` prefix that `fs::canonicalize` adds on Windows
+/// (`\\?\Z:\...` -> `Z:\...`, `\\?\UNC\host\share` -> `\\host\share`) so
+/// older Win32 games and Wine resolve the symlink target cleanly.
+fn clean_symlink_target(path: &Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(s) = path.to_str() {
+            if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+                return std::path::PathBuf::from(format!(r"\\{rest}"));
+            }
+            if let Some(rest) = s.strip_prefix(r"\\?\") {
+                return std::path::PathBuf::from(rest);
+            }
+        }
+    }
+    path.to_path_buf()
 }
 
 /// Brings `runtime` up to date with `game`, recording the result in
@@ -960,5 +1028,76 @@ mod tests {
         let err = sync(&missing, &test_dir("rt-err-rt"), &CopyAll, MANIFEST).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert!(err.to_string().contains("no-such-game"), "{err}");
+    }
+
+    #[test]
+    fn symlink_fallback_is_present_for_linked_data_and_replaced_for_writable() {
+        let base = test_dir("rt-symlink-fallback");
+        let (game, rt) = (base.join("game"), base.join("rt"));
+        fs::create_dir_all(game.join("Data")).unwrap();
+        fs::create_dir_all(rt.join("Data")).unwrap();
+        let src_data = game.join("Data/track.bin");
+        let src_profile = game.join("CMR3");
+        fs::write(&src_data, b"track-bytes").unwrap();
+        fs::write(&src_profile, b"profile-bytes").unwrap();
+
+        let rt_data = rt.join("Data/track.bin");
+        let rt_profile = rt.join("CMR3");
+        let real_data = fs::canonicalize(&src_data).unwrap();
+        let real_profile = fs::canonicalize(&src_profile).unwrap();
+        if try_symlink_file(&real_data, &rt_data) && try_symlink_file(&real_profile, &rt_profile) {
+            assert!(Cmr3.present("Data/track.bin", &rt_data));
+            assert!(!Cmr3.present("CMR3", &rt_profile));
+            assert_eq!(fs::read(&rt_data).unwrap(), b"track-bytes");
+            // A second sync keeps the symlinked static file and replaces the writable symlink.
+            let manifest = list(&game).unwrap();
+            fsx::write_atomic(&rt.join(MANIFEST), format_manifest(&manifest)).unwrap();
+            let r = sync(&game, &rt, &Cmr3, MANIFEST).unwrap();
+            assert_eq!(r.brought, 1, "only writable CMR3 is replaced");
+            assert!(
+                fs::symlink_metadata(&rt_data)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert!(
+                !fs::symlink_metadata(&rt_profile)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        }
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wine_cross_drive_z_to_c_links_via_symlink() {
+        let z_tmp = Path::new(r"Z:\tmp");
+        let c_root = Path::new(r"C:\");
+        if !z_tmp.is_dir() || !c_root.is_dir() {
+            return;
+        }
+        let tag = format!("rea-rt-z2c-{}", std::process::id());
+        let game = z_tmp.join(&tag);
+        let rt = std::env::temp_dir().join(&tag);
+        let _ = fs::remove_dir_all(&game);
+        let _ = fs::remove_dir_all(&rt);
+        fs::create_dir_all(game.join("Data")).unwrap();
+        fs::write(game.join("Data/track.bin"), b"track-on-z").unwrap();
+        fs::write(game.join("CMR3"), b"profile-on-z").unwrap();
+
+        let r = sync(&game, &rt, &Cmr3, MANIFEST).unwrap();
+        assert_eq!(
+            (r.brought, r.linked),
+            (2, 1),
+            "Data/track.bin linked from Z: to C:"
+        );
+        assert_eq!(fs::read(rt.join("Data/track.bin")).unwrap(), b"track-on-z");
+        let again = sync(&game, &rt, &Cmr3, MANIFEST).unwrap();
+        assert_eq!((again.brought, again.linked), (0, 0));
+
+        let _ = fs::remove_dir_all(&game);
+        let _ = fs::remove_dir_all(&rt);
     }
 }
