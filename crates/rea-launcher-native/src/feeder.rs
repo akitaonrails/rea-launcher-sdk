@@ -14,6 +14,7 @@
 //! [`Scripted`].
 
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -23,12 +24,13 @@ use std::time::{Duration, Instant};
 use rea_launcher::ffb::FfbOutput;
 use rea_launcher::wal::{Ffb, Out};
 use rea_launcher::wheel::{
-    Action, Binding, Control, Controls, Kind, PadInput, PadMap, PadSettings, PedalAxis, Script,
-    Source, SteeringLock, WheelButtons, WheelProfile, WheelSettings, dinput::NoButtons, read_pad,
+    Action, Binding, Control, Controls, DeviceId, DeviceState, Kind, PadInput, PadMap, PadSettings,
+    PedalAxis, Script, Source, SteeringLock, WheelButtons, WheelCandidate, WheelProfile,
+    WheelSettings, dinput::NoButtons, guess_pedals, pick_wheel, read_pad,
 };
 
 use crate::policy::HapticPolicy;
-use crate::sdl::{Devices, Sdl};
+use crate::sdl::{Device, Devices, Sdl};
 use crate::supervise::{self, Outputs};
 
 /// How often devices are read and the force feedback refreshed.
@@ -152,7 +154,12 @@ pub struct WheelInfo {
 }
 
 impl WheelInfo {
-    fn of<B: Control>(name: &str, guid: &str, p: &WheelProfile<B>) -> WheelInfo {
+    fn of_with_buttons<B: Control>(
+        name: &str,
+        guid: &str,
+        p: &WheelProfile<B>,
+        buttons: WheelButtons,
+    ) -> WheelInfo {
         WheelInfo {
             name: name.to_string(),
             guid: guid.to_string(),
@@ -161,7 +168,7 @@ impl WheelInfo {
             steer_axis: p.steer_axis,
             gas: p.gas.map(|(_, a)| a),
             brake: p.brake.map(|(_, a)| a),
-            buttons: WheelButtons::for_device(p.wheel.vid, p.wheel.pid),
+            buttons,
         }
     }
 }
@@ -199,6 +206,17 @@ impl InputService {
     /// Starts the thread with the launcher's pad layout and the buttons a
     /// wheel's shift paddles press (right, left).
     pub fn start<B: Control + Send>(pad_map: PadMap<B>, paddles: Option<(B, B)>) -> InputService {
+        Self::start_with_wheel_file(pad_map, paddles, None)
+    }
+
+    /// Starts the thread, preferring a saved `wheel.ini` profile at
+    /// `wheel_file` when present and matching the connected wheel's
+    /// `(vid, pid)`.
+    pub fn start_with_wheel_file<B: Control + Send>(
+        pad_map: PadMap<B>,
+        paddles: Option<(B, B)>,
+        wheel_file: Option<PathBuf>,
+    ) -> InputService {
         let (tx, rx) = mpsc::channel();
         let snapshot = Arc::new(Mutex::new(Snapshot::default()));
         let shared = Arc::clone(&snapshot);
@@ -206,7 +224,7 @@ impl InputService {
         let quitting = Arc::clone(&quit);
         let thread = std::thread::Builder::new()
             .name("input".into())
-            .spawn(move || run(rx, shared, &quitting, pad_map, paddles))
+            .spawn(move || run(rx, shared, &quitting, pad_map, paddles, wheel_file))
             .expect("spawn input thread");
         InputService {
             tx,
@@ -286,6 +304,7 @@ fn run<B: Control>(
     quit: &AtomicBool,
     pad_map: PadMap<B>,
     paddles: Option<(B, B)>,
+    wheel_file: Option<PathBuf>,
 ) {
     let sdl = match Sdl::init(&[]) {
         Ok(s) => s,
@@ -298,10 +317,14 @@ fn run<B: Control>(
             return;
         }
     };
+    let saved_cfg: Option<(WheelProfile<B>, String)> =
+        wheel_file.as_deref().and_then(load_saved_profile);
+    let saved_id = saved_cfg.as_ref().map(|(p, _)| &p.wheel);
     let mut devices = Devices::new(&sdl, HapticPolicy::default());
     let mut pads = PadSettings::new(pad_map);
     let mut wheels = WheelSettings::default();
     let mut profile: Option<WheelProfile<B>> = None;
+    let mut wheel_buttons = WheelButtons::GENERIC;
     let mut fed: Option<Fed> = None;
     let mut last = Instant::now();
     while !quit.load(Ordering::SeqCst) {
@@ -332,7 +355,7 @@ fn run<B: Control>(
         }
         devices.pump();
         let list = devices.list();
-        let wheel = list.iter().position(|d| d.kind == Kind::Wheel);
+        let wheel = pick_wheel_index(list, saved_id);
         let mut controls = Controls::default();
         if let Some(d) = wheel.map(|w| &list[w]) {
             let fresh = profile
@@ -341,12 +364,17 @@ fn run<B: Control>(
             let missing_pedals = profile
                 .as_ref()
                 .is_some_and(|p| p.gas.is_none() && p.brake.is_none())
-                && d.state.axes.iter().any(|&a| a != 0);
+                && d.state
+                    .axes
+                    .iter()
+                    .skip(1)
+                    .any(|v| v.unsigned_abs() > 24_000);
             if fresh || missing_pedals {
-                let sample = if missing_pedals { &d.state } else { &d.initial };
-                let mut guessed = WheelProfile::guess(d.id.clone(), sample, paddles);
-                add_wheel_buttons(&mut guessed, &pads.map);
-                profile = Some(guessed);
+                let (mut resolved, buttons) =
+                    resolve_wheel_profile(&d.id, &d.initial, &d.state, paddles, saved_cfg.as_ref());
+                add_wheel_buttons(&mut resolved, &pads.map);
+                wheel_buttons = buttons;
+                profile = Some(resolved);
             }
             if let Some(p) = &profile {
                 controls = p.read(&wheels, &d.state, None);
@@ -374,9 +402,9 @@ fn run<B: Control>(
                 })
                 .collect(),
             driver,
-            wheel: wheel
-                .zip(profile.as_ref())
-                .map(|(w, p)| WheelInfo::of(&list[w].id.name, &list[w].id.guid, p)),
+            wheel: wheel.zip(profile.as_ref()).map(|(w, p)| {
+                WheelInfo::of_with_buttons(&list[w].id.name, &list[w].id.guid, p, wheel_buttons)
+            }),
             controls,
             feeding: false,
             error: None,
@@ -482,15 +510,102 @@ fn idle_without_sdl(rx: Receiver<Command>, shared: &Mutex<Snapshot>, quit: &Atom
 /// game that reads the wheel itself starts (SDL is closed again before the
 /// game opens it). `None` while the input thread holds SDL.
 pub fn find_wheel() -> Option<WheelInfo> {
+    find_wheel_with_profile(None)
+}
+
+/// Like [`find_wheel`], but prefers a saved `wheel.ini` profile at
+/// `wheel_file` when present and matching the connected wheel's `(vid, pid)`.
+pub fn find_wheel_with_profile(wheel_file: Option<&Path>) -> Option<WheelInfo> {
+    let saved_cfg: Option<(WheelProfile<NoButtons>, String)> =
+        wheel_file.and_then(load_saved_profile);
     let sdl = Sdl::init(&[]).ok()?;
     let mut devices = Devices::new(&sdl, HapticPolicy::default());
     for _ in 0..5 {
         devices.pump();
         std::thread::sleep(Duration::from_millis(60));
     }
-    let d = devices.list().iter().find(|d| d.kind == Kind::Wheel)?;
-    let profile: WheelProfile<NoButtons> = WheelProfile::guess(d.id.clone(), &d.initial, None);
-    Some(WheelInfo::of(&d.id.name, &d.id.guid, &profile))
+    let list = devices.list();
+    let idx = pick_wheel_index(list, saved_cfg.as_ref().map(|(p, _)| &p.wheel))?;
+    let d = &list[idx];
+    let (profile, buttons) =
+        resolve_wheel_profile(&d.id, &d.initial, &d.state, None, saved_cfg.as_ref());
+    Some(WheelInfo::of_with_buttons(
+        &d.id.name, &d.id.guid, &profile, buttons,
+    ))
+}
+
+fn load_saved_profile<B: Control>(path: &Path) -> Option<(WheelProfile<B>, String)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let profile = WheelProfile::<B>::from_cfg(&text)?;
+    Some((profile, text))
+}
+
+/// Picks the best wheel in `list` via [`pick_wheel`] (preferring the haptic
+/// HID collection on multi-collection wheels like Fanatec CSL DD on Windows).
+fn pick_wheel_index(list: &[Device], saved: Option<&DeviceId>) -> Option<usize> {
+    let wheels: Vec<(usize, WheelCandidate<'_>)> = list
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.kind == Kind::Wheel)
+        .map(|(i, d)| {
+            (
+                i,
+                WheelCandidate {
+                    vid: d.id.vid,
+                    pid: d.id.pid,
+                    path: &d.path,
+                    haptic: d.haptic,
+                },
+            )
+        })
+        .collect();
+    let candidates: Vec<WheelCandidate<'_>> = wheels.iter().map(|(_, c)| *c).collect();
+    pick_wheel(&candidates, saved, "").map(|w| wheels[w].0)
+}
+
+/// Picks the axis sample (`state` after pumping vs `initial` at device open)
+/// that actually carries resting pedal values (Windows DirectInput often
+/// reports zeros at open before the first poll).
+fn best_pedal_sample<'a>(initial: &'a DeviceState, state: &'a DeviceState) -> &'a DeviceState {
+    let (sg, sb) = guess_pedals(state);
+    if sg.is_some() || sb.is_some() {
+        return state;
+    }
+    let (ig, ib) = guess_pedals(initial);
+    if ig.is_some() || ib.is_some() {
+        return initial;
+    }
+    state
+}
+
+/// Builds the wheel profile and button table for `id`: prefers a matching
+/// saved `wheel.ini` (keeping its calibrated steer/gas/brake axes and any
+/// `btn_*` overrides), falling back to guessing from the live/initial state.
+fn resolve_wheel_profile<B: Control>(
+    id: &DeviceId,
+    initial: &DeviceState,
+    state: &DeviceState,
+    paddles: Option<(B, B)>,
+    saved: Option<&(WheelProfile<B>, String)>,
+) -> (WheelProfile<B>, WheelButtons) {
+    if let Some((saved_profile, saved_text)) = saved
+        && saved_profile.wheel.vid == id.vid
+        && saved_profile.wheel.pid == id.pid
+    {
+        let mut profile = saved_profile.clone();
+        profile.wheel = id.clone();
+        if profile.gas.is_none() && profile.brake.is_none() {
+            let (gas, brake) = guess_pedals(best_pedal_sample(initial, state));
+            profile.gas = gas.map(|p| (Source::Wheel, p));
+            profile.brake = brake.map(|p| (Source::Wheel, p));
+        }
+        let buttons = WheelButtons::from_cfg(id.vid, id.pid, saved_text);
+        return (profile, buttons);
+    }
+    let sample = best_pedal_sample(initial, state);
+    let profile = WheelProfile::guess(id.clone(), sample, paddles);
+    let buttons = WheelButtons::for_device(id.vid, id.pid);
+    (profile, buttons)
 }
 
 /// A run fed by the input thread (a [`supervise::Feed`]): the game's input
@@ -611,5 +726,82 @@ mod tests {
         assert_eq!(stick_axis(32767, 1638), 1.0);
         assert_eq!(stick_axis(-32768, 1638), -1.0);
         assert!(stick_axis(17000, 1638) > 0.4);
+    }
+
+    #[test]
+    fn best_pedal_sample_prefers_live_state_over_all_zero_initial() {
+        let initial = DeviceState {
+            axes: vec![0; 8],
+            buttons: vec![false; 108],
+        };
+        let state = DeviceState {
+            axes: vec![0, 32767, 0, 0, 32767, 0, 0, 0],
+            buttons: vec![false; 108],
+        };
+        let chosen = best_pedal_sample(&initial, &state);
+        let (gas, brake) = guess_pedals(chosen);
+        assert_eq!(gas.map(|p| p.axis), Some(1));
+        assert_eq!(brake.map(|p| p.axis), Some(4));
+    }
+
+    #[test]
+    fn resolve_wheel_profile_prefers_saved_wheel_ini_even_when_axes_are_zero() {
+        let ini = "\
+wheel_name=FANATEC Wheel
+wheel_vid=0eb7
+wheel_pid=0020
+wheel_guid=03001464b70e00002000000000000000
+steer_axis=0
+rotation=1080
+gas_device=wheel
+gas_axis=1
+gas_rest=32767
+gas_peak=-21488
+brake_device=wheel
+brake_axis=4
+brake_rest=32767
+brake_peak=-32768
+btn_start=wheel:9
+btn_exit=wheel:8
+";
+        let saved = (
+            WheelProfile::<NoButtons>::from_cfg(ini).unwrap(),
+            ini.to_string(),
+        );
+        let id = DeviceId {
+            name: "FANATEC Wheel".into(),
+            vid: 0x0eb7,
+            pid: 0x0020,
+            guid: "03001464b70e00002000000000000000".into(),
+        };
+        let zeros = DeviceState {
+            axes: vec![0; 8],
+            buttons: vec![false; 108],
+        };
+        let (profile, buttons) = resolve_wheel_profile(&id, &zeros, &zeros, None, Some(&saved));
+        assert_eq!(
+            profile.gas,
+            Some((
+                Source::Wheel,
+                PedalAxis {
+                    axis: 1,
+                    rest: 32767,
+                    peak: -21488,
+                }
+            ))
+        );
+        assert_eq!(
+            profile.brake,
+            Some((
+                Source::Wheel,
+                PedalAxis {
+                    axis: 4,
+                    rest: 32767,
+                    peak: -32768,
+                }
+            ))
+        );
+        assert_eq!(buttons.start, 9);
+        assert_eq!(buttons.back, 8);
     }
 }

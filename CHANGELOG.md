@@ -9,6 +9,30 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-11-21
+
+### Added
+
+- `rea_launcher::hub::HubPaths::wheel_file`: standard `wheel.ini` path in a
+  hub's data folder.
+- `rea_launcher::wheel::known::WheelButtons::from_cfg`: parses optional
+  `btn_{a,b,x,y,start,back,exit}=wheel:N` overrides from a `wheel.ini` over
+  the vendor defaults.
+- `rea_launcher_native::feeder::{InputService::start_with_wheel_file, find_wheel_with_profile}`:
+  prefer a user's saved `wheel.ini` (`WheelProfile`) when present and
+  matching the connected wheel's `(vid, pid)` (#3).
+
+### Fixed
+
+- `rea_launcher_native::feeder`: use `wheel::pick_wheel` in both the input
+  thread and `find_wheel` so multi-HID-collection wheels (such as Fanatec
+  CSL DD on Windows) always pick the haptic collection that reports axes
+  instead of whichever collection SDL enumerates first.
+- `rea_launcher_native::feeder::find_wheel`: inspect the live `DeviceState`
+  sampled after pumping SDL instead of only the pre-pump `initial` snapshot,
+  fixing missing pedal bindings when DirectInput reports zeros at device
+  open (rea-teknoparrot-nintendo-series#5).
+
 ## [0.12.4] - 2026-11-21
 
 ### Added

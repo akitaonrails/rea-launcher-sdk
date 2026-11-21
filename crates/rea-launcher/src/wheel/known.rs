@@ -98,6 +98,39 @@ impl WheelButtons {
             _ => WheelButtons::GENERIC,
         }
     }
+
+    /// Default wheel button numbers for `(vid, pid)`, overridden by any
+    /// `btn_{a,b,x,y,start,back,exit}=wheel:N` entries present in a
+    /// `wheel.ini` file (including `rea-rad-mobile`'s `btn_exit`).
+    pub fn from_cfg(vid: u16, pid: u16, text: &str) -> WheelButtons {
+        let mut out = Self::for_device(vid, pid);
+        let keys = super::Keys::of(text);
+        let wheel_btn = |key: &str| -> Option<u8> {
+            let b = super::Binding::parse(keys.get(key)?)?;
+            (b.source == super::Source::Wheel)
+                .then(|| u8::try_from(b.button).ok())
+                .flatten()
+        };
+        if let Some(n) = wheel_btn("btn_a") {
+            out.a = n;
+        }
+        if let Some(n) = wheel_btn("btn_b") {
+            out.b = n;
+        }
+        if let Some(n) = wheel_btn("btn_x") {
+            out.x = n;
+        }
+        if let Some(n) = wheel_btn("btn_y") {
+            out.y = n;
+        }
+        if let Some(n) = wheel_btn("btn_start") {
+            out.start = n;
+        }
+        if let Some(n) = wheel_btn("btn_back").or_else(|| wheel_btn("btn_exit")) {
+            out.back = n;
+        }
+        out
+    }
 }
 
 /// Every wheel model we know.
@@ -185,5 +218,23 @@ mod tests {
         assert!(!wheel_vendor(0x045e)); // Microsoft (Xbox pads)
         assert!(wheel_vendor(0x11ff)); // PXN V10 / V12
         assert!(wheel_vendor(0x36e6)); // PXN VD6
+    }
+
+    #[test]
+    fn wheel_buttons_from_cfg_overrides_defaults_with_wheel_ini() {
+        let ini = "\
+wheel_name=Custom DD
+wheel_vid=1234
+wheel_pid=5678
+btn_start=wheel:11
+btn_exit=wheel:10
+btn_a=wheel:4
+btn_b=aux:2
+";
+        let b = WheelButtons::from_cfg(0x1234, 0x5678, ini);
+        assert_eq!(b.a, 4);
+        assert_eq!(b.b, WheelButtons::GENERIC.b, "aux button ignored");
+        assert_eq!(b.start, 11);
+        assert_eq!(b.back, 10);
     }
 }

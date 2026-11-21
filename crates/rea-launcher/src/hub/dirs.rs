@@ -75,6 +75,10 @@ impl HubPaths {
     pub fn controls_file(&self) -> PathBuf {
         self.data.join("controls.cfg")
     }
+    /// The player's calibrated wheel profile ([`crate::wheel::WheelProfile`]).
+    pub fn wheel_file(&self) -> PathBuf {
+        self.data.join("wheel.ini")
+    }
     /// A game's settings file.
     pub fn settings(&self, slug: &str) -> PathBuf {
         self.data.join("settings").join(format!("{slug}.cfg"))
