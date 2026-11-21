@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 use rea_launcher::ffb::FfbOutput;
 use rea_launcher::wal::{Ffb, Out};
 use rea_launcher::wheel::{
-    Control, Controls, Kind, PadInput, PadMap, PadSettings, PedalAxis, Script, SteeringLock,
-    WheelProfile, WheelSettings, dinput::NoButtons, read_pad,
+    Action, Binding, Control, Controls, Kind, PadInput, PadMap, PadSettings, PedalAxis, Script,
+    Source, SteeringLock, WheelButtons, WheelProfile, WheelSettings, dinput::NoButtons, read_pad,
 };
 
 use crate::policy::HapticPolicy;
@@ -143,9 +143,12 @@ pub struct DeviceInfo {
 pub struct WheelInfo {
     pub name: String,
     pub guid: String,
+    pub vid: u16,
+    pub pid: u16,
     pub steer_axis: usize,
     pub gas: Option<PedalAxis>,
     pub brake: Option<PedalAxis>,
+    pub buttons: WheelButtons,
 }
 
 impl WheelInfo {
@@ -153,9 +156,12 @@ impl WheelInfo {
         WheelInfo {
             name: name.to_string(),
             guid: guid.to_string(),
+            vid: p.wheel.vid,
+            pid: p.wheel.pid,
             steer_axis: p.steer_axis,
             gas: p.gas.map(|(_, a)| a),
             brake: p.brake.map(|(_, a)| a),
+            buttons: WheelButtons::for_device(p.wheel.vid, p.wheel.pid),
         }
     }
 }
@@ -332,8 +338,15 @@ fn run<B: Control>(
             let fresh = profile
                 .as_ref()
                 .is_none_or(|p| p.wheel.vid != d.id.vid || p.wheel.pid != d.id.pid);
-            if fresh {
-                profile = Some(WheelProfile::guess(d.id.clone(), &d.initial, paddles));
+            let missing_pedals = profile
+                .as_ref()
+                .is_some_and(|p| p.gas.is_none() && p.brake.is_none())
+                && d.state.axes.iter().any(|&a| a != 0);
+            if fresh || missing_pedals {
+                let sample = if missing_pedals { &d.state } else { &d.initial };
+                let mut guessed = WheelProfile::guess(d.id.clone(), sample, paddles);
+                add_wheel_buttons(&mut guessed, &pads.map);
+                profile = Some(guessed);
             }
             if let Some(p) = &profile {
                 controls = p.read(&wheels, &d.state, None);
@@ -397,6 +410,37 @@ fn run<B: Control>(
         }
         std::thread::sleep(TICK);
     }
+}
+
+/// Adds default wheel button bindings (A/B/X/Y/Start/Back from
+/// [`WheelButtons::for_device`]) for any cabinet button bound to those pad
+/// inputs in `pad_map` that is not already bound on the wheel (e.g. paddles).
+fn add_wheel_buttons<B: Control>(profile: &mut WheelProfile<B>, pad_map: &PadMap<B>) {
+    let wb = WheelButtons::for_device(profile.wheel.vid, profile.wheel.pid);
+    for &b in B::ALL {
+        if profile.buttons.iter().any(|(existing, _)| *existing == b) {
+            continue;
+        }
+        let wheel_btn = pad_map.inputs(Action::Press(b)).find_map(|inp| match inp {
+            PadInput::A => Some(wb.a),
+            PadInput::B => Some(wb.b),
+            PadInput::X => Some(wb.x),
+            PadInput::Y => Some(wb.y),
+            PadInput::Start => Some(wb.start),
+            PadInput::Back => Some(wb.back),
+            _ => None,
+        });
+        if let Some(btn) = wheel_btn {
+            profile.buttons.push((
+                b,
+                Binding {
+                    source: Source::Wheel,
+                    button: usize::from(btn),
+                },
+            ));
+        }
+    }
+    profile.buttons.sort_by_key(|(b, _)| *b);
 }
 
 /// Seconds since `last`, which becomes now.

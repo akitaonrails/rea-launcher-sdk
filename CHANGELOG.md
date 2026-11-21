@@ -9,6 +9,24 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-11-21
+
+### Added
+
+- `rea_launcher::wheel::known::WheelButtons`: default wheel button numbers
+  (`a`, `b`, `x`, `y`, `start`, `back`) per vendor/model (including Fanatec
+  CSL DD `0eb7:0020` / `0eb7:0004`, Logitech, and generic fallback), and
+  `rea_launcher_native::feeder::WheelInfo::{vid, pid, buttons}` so hub
+  launchers and emulator configs (such as Dolphin `GCPadNew.ini`) can map
+  wheel buttons instead of leaving wheel-only rigs without Start/Coin/face
+  buttons (#3).
+
+### Fixed
+
+- `rea_launcher_native::feeder`: re-guesses wheel pedals from the live
+  `DeviceState` when SDL's initial state arrived as all-zeros before the
+  first axis event (fixing intermittent missing pedals in `--play` runs).
+
 ## [0.12.3] - 2026-11-20
 
 ### Fixed

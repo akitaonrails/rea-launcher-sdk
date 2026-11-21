@@ -44,6 +44,62 @@ const fn w(vid: u16, pid: u16, name: &'static str, rotation: u16, up: u8, down: 
     }
 }
 
+/// Common face/menu buttons on a wheel rim (0-based SDL button indices):
+/// used when no user-calibrated `wheel.ini` exists so Start, Coin/Back and
+/// A/B/X/Y work out of the box on known wheels instead of leaving wheel-only
+/// rigs with no buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WheelButtons {
+    pub a: u8,
+    pub b: u8,
+    pub x: u8,
+    pub y: u8,
+    pub start: u8,
+    pub back: u8,
+}
+
+impl WheelButtons {
+    /// Generic wheel button fallback (standard HID / Logitech / Thrustmaster).
+    pub const GENERIC: WheelButtons = WheelButtons {
+        a: 0,
+        b: 1,
+        x: 2,
+        y: 3,
+        start: 7,
+        back: 6,
+    };
+
+    /// Fanatec CSL DD / GT DD Pro / CSL Elite (`0eb7:*`, verified on a real
+    /// CSL DD `0eb7:0020` via `rea-rad-mobile`'s wizard in rea-launcher-sdk#3).
+    pub const FANATEC: WheelButtons = WheelButtons {
+        a: 0,
+        b: 3,
+        x: 2,
+        y: 1,
+        start: 9,
+        back: 8,
+    };
+
+    /// Logitech G25 / G27 / G29 / G920 / G923 (`046d:*`).
+    pub const LOGITECH: WheelButtons = WheelButtons {
+        a: 0,
+        b: 1,
+        x: 2,
+        y: 3,
+        start: 9,
+        back: 8,
+    };
+
+    /// Default wheel button numbers for `(vid, pid)`.
+    pub fn for_device(vid: u16, _pid: u16) -> WheelButtons {
+        match vid {
+            FANATEC => WheelButtons::FANATEC,
+            LOGITECH => WheelButtons::LOGITECH,
+            _ => WheelButtons::GENERIC,
+        }
+    }
+}
+
 /// Every wheel model we know.
 pub const KNOWN: &[KnownWheel] = &[
     w(LOGITECH, 0xc298, "Logitech Driving Force Pro", 900, 4, 5),
@@ -61,6 +117,14 @@ pub const KNOWN: &[KnownWheel] = &[
     w(THRUSTMASTER, 0xb696, "Thrustmaster T248", 900, 0, 1),
     w(THRUSTMASTER, 0xb684, "Thrustmaster T-GT", 1080, 0, 1),
     w(FANATEC, 0x0e03, "Fanatec CSL Elite", 1080, 0, 1),
+    w(
+        FANATEC,
+        0x0004,
+        "Fanatec CSL DD (Compatibility)",
+        1080,
+        0,
+        1,
+    ),
     w(FANATEC, 0x0005, "Fanatec CSL Elite (PS4)", 1080, 0, 1),
     w(FANATEC, 0x0020, "Fanatec CSL DD / GT DD Pro", 1080, 0, 1),
     w(MOZA, 0x0005, "MOZA R3", 900, 13, 12),

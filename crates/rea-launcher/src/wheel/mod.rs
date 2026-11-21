@@ -51,6 +51,7 @@ pub mod rig;
 pub mod script;
 pub mod wizard;
 
+pub use known::WheelButtons;
 pub use pad_map::{PadInput, PadMap, PadSettings, PadState, read_pad};
 pub use script::Script;
 
