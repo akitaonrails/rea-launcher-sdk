@@ -9,6 +9,12 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-11-21
+
+### Fixed
+
+- `shell/rea-play.sh`: sync `REA_SDK_VERSION` with workspace version.
+
 ## [0.12.5] - 2026-11-21
 
 ### Added
