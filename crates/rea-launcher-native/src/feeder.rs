@@ -22,6 +22,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use rea_launcher::ffb::FfbOutput;
+use rea_launcher::hub::HubPaths;
 use rea_launcher::wal::{Ffb, Out};
 use rea_launcher::wheel::{
     Action, Binding, Control, Controls, DeviceId, DeviceState, Kind, PadInput, PadMap, PadSettings,
@@ -317,9 +318,9 @@ fn run<B: Control>(
             return;
         }
     };
-    let saved_cfg: Option<(WheelProfile<B>, String)> =
-        wheel_file.as_deref().and_then(load_saved_profile);
-    let saved_id = saved_cfg.as_ref().map(|(p, _)| &p.wheel);
+    let saved_cfgs: Vec<(WheelProfile<B>, String)> =
+        load_saved_profiles(wheel_file.as_deref(), Some(&HubPaths::shared_wheel_file()));
+    let saved_id = saved_cfgs.first().map(|(p, _)| &p.wheel);
     let mut devices = Devices::new(&sdl, HapticPolicy::default());
     let mut pads = PadSettings::new(pad_map);
     let mut wheels = WheelSettings::default();
@@ -371,7 +372,7 @@ fn run<B: Control>(
                     .any(|v| v.unsigned_abs() > 24_000);
             if fresh || missing_pedals {
                 let (mut resolved, buttons) =
-                    resolve_wheel_profile(&d.id, &d.initial, &d.state, paddles, saved_cfg.as_ref());
+                    resolve_wheel_profile(&d.id, &d.initial, &d.state, paddles, &saved_cfgs);
                 add_wheel_buttons(&mut resolved, &pads.map);
                 wheel_buttons = buttons;
                 profile = Some(resolved);
@@ -514,10 +515,11 @@ pub fn find_wheel() -> Option<WheelInfo> {
 }
 
 /// Like [`find_wheel`], but prefers a saved `wheel.ini` profile at
-/// `wheel_file` when present and matching the connected wheel's `(vid, pid)`.
+/// `wheel_file` (falling back to [`HubPaths::shared_wheel_file`]) when
+/// present and matching the connected wheel's `(vid, pid)`.
 pub fn find_wheel_with_profile(wheel_file: Option<&Path>) -> Option<WheelInfo> {
-    let saved_cfg: Option<(WheelProfile<NoButtons>, String)> =
-        wheel_file.and_then(load_saved_profile);
+    let saved_cfgs: Vec<(WheelProfile<NoButtons>, String)> =
+        load_saved_profiles(wheel_file, Some(&HubPaths::shared_wheel_file()));
     let sdl = Sdl::init(&[]).ok()?;
     let mut devices = Devices::new(&sdl, HapticPolicy::default());
     for _ in 0..5 {
@@ -525,10 +527,9 @@ pub fn find_wheel_with_profile(wheel_file: Option<&Path>) -> Option<WheelInfo> {
         std::thread::sleep(Duration::from_millis(60));
     }
     let list = devices.list();
-    let idx = pick_wheel_index(list, saved_cfg.as_ref().map(|(p, _)| &p.wheel))?;
+    let idx = pick_wheel_index(list, saved_cfgs.first().map(|(p, _)| &p.wheel))?;
     let d = &list[idx];
-    let (profile, buttons) =
-        resolve_wheel_profile(&d.id, &d.initial, &d.state, None, saved_cfg.as_ref());
+    let (profile, buttons) = resolve_wheel_profile(&d.id, &d.initial, &d.state, None, &saved_cfgs);
     Some(WheelInfo::of_with_buttons(
         &d.id.name, &d.id.guid, &profile, buttons,
     ))
@@ -538,6 +539,21 @@ fn load_saved_profile<B: Control>(path: &Path) -> Option<(WheelProfile<B>, Strin
     let text = std::fs::read_to_string(path).ok()?;
     let profile = WheelProfile::<B>::from_cfg(&text)?;
     Some((profile, text))
+}
+
+/// Loads saved `wheel.ini` profiles in priority order: per-launcher first,
+/// then the shared profile across all `rea` launchers.
+fn load_saved_profiles<B: Control>(
+    primary: Option<&Path>,
+    shared: Option<&Path>,
+) -> Vec<(WheelProfile<B>, String)> {
+    let mut out = Vec::new();
+    for path in [primary, shared].into_iter().flatten() {
+        if let Some(loaded) = load_saved_profile(path) {
+            out.push(loaded);
+        }
+    }
+    out
 }
 
 /// Picks the best wheel in `list` via [`pick_wheel`] (preferring the haptic
@@ -578,19 +594,20 @@ fn best_pedal_sample<'a>(initial: &'a DeviceState, state: &'a DeviceState) -> &'
     state
 }
 
-/// Builds the wheel profile and button table for `id`: prefers a matching
-/// saved `wheel.ini` (keeping its calibrated steer/gas/brake axes and any
-/// `btn_*` overrides), falling back to guessing from the live/initial state.
+/// Builds the wheel profile and button table for `id`: prefers the first
+/// matching saved `wheel.ini` (per-launcher, then shared), keeping its
+/// calibrated steer/gas/brake axes and any `btn_*` overrides, falling back
+/// to guessing from the live/initial state.
 fn resolve_wheel_profile<B: Control>(
     id: &DeviceId,
     initial: &DeviceState,
     state: &DeviceState,
     paddles: Option<(B, B)>,
-    saved: Option<&(WheelProfile<B>, String)>,
+    saved: &[(WheelProfile<B>, String)],
 ) -> (WheelProfile<B>, WheelButtons) {
     if let Some((saved_profile, saved_text)) = saved
-        && saved_profile.wheel.vid == id.vid
-        && saved_profile.wheel.pid == id.pid
+        .iter()
+        .find(|(p, _)| p.wheel.vid == id.vid && p.wheel.pid == id.pid)
     {
         let mut profile = saved_profile.clone();
         profile.wheel = id.clone();
@@ -778,7 +795,7 @@ btn_exit=wheel:8
             axes: vec![0; 8],
             buttons: vec![false; 108],
         };
-        let (profile, buttons) = resolve_wheel_profile(&id, &zeros, &zeros, None, Some(&saved));
+        let (profile, buttons) = resolve_wheel_profile(&id, &zeros, &zeros, None, &[saved]);
         assert_eq!(
             profile.gas,
             Some((

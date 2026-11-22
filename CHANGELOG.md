@@ -9,6 +9,19 @@ the release), saying what to do and how to verify it; `sdk-bump` and the
 
 ## [Unreleased]
 
+## [0.12.7] - 2026-11-22
+
+### Added
+
+- `rea_launcher::hub::HubPaths::shared_wheel_file`: shared `wheel.ini` path
+  across all `rea` launchers (`%LOCALAPPDATA%\rea\wheel.ini` on Windows,
+  `$XDG_DATA_HOME/rea/wheel.ini` or `~/.local/share/rea/wheel.ini` on Linux,
+  overrideable via `REA_WHEEL_PROFILE`) (#3).
+- `rea_launcher_native::feeder`: `InputService` and `find_wheel_with_profile`
+  now fall back to `HubPaths::shared_wheel_file()` when no per-launcher
+  `wheel.ini` matches the connected wheel, so one wheel wizard run serves
+  every launcher on the machine (rea-teknoparrot-nintendo-series#5).
+
 ## [0.12.6] - 2026-11-21
 
 ### Fixed

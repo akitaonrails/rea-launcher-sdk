@@ -79,6 +79,14 @@ impl HubPaths {
     pub fn wheel_file(&self) -> PathBuf {
         self.data.join("wheel.ini")
     }
+
+    /// The shared wheel profile path across all `rea` launchers on this
+    /// machine: `$REA_WHEEL_PROFILE` when set, else `%LOCALAPPDATA%\rea\wheel.ini`
+    /// on Windows and `$XDG_DATA_HOME/rea/wheel.ini` (or
+    /// `~/.local/share/rea/wheel.ini`) on Linux.
+    pub fn shared_wheel_file() -> PathBuf {
+        shared_wheel_file_in(cfg!(windows), &|k| std::env::var_os(k))
+    }
     /// A game's settings file.
     pub fn settings(&self, slug: &str) -> PathBuf {
         self.data.join("settings").join(format!("{slug}.cfg"))
@@ -116,6 +124,14 @@ fn default_data(windows: bool, name: &str, var: &dyn Fn(&str) -> Option<PathBuf>
         abs("XDG_DATA_HOME").unwrap_or_else(|| home().join(".local").join("share"))
     };
     base.join(name)
+}
+
+fn shared_wheel_file_in(windows: bool, env: &dyn Fn(&str) -> Option<OsString>) -> PathBuf {
+    let var = |k: &str| env(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if let Some(p) = var("REA_WHEEL_PROFILE") {
+        return std::path::absolute(&p).unwrap_or(p);
+    }
+    default_data(windows, "rea", &var).join("wheel.ini")
 }
 
 #[cfg(test)]
